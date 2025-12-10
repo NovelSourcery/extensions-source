@@ -52,7 +52,7 @@ jobs:
       - name: Sign all release APKs
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          for apk in app/build/outputs/apk/release/*.apk; do
+          find . -name "*.apk" -path "*/build/outputs/apk/release/*" | while read apk; do
             echo "Signing $apk"
             $ANDROID_HOME/build-tools/34.0.0/apksigner sign \
               --ks release.keystore \
@@ -67,7 +67,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: signed-apks
-          path: app/build/outputs/apk/release/*.apk
+          path: "**/build/outputs/apk/release/*.apk"
 
       - name: Run unit tests
         run: ./gradlew testReleaseUnitTest
@@ -77,4 +77,4 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: test-report-${{ github.sha }}
-          path: app/build/reports/tests/testReleaseUnitTest
+          path: "**/build/reports/tests/testReleaseUnitTest"
