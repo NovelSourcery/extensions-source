@@ -216,14 +216,34 @@ class StorySeedling : HttpSource(), NovelSource {
                 thumbnail_url = if (coverUrl.startsWith("http")) coverUrl else "$baseUrl$coverUrl"
             }
 
-            // LN Reader: genres from specific section
-            val genres = doc.select(
+            // Get author from "Written by" section
+            // Format: <div class="mb-1 leading-7"><span>Written by</span><a href="...">AuthorName</a></div>
+            author = doc.selectFirst("div.mb-1.leading-7:has(span:contains(Written by)) a")?.text()?.trim()
+
+            // Get genres from both main genre section and additional tags
+            val mainGenres = doc.select(
                 "section[x-data=\"{ tab: location.hash.substr(1) || 'chapters' }\"].relative > div > div > div.flex.flex-wrap > a",
             ).map { it.text().trim() }
-            genre = genres.joinToString(", ")
 
-            // LN Reader: summary from p tags
-            description = doc.select("div.mb-4.text-base p, div.synopsis p")
+            // Additional tags from order-3 section with tag links
+            // Format: <a href="https://storyseedling.com/browse/?includeTags%5B%5D=XXX" class="...">#+TagName</a>
+            val additionalTags = doc.select("div.order-3 div.flex.flex-wrap a[href*=includeTags]")
+                .map { it.text().replace("#", "").trim() }
+
+            genre = (mainGenres + additionalTags).distinct().filter { it.isNotBlank() }.joinToString(", ")
+
+            // Description from the order-3 lg:grid-in-content section
+            // Format: <div class="order-3 lg:grid-in-content"><div x-data="{ expanded: false }">...<p>...</p></div>
+            val descContainer = doc.selectFirst("div.order-3.lg\\:grid-in-content div[x-data*=expanded] div.mb-4.order-2")
+                ?: doc.selectFirst("div.order-3.lg\\:grid-in-content div[x-data] div.grid div.mb-4")
+                ?: doc.selectFirst("div.order-3 div[x-data] div.mb-4.order-2")
+
+            description = descContainer?.let { container ->
+                container.select("p").joinToString("\n\n") { it.text().trim() }
+            }?.ifEmpty {
+                doc.select("div.mb-4.text-base p, div.synopsis p")
+                    .joinToString("\n\n") { it.text().trim() }
+            } ?: doc.select("div.mb-4.text-base p, div.synopsis p")
                 .joinToString("\n\n") { it.text().trim() }
                 .ifEmpty { doc.selectFirst(".prose, .description")?.text()?.trim() }
 

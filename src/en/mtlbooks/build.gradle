@@ -1,0 +1,8 @@
+ext {
+    extName = 'MtlBooks'
+    extClass = '.MtlBooks'
+    extVersionCode = 1
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

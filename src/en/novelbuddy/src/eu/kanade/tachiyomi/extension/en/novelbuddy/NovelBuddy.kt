@@ -18,9 +18,11 @@ import org.jsoup.nodes.Document
 class NovelBuddy : HttpSource(), NovelSource {
 
     override val name = "NovelBuddy"
-    override val baseUrl = "https://novelbuddy.com"
+    override val baseUrl = "https://novelbuddy.io"
     override val lang = "en"
     override val supportsLatest = true
+
+    override val isNovelSource = true
 
     override val client = network.cloudflareClient
 
@@ -135,34 +137,56 @@ class NovelBuddy : HttpSource(), NovelSource {
         "Genres",
         listOf(
             Genre("Action", "action"),
+            Genre("Action Adventure", "action-adventure"),
+            Genre("Adult", "adult"),
             Genre("Adventure", "adventure"),
+            Genre("Chinese", "chinese"),
             Genre("Comedy", "comedy"),
+            Genre("Cultivation", "cultivation"),
             Genre("Drama", "drama"),
+            Genre("Eastern", "eastern"),
             Genre("Ecchi", "ecchi"),
+            Genre("Fan Fiction", "fan-fiction"),
+            Genre("Fanfiction", "fanfiction"),
             Genre("Fantasy", "fantasy"),
+            Genre("Game", "game"),
+            Genre("Gender Bender", "gender-bender"),
             Genre("Harem", "harem"),
             Genre("Historical", "historical"),
             Genre("Horror", "horror"),
             Genre("Isekai", "isekai"),
             Genre("Josei", "josei"),
+            Genre("Lolicon", "lolicon"),
+            Genre("Magic", "magic"),
             Genre("Martial Arts", "martial-arts"),
             Genre("Mature", "mature"),
             Genre("Mecha", "mecha"),
+            Genre("Military", "military"),
+            Genre("Modern Life", "modern-life"),
             Genre("Mystery", "mystery"),
             Genre("Psychological", "psychological"),
+            Genre("Reincarnation", "reincarnation"),
             Genre("Romance", "romance"),
             Genre("School Life", "school-life"),
             Genre("Sci-fi", "sci-fi"),
             Genre("Seinen", "seinen"),
             Genre("Shoujo", "shoujo"),
+            Genre("Shoujo Ai", "shoujo-ai"),
             Genre("Shounen", "shounen"),
+            Genre("Shounen Ai", "shounen-ai"),
             Genre("Slice of Life", "slice-of-life"),
+            Genre("Smut", "smut"),
             Genre("Sports", "sports"),
             Genre("Supernatural", "supernatural"),
+            Genre("System", "system"),
             Genre("Tragedy", "tragedy"),
+            Genre("Urban", "urban"),
+            Genre("Urban Life", "urban-life"),
             Genre("Wuxia", "wuxia"),
             Genre("Xianxia", "xianxia"),
             Genre("Xuanhuan", "xuanhuan"),
+            Genre("Yaoi", "yaoi"),
+            Genre("Yuri", "yuri"),
         ),
     )
 
@@ -214,7 +238,7 @@ class NovelBuddy : HttpSource(), NovelSource {
                     }
                 }
                 "Genres :" -> {
-                    manga.genre = element.select("a").text().trim()
+                    manga.genre = element.select("a").joinToString(", ") { it.text().trim() }
                 }
             }
         }

@@ -1,0 +1,8 @@
+ext {
+    extName = 'EPUB KFCok'
+    extClass = '.EpubKfcok'
+    extVersionCode = 1
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

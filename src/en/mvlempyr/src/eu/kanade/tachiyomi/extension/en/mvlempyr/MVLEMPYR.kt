@@ -1,6 +1,12 @@
 package eu.kanade.tachiyomi.extension.en.mvlempyr
 
+import android.app.Application
+import android.content.SharedPreferences
+import androidx.preference.ListPreference
+import androidx.preference.PreferenceScreen
+import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -25,11 +31,13 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
+import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.get
 import java.math.BigInteger
 import java.text.SimpleDateFormat
 import java.util.Locale
 
-class MVLEMPYR : HttpSource(), NovelSource {
+class MVLEMPYR : HttpSource(), NovelSource, ConfigurableSource {
 
     override val name = "MVLEMPYR"
     override val baseUrl = "https://www.mvlempyr.io"
@@ -39,6 +47,31 @@ class MVLEMPYR : HttpSource(), NovelSource {
     override val isNovelSource = true
 
     override val client = network.cloudflareClient
+
+    private val preferences: SharedPreferences by lazy {
+        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+    }
+
+    private val perPage: String
+        get() = preferences.getString(PER_PAGE_PREF, "50") ?: "50"
+
+    private val useLocalLoading: Boolean
+        get() = preferences.getBoolean(LOCAL_LOADING_PREF, false)
+
+    // Cache for local loading mode
+    @Volatile
+    private var cachedNovels: List<CachedNovel>? = null
+
+    private data class CachedNovel(
+        val manga: SManga,
+        val novelCode: Long?,
+        val avgReview: Float?,
+        val reviewCount: Int?,
+        val chapterCount: Int?,
+        val created: Long?,
+        val genres: List<String>,
+        val tags: List<String>,
+    )
 
     override fun headersBuilder(): Headers.Builder = super.headersBuilder()
         .add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
@@ -88,25 +121,45 @@ class MVLEMPYR : HttpSource(), NovelSource {
     )
 
     override fun popularMangaRequest(page: Int): Request {
-        // Order by comment_count for popularity (or id desc as fallback)
-        return GET("$chapSite/wp-json/wp/v2/mvl-novels?per_page=20&page=$page&orderby=id&order=desc", headers)
+        if (useLocalLoading && page == 1) {
+            // Load all novels for local filtering mode
+            return GET("$chapSite/wp-json/wp/v2/mvl-novels?per_page=10000", headers)
+        }
+        // API mode - use pagination
+        return GET("$chapSite/wp-json/wp/v2/mvl-novels?per_page=$perPage&page=$page&orderby=id&order=desc", headers)
     }
 
     override fun popularMangaParse(response: Response): MangasPage {
-        return parseNovelsResponse(response)
+        return if (useLocalLoading) {
+            parseAndCacheAllNovels(response)
+        } else {
+            parseNovelsResponse(response)
+        }
     }
 
     override fun latestUpdatesRequest(page: Int): Request {
-        return GET("$chapSite/wp-json/wp/v2/mvl-novels?per_page=20&page=$page&orderby=date&order=desc", headers)
+        if (useLocalLoading && page == 1) {
+            return GET("$chapSite/wp-json/wp/v2/mvl-novels?per_page=10000", headers)
+        }
+        return GET("$chapSite/wp-json/wp/v2/mvl-novels?per_page=$perPage&page=$page&orderby=date&order=desc", headers)
     }
 
     override fun latestUpdatesParse(response: Response): MangasPage {
-        return parseNovelsResponse(response)
+        return if (useLocalLoading) {
+            parseAndCacheAllNovels(response, sortBy = "created")
+        } else {
+            parseNovelsResponse(response)
+        }
     }
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+        if (useLocalLoading && page == 1) {
+            // Load all for local filtering
+            return GET("$chapSite/wp-json/wp/v2/mvl-novels?per_page=10000", headers)
+        }
+
         val url = "$chapSite/wp-json/wp/v2/mvl-novels".toHttpUrl().newBuilder()
-            .addQueryParameter("per_page", "20")
+            .addQueryParameter("per_page", perPage)
             .addQueryParameter("page", page.toString())
 
         if (query.isNotEmpty()) {
@@ -115,16 +168,18 @@ class MVLEMPYR : HttpSource(), NovelSource {
         }
 
         // Apply filters
+        // WordPress REST API valid orderby: author, date, id, include, modified, parent, relevance, slug, include_slugs, title
         filters.forEach { filter ->
             when (filter) {
                 is SortFilter -> {
                     when (filter.state) {
-                        0 -> url.addQueryParameter("orderby", "comment_count")
-                        1 -> url.addQueryParameter("orderby", "rating")
-                        2 -> url.addQueryParameter("orderby", "meta_value_num")
-                        3 -> url.addQueryParameter("orderby", "date")
+                        0 -> {} // None - no orderby parameter
+                        1 -> url.addQueryParameter("orderby", "date") // Latest Added
+                        2 -> url.addQueryParameter("orderby", "title") // A-Z
+                        3 -> url.addQueryParameter("orderby", "modified") // Last Modified
+                        4 -> url.addQueryParameter("orderby", "relevance") // Relevance
                     }
-                    url.addQueryParameter("order", "desc")
+                    if (filter.state > 0) url.addQueryParameter("order", "desc")
                 }
                 is GenreFilter -> {
                     val includedGenres = filter.state.filter { it.isIncluded() }.map { it.id }
@@ -164,7 +219,11 @@ class MVLEMPYR : HttpSource(), NovelSource {
     }
 
     override fun searchMangaParse(response: Response): MangasPage {
-        return parseNovelsResponse(response)
+        return if (useLocalLoading) {
+            parseAndCacheAllNovels(response)
+        } else {
+            parseNovelsResponse(response)
+        }
     }
 
     private fun parseNovelsResponse(response: Response): MangasPage {
@@ -189,6 +248,58 @@ class MVLEMPYR : HttpSource(), NovelSource {
             }
 
             MangasPage(novels, hasNextPage)
+        } catch (e: Exception) {
+            MangasPage(emptyList(), false)
+        }
+    }
+
+    /**
+     * Parse and cache all novels for local loading mode.
+     * In this mode, all novels are loaded at once and filtered/sorted in memory.
+     */
+    private fun parseAndCacheAllNovels(response: Response, sortBy: String = "reviewCount"): MangasPage {
+        val responseBody = response.body.string()
+
+        return try {
+            val jsonArray = json.parseToJsonElement(responseBody).jsonArray
+
+            val novels = jsonArray.mapNotNull { element ->
+                try {
+                    val obj = element.jsonObject
+                    val manga = createSMangaFromJson(obj)
+
+                    CachedNovel(
+                        manga = manga,
+                        novelCode = obj["novel-code"]?.jsonPrimitive?.longOrNull,
+                        avgReview = obj["average-review"]?.jsonPrimitive?.contentOrNull?.toFloatOrNull(),
+                        reviewCount = obj["total-reviews"]?.jsonPrimitive?.intOrNull,
+                        chapterCount = obj["total-chapters"]?.jsonPrimitive?.intOrNull,
+                        created = obj["createdOn"]?.jsonPrimitive?.contentOrNull?.let { parseDate(it) },
+                        genres = obj["genre"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(),
+                        tags = obj["tags"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(),
+                    )
+                } catch (e: Exception) {
+                    null
+                }
+            }
+
+            // Cache for future use
+            cachedNovels = novels
+
+            // Sort based on the sort criteria
+            val sorted = when (sortBy) {
+                "created" -> novels.sortedByDescending { it.created ?: 0L }
+                "avgReview" -> novels.sortedByDescending { it.avgReview ?: 0f }
+                "chapterCount" -> novels.sortedByDescending { it.chapterCount ?: 0 }
+                else -> novels.sortedByDescending { it.reviewCount ?: 0 }
+            }
+
+            // Return first page
+            val pageSize = perPage.toIntOrNull() ?: 50
+            val firstPage = sorted.take(pageSize).map { it.manga }
+            val hasNextPage = sorted.size > pageSize
+
+            MangasPage(firstPage, hasNextPage)
         } catch (e: Exception) {
             MangasPage(emptyList(), false)
         }
@@ -352,9 +463,10 @@ class MVLEMPYR : HttpSource(), NovelSource {
         TagFilter(),
     )
 
+    // WordPress REST API valid orderby values: author, date, id, include, modified, parent, relevance, slug, include_slugs, title
     private class SortFilter : Filter.Select<String>(
         "Sort by",
-        arrayOf("Most Reviewed", "Best Rated", "Chapter Count", "Latest Added"),
+        arrayOf("None", "Latest Added", "A-Z", "Last Modified", "Relevance"),
     )
 
     private class GenreFilter : Filter.Group<GenreTriState>(
@@ -420,5 +532,28 @@ class MVLEMPYR : HttpSource(), NovelSource {
 
     private fun cleanHtml(html: String): String {
         return Jsoup.parse(html).text()
+    }
+
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        SwitchPreferenceCompat(screen.context).apply {
+            key = LOCAL_LOADING_PREF
+            title = "Local loading mode"
+            summary = "Load all novels at once for faster filtering (uses more memory)"
+            setDefaultValue(false)
+        }.let { screen.addPreference(it) }
+
+        ListPreference(screen.context).apply {
+            key = PER_PAGE_PREF
+            title = "Results per page"
+            entries = arrayOf("20", "50", "100")
+            entryValues = arrayOf("20", "50", "100")
+            setDefaultValue("50")
+            summary = "%s"
+        }.let { screen.addPreference(it) }
+    }
+
+    companion object {
+        private const val PER_PAGE_PREF = "per_page"
+        private const val LOCAL_LOADING_PREF = "local_loading"
     }
 }

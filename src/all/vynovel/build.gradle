@@ -1,0 +1,8 @@
+ext {
+    extName = 'Vynovel'
+    extClass = '.Vynovel'
+    extVersionCode = 1
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

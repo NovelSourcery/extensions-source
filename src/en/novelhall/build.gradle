@@ -1,0 +1,8 @@
+ext {
+    extName = 'NovelHall'
+    extClass = '.NovelHall'
+    extVersionCode = 1
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

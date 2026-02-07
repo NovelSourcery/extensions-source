@@ -2,6 +2,7 @@ package eu.kanade.tachiyomi.extension.en.novelshub
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
+import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
@@ -9,6 +10,10 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Headers
 import okhttp3.Request
 import okhttp3.Response
@@ -177,11 +182,147 @@ class NovelsHub : HttpSource(), NovelSource {
     // ======================== Search ========================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val encodedQuery = URLEncoder.encode(query, "UTF-8")
-        return GET("$baseUrl/search?q=$encodedQuery&page=$page", rscHeaders())
+        // Use API for search and filtering
+        // https://api.novelshub.org/api/query?page=1&perPage=24&searchTerm=world&genreIds=2,21&seriesType=MANHWA&seriesStatus=ONGOING
+        val params = mutableListOf<String>()
+        params.add("page=$page")
+        params.add("perPage=24")
+
+        if (query.isNotBlank()) {
+            params.add("searchTerm=${URLEncoder.encode(query, "UTF-8")}")
+        }
+
+        filters.forEach { filter ->
+            when (filter) {
+                is SortFilter -> {
+                    val sort = filter.toValue()
+                    if (sort != null) {
+                        params.add("orderBy=${sort.first}")
+                        params.add("orderDirection=${sort.second}")
+                    }
+                }
+                is GenreFilter -> {
+                    val genres = filter.state.filter { it.state != Filter.TriState.STATE_IGNORE }
+                        .filterIsInstance<GenreCheckBox>()
+                        .map { it.id }
+                        .joinToString(",")
+                    if (genres.isNotEmpty()) {
+                        params.add("genreIds=$genres")
+                    }
+                }
+                is StatusFilter -> {
+                    val status = filter.toValue()
+                    if (!status.isNullOrEmpty()) {
+                        params.add("seriesStatus=$status")
+                    }
+                }
+                is TypeFilter -> {
+                    val type = filter.toValue()
+                    if (!type.isNullOrEmpty()) {
+                        params.add("seriesType=$type")
+                    }
+                }
+                else -> {}
+            }
+        }
+
+        val url = "https://api.novelshub.org/api/query?${params.joinToString("&")}"
+        return GET(url, headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
+    override fun searchMangaParse(response: Response): MangasPage {
+        val body = response.body.string()
+
+        // Check if response is from API
+        if (response.request.url.host == "api.novelshub.org") {
+            return parseApiResponse(body)
+        }
+
+        // Otherwise use the standard HTML parsing
+        return popularMangaParse(
+            Response.Builder()
+                .body(okhttp3.ResponseBody.create(null, body))
+                .request(response.request)
+                .protocol(response.protocol)
+                .code(response.code)
+                .message(response.message)
+                .build(),
+        )
+    }
+
+    private fun parseApiResponse(body: String): MangasPage {
+        val novels = mutableListOf<SManga>()
+
+        try {
+            val jsonElement = json.parseToJsonElement(body)
+            val rootObj = jsonElement.jsonObject
+
+            // Handle multiple response formats:
+            // 1. { "posts": [...] } - direct posts array
+            // 2. { "data": { "series": [...] } } - nested series array
+            val items = rootObj["posts"]?.jsonArray
+                ?: rootObj["data"]?.jsonObject?.get("series")?.jsonArray
+
+            items?.forEach { item ->
+                try {
+                    val obj = item.jsonObject
+                    val slug = obj["slug"]?.jsonPrimitive?.contentOrNull ?: return@forEach
+                    val title = obj["postTitle"]?.jsonPrimitive?.contentOrNull
+                        ?: obj["title"]?.jsonPrimitive?.contentOrNull
+                        ?: return@forEach
+                    val cover = obj["featuredImage"]?.jsonPrimitive?.contentOrNull
+                        ?: obj["featuredImageCL"]?.jsonPrimitive?.contentOrNull
+
+                    novels.add(
+                        SManga.create().apply {
+                            this.title = title
+                            url = "/series/$slug"
+                            thumbnail_url = cover
+                        },
+                    )
+                } catch (e: Exception) {
+                    // Skip
+                }
+            }
+
+            // Check for pagination in different locations
+            val pagination = rootObj["pagination"]?.jsonObject
+                ?: rootObj["data"]?.jsonObject?.get("pagination")?.jsonObject
+            val currentPage = pagination?.get("currentPage")?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 1
+            val totalPages = pagination?.get("totalPages")?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 1
+
+            return MangasPage(novels, currentPage < totalPages)
+        } catch (e: Exception) {
+            // Fallback to regex parsing
+            val slugTitlePattern = Regex(""""slug"\s*:\s*"([^"]+)"\s*,\s*"postTitle"\s*:\s*"([^"]+)"""")
+            val imagePattern = Regex(""""featuredImage"\s*:\s*"([^"]+)"""")
+
+            slugTitlePattern.findAll(body).forEach { match ->
+                try {
+                    val slug = match.groupValues[1]
+                    val title = match.groupValues[2]
+                    if (slug.startsWith("chapter-")) return@forEach
+
+                    val startIdx = maxOf(0, match.range.first - 200)
+                    val endIdx = minOf(body.length, match.range.last + 500)
+                    val nearbyText = body.substring(startIdx, endIdx)
+                    val cover = imagePattern.find(nearbyText)?.groupValues?.get(1)
+
+                    novels.add(
+                        SManga.create().apply {
+                            this.title = title
+                            url = "/series/$slug"
+                            thumbnail_url = cover
+                        },
+                    )
+                } catch (e: Exception) {
+                    // Skip
+                }
+            }
+        }
+
+        return MangasPage(novels.distinctBy { it.url }, novels.size >= 10)
+    }
 
     // ======================== Details ========================
 
@@ -203,7 +344,19 @@ class NovelsHub : HttpSource(), NovelSource {
                 ?.replace("\\\"", "\"")
                 ?.replace("\\n", "\n")
                 ?.replace("\\/", "/")
-            description = postContent?.let { Jsoup.parse(it).text() }
+            val descText = postContent?.let { Jsoup.parse(it).text() }
+
+            // Extract alternativeTitles
+            val altTitles = Regex(""""alternativeTitles"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(body)
+                ?.groupValues?.get(1)
+                ?.replace("\\\"", "\"")
+                ?.replace("\\n", "\n")
+                ?.takeIf { it.isNotBlank() }
+
+            description = buildString {
+                altTitles?.let { append("Alternative Titles: $it\n\n") }
+                descText?.let { append(it) }
+            }.takeIf { it.isNotBlank() }
 
             // Extract featuredImage for cover
             thumbnail_url = Regex(""""featuredImage"\s*:\s*"([^"]+)"""").find(body)
@@ -381,362 +534,427 @@ class NovelsHub : HttpSource(), NovelSource {
         return doc.selectFirst("div.prose, article, .chapter-content")?.html() ?: ""
     }
 
-    override fun getFilterList(): FilterList = FilterList()
-    private class TagFilter : Filter.Group<ExcludableCheckBox>(
-    "Genres",
-    listOf(
-        ExcludableCheckBox("REINCARNATION", "1"),
-        ExcludableCheckBox("SYSTEM", "2"),
-        ExcludableCheckBox("MYSTERY", "3"),
-        ExcludableCheckBox("Action ", "4"),
-        ExcludableCheckBox("DETECTIVE CONAN", "5"),
-        ExcludableCheckBox("ISEKAI", "6"),
-        ExcludableCheckBox("WEAKTOSTRONG", "7"),
-        ExcludableCheckBox("ANIME", "8"),
-        ExcludableCheckBox("Romance ", "9"),
-        ExcludableCheckBox("School Life", "10"),
-        ExcludableCheckBox("Wuxia", "11"),
-        ExcludableCheckBox("Fantasy", "12"),
-        ExcludableCheckBox("Drama", "13"),
-        ExcludableCheckBox("Comedy", "14"),
-        ExcludableCheckBox("Martial Arts", "15"),
-        ExcludableCheckBox("Supernatural", "16"),
-        ExcludableCheckBox("Cunning Protagonist", "17"),
-        ExcludableCheckBox("Light Novel", "18"),
-        ExcludableCheckBox("Military", "19"),
-        ExcludableCheckBox("Harem", "20"),
-        ExcludableCheckBox("Modern Day", "21"),
-        ExcludableCheckBox("Transmigration", "22"),
-        ExcludableCheckBox("Urban Fantasy", "23"),
-        ExcludableCheckBox("Adopted Sister", "24"),
-        ExcludableCheckBox("Male Protagonist", "25"),
-        ExcludableCheckBox("Faction Building", "26"),
-        ExcludableCheckBox("Superpowers", "27"),
-        ExcludableCheckBox("Science", "28"),
-        ExcludableCheckBox(" Fiction", "29"),
-        ExcludableCheckBox("Space-Time Travel", "30"),
-        ExcludableCheckBox(" Dimensional Travel", "31"),
-        ExcludableCheckBox("MAGIC", "32"),
-        ExcludableCheckBox("WIZARDS", "33"),
-        ExcludableCheckBox("Adult", "34"),
-        ExcludableCheckBox("Life ", "35"),
-        ExcludableCheckBox("Adventure ", "36"),
-        ExcludableCheckBox(" Shounen", "37"),
-        ExcludableCheckBox("Psychological", "38"),
-        ExcludableCheckBox("Academy ", "39"),
-        ExcludableCheckBox("Character Growth ", "40"),
-        ExcludableCheckBox("Game ", "41"),
-        ExcludableCheckBox("Elements ", "42"),
-        ExcludableCheckBox("Transported into a Game World", "43"),
-        ExcludableCheckBox("Gender Bender ", "44"),
-        ExcludableCheckBox("Slice of Life", "45"),
-        ExcludableCheckBox("Sports", "46"),
-        ExcludableCheckBox("Revenge", "47"),
-        ExcludableCheckBox("Hard Work", "48"),
-        ExcludableCheckBox("Survival", "49"),
-        ExcludableCheckBox("Historical", "50"),
-        ExcludableCheckBox("Healing Romance", "51"),
-        ExcludableCheckBox("shoujo", "52"),
-        ExcludableCheckBox("Possession", "53"),
-        ExcludableCheckBox("Regression", "54"),
-        ExcludableCheckBox("Seinen", "55"),
-        ExcludableCheckBox("Sci-Fi", "56"),
-        ExcludableCheckBox("Tragedy", "57"),
-        ExcludableCheckBox("Shounen", "58"),
-        ExcludableCheckBox("Mature", "59"),
-        ExcludableCheckBox("cultivation-elements", "60"),
-        ExcludableCheckBox("secret-organization", "61"),
-        ExcludableCheckBox("Horror", "62"),
-        ExcludableCheckBox("weak-to-strong", "63"),
-        ExcludableCheckBox("Crime", "64"),
-        ExcludableCheckBox("Police", "65"),
-        ExcludableCheckBox("Urban Life", "66"),
-        ExcludableCheckBox("Workplace", "67"),
-        ExcludableCheckBox("Finance", "68"),
-        ExcludableCheckBox("Business Management", "69"),
-        ExcludableCheckBox("wall-street", "70"),
-        ExcludableCheckBox("beautiful-female-leads", "71"),
-        ExcludableCheckBox("wealth-building", "72"),
-        ExcludableCheckBox("stock-market", "73"),
-        ExcludableCheckBox("Second Chance", "74"),
-        ExcludableCheckBox("silicon-valley", "75"),
-        ExcludableCheckBox("financial-warfare", "76"),
-        ExcludableCheckBox("Dystopia", "77"),
-        ExcludableCheckBox("Another World", "78"),
-        ExcludableCheckBox("Thriller", "79"),
-        ExcludableCheckBox("Genius Protagonist", "80"),
-        ExcludableCheckBox("Business / Management", "81"),
-        ExcludableCheckBox("gallery", "82"),
-        ExcludableCheckBox("Investor", "83"),
-        ExcludableCheckBox("Obsession", "84"),
-        ExcludableCheckBox("Misunderstandings", "85"),
-        ExcludableCheckBox("Ecchi", "86"),
-        ExcludableCheckBox("Yuri", "87"),
-        ExcludableCheckBox("Shoujo AI", "88"),
-        ExcludableCheckBox("summoned to a tower, gallery system", "89"),
-        ExcludableCheckBox("game element", "90"),
-        ExcludableCheckBox("Xianxia", "91"),
-        ExcludableCheckBox("Serial Killers", "92"),
-        ExcludableCheckBox("Murders", "93"),
-        ExcludableCheckBox("Unconditional Love", "94"),
-        ExcludableCheckBox("Demons ", "95"),
-        ExcludableCheckBox("Regret", "96"),
-        ExcludableCheckBox("Josei", "97"),
-        ExcludableCheckBox("murim", "98"),
-        ExcludableCheckBox("Dark Fantasy", "99"),
-        ExcludableCheckBox("Game World", "100"),
-        ExcludableCheckBox("religious", "101"),
-        ExcludableCheckBox("TerritoryManagement", "102"),
-        ExcludableCheckBox("Genius", "103"),
-        ExcludableCheckBox("Scoundrel", "104"),
-        ExcludableCheckBox("Nobility", "105"),
-        ExcludableCheckBox("Tower Climbing", "106"),
-        ExcludableCheckBox("Professional", "107"),
-        ExcludableCheckBox("Overpowered", "108"),
-        ExcludableCheckBox("Singer", "109"),
-        ExcludableCheckBox("Veteran", "110"),
-        ExcludableCheckBox("Effort", "111"),
-        ExcludableCheckBox("Manager", "112"),
-        ExcludableCheckBox("Supernatural Ability", "113"),
-        ExcludableCheckBox("Devour or Absorption", "114"),
-        ExcludableCheckBox("Artifact", "115"),
-        ExcludableCheckBox("Mortal Path", "116"),
-        ExcludableCheckBox("Decisive and Ruthless", "117"),
-        ExcludableCheckBox("Idol", "118"),
-        ExcludableCheckBox("Heroes", "119"),
-        ExcludableCheckBox("Cultivation", "120"),
-        ExcludableCheckBox("Love Triangle", "121"),
-        ExcludableCheckBox("First Love", "122"),
-        ExcludableCheckBox("Reverse Harem", "123"),
-        ExcludableCheckBox("One-Sided Love", "124"),
-        ExcludableCheckBox("Smut", "125"),
-        ExcludableCheckBox("War", "126"),
-        ExcludableCheckBox("Apocalypse", "127"),
-        ExcludableCheckBox("Chaos", "128"),
-        ExcludableCheckBox("Magic and sword", "129"),
-        ExcludableCheckBox("Mecha ", "130"),
-        ExcludableCheckBox("Actor", "131"),
-        ExcludableCheckBox("MMORPG", "132"),
-        ExcludableCheckBox("Virtual Reality", "133"),
-        ExcludableCheckBox("Xuanhuan ", "134"),
-        ExcludableCheckBox("Yaoi", "135"),
-        ExcludableCheckBox("matur", "136"),
-        ExcludableCheckBox("ghoststory", "137"),
-        ExcludableCheckBox("GL", "138"),
-        ExcludableCheckBox("Necrosmith", "139"),
-        ExcludableCheckBox("Necromancer", "140"),
-        ExcludableCheckBox("Blacksmith", "141"),
-        ExcludableCheckBox("artist", "142"),
-        ExcludableCheckBox("Childcare", "143"),
-        ExcludableCheckBox("Streaming", "144"),
-        ExcludableCheckBox("All-Rounder", "145"),
-        ExcludableCheckBox("OP(Munchkin)", "146"),
-        ExcludableCheckBox("gambling", "147"),
-        ExcludableCheckBox("money", "148"),
-        ExcludableCheckBox("r18", "149"),
-        ExcludableCheckBox("Tsundere", "150"),
-        ExcludableCheckBox("Proactive Protagonist", "151"),
-        ExcludableCheckBox(" Cute Story", "152"),
-        ExcludableCheckBox("Alternate Universe", "153"),
-        ExcludableCheckBox("Movie", "154"),
-        ExcludableCheckBox("adhesion", "155"),
-        ExcludableCheckBox("illusion", "156"),
-        ExcludableCheckBox("Villain role", "157"),
-        ExcludableCheckBox("ModernFantasy", "158"),
-        ExcludableCheckBox("hunter", "159"),
-        ExcludableCheckBox("TS", "160"),
-        ExcludableCheckBox("munchkin", "161"),
-        ExcludableCheckBox("tower", "162"),
-        ExcludableCheckBox("hyundai", "163"),
-        ExcludableCheckBox("modern fantasy", "164"),
-        ExcludableCheckBox("alchemy", "165"),
-        ExcludableCheckBox("worldwar", "166"),
-        ExcludableCheckBox("WarHero", "167"),
-        ExcludableCheckBox("#AlternativeHistory", "168"),
-        ExcludableCheckBox("famous famaily", "169"),
-        ExcludableCheckBox("dark", "170"),
-        ExcludableCheckBox("yandere", "171"),
-        ExcludableCheckBox("ghost", "172"),
-        ExcludableCheckBox("catfight", "173"),
-        ExcludableCheckBox("sauce", "174"),
-        ExcludableCheckBox("food", "175"),
-        ExcludableCheckBox("cook", "176"),
-        ExcludableCheckBox("cyberpunk", "177"),
-        ExcludableCheckBox("mind control", "178"),
-        ExcludableCheckBox("hypnosis", "179"),
-        ExcludableCheckBox("# Mukbang/Cooking", "180"),
-        ExcludableCheckBox("fusion", "181"),
-        ExcludableCheckBox("Awakening", "182"),
-        ExcludableCheckBox("Farming", "183"),
-        ExcludableCheckBox("Pure Love", "184"),
-        ExcludableCheckBox("slave", "185"),
-        ExcludableCheckBox("Kingdom Building", "186"),
-        ExcludableCheckBox("Political", "187"),
-        ExcludableCheckBox("Redemption", "188"),
-        ExcludableCheckBox("Ai", "189"),
-        ExcludableCheckBox("showbiz", "190"),
-        ExcludableCheckBox("Orthodox", "191"),
-        ExcludableCheckBox("EntertainmentIndustry", "192"),
-        ExcludableCheckBox("writer", "193"),
-        ExcludableCheckBox("Healing", "194"),
-        ExcludableCheckBox("Medical", "195"),
-        ExcludableCheckBox("Mana", "196"),
-        ExcludableCheckBox("Medieval", "197"),
-        ExcludableCheckBox("Schemes ", "198"),
-        ExcludableCheckBox("love", "199"),
-        ExcludableCheckBox("Marriage ", "200"),
-        ExcludableCheckBox("netrori", "201"),
-        ExcludableCheckBox("gods", "202"),
-        ExcludableCheckBox("crazy love interest ", "203"),
-        ExcludableCheckBox("MMA", "204"),
-        ExcludableCheckBox("ice age", "205"),
-        ExcludableCheckBox("management", "206"),
-        ExcludableCheckBox("Female Protagonist", "207"),
-        ExcludableCheckBox("Royalty", "208"),
-        ExcludableCheckBox("Mob Protagonist", "209"),
-        ExcludableCheckBox("climbing", "210"),
-        ExcludableCheckBox("middleAge", "211"),
-        ExcludableCheckBox("romance fantasy", "212"),
-        ExcludableCheckBox("cooking", "213"),
-        ExcludableCheckBox("return", "214"),
-        ExcludableCheckBox("northern air force", "215"),
-        ExcludableCheckBox("National Management", "216"),
-        ExcludableCheckBox("#immortality", "217"),
-        ExcludableCheckBox("Fist Techniques", "218"),
-        ExcludableCheckBox("Retired Expert", "219"),
-        ExcludableCheckBox("Returnee", "220"),
-        ExcludableCheckBox("Hidden Identity", "221"),
-        ExcludableCheckBox("Zombie", "222"),
-        ExcludableCheckBox("Knight", "223"),
-        ExcludableCheckBox("NTL", "224"),
-        ExcludableCheckBox("bitcoins", "225"),
-        ExcludableCheckBox("crypto", "226"),
-        ExcludableCheckBox("actia", "227"),
-        ExcludableCheckBox("Brainwashing", "228"),
-        ExcludableCheckBox("Tentacles", "229"),
-        ExcludableCheckBox("Slime", "230"),
-        ExcludableCheckBox("cultivators", "231"),
-        ExcludableCheckBox("bully", "232"),
-        ExcludableCheckBox("#university", "233"),
-        ExcludableCheckBox("BL", "234"),
-        ExcludableCheckBox("Omegaverse", "235"),
-        ExcludableCheckBox("Girl's Love", "236"),
-        ExcludableCheckBox("theater", "237"),
-        ExcludableCheckBox("Broadcasting", "238"),
-        ExcludableCheckBox("Success", "239"),
-        ExcludableCheckBox("Internet Broadcasting", "240"),
-        ExcludableCheckBox("rape", "241"),
-        ExcludableCheckBox("Madman", "242"),
-        ExcludableCheckBox("Soccer", "243"),
-        ExcludableCheckBox("#SoloProtagonist", "244"),
-        ExcludableCheckBox("#Underworld", "245"),
-        ExcludableCheckBox("#Politics", "246"),
-        ExcludableCheckBox("#Army", "247"),
-        ExcludableCheckBox("#ThreeKingdoms", "248"),
-        ExcludableCheckBox("#Conspiracy", "249"),
-        ExcludableCheckBox(" Possessive Characters", "250"),
-        ExcludableCheckBox("European Ambience", "251"),
-        ExcludableCheckBox("Love Interest Falls in Love First", "252"),
-        ExcludableCheckBox("Reincarnated in a Game World", "253"),
-        ExcludableCheckBox("Male Yandere", "254"),
-        ExcludableCheckBox("Handsome Male Lead ", "255"),
-        ExcludableCheckBox("Monsters ", "256"),
-        ExcludableCheckBox("Urban Legend", "257"),
-        ExcludableCheckBox("modern", "258"),
-        ExcludableCheckBox("summoning", "259"),
-        ExcludableCheckBox("LightNovel", "260"),
-        ExcludableCheckBox("vampire", "261"),
-        ExcludableCheckBox("GameDevelopment", "262"),
-        ExcludableCheckBox("Normalization", "263"),
-        ExcludableCheckBox("GameFantasy", "264"),
-        ExcludableCheckBox("VirtualReality", "265"),
-        ExcludableCheckBox("Infinite Money Glitch", "266"),
-        ExcludableCheckBox("Tycoon", "267"),
-        ExcludableCheckBox("#CampusLife", "268"),
-        ExcludableCheckBox("#Regression", "269"),
-        ExcludableCheckBox("#Chaebol", "270"),
-        ExcludableCheckBox("#Business", "271"),
-        ExcludableCheckBox("#RealEstate", "272"),
-        ExcludableCheckBox("#Revenge", "273"),
-        ExcludableCheckBox("#Healing", "274"),
-        ExcludableCheckBox("SF", "275"),
-        ExcludableCheckBox("Community", "276"),
-        ExcludableCheckBox("Anomaly", "277"),
-        ExcludableCheckBox("CosmicHorror", "278"),
-        ExcludableCheckBox("CreepypastaUniverse", "279"),
-        ExcludableCheckBox("growth", "280"),
-        ExcludableCheckBox("Bingyi", "281"),
-        ExcludableCheckBox("Healer", "282"),
-        ExcludableCheckBox("#TSHeroine", "283"),
-        ExcludableCheckBox("#management", "284"),
-        ExcludableCheckBox("#GoldenSun", "285"),
-        ExcludableCheckBox("GrowthMunchkin", "286"),
-        ExcludableCheckBox("Fundamentals", "287"),
-        ExcludableCheckBox("broadcast", "288"),
-        ExcludableCheckBox("Luck", "289"),
-        ExcludableCheckBox("Investment", "290"),
-        ExcludableCheckBox("Divorced", "291"),
-        ExcludableCheckBox("#mercenary", "292"),
-        ExcludableCheckBox("#Art", "293"),
-        ExcludableCheckBox("#All-Rounder", "294"),
-        ExcludableCheckBox("#EntertainmentIndustry", "295"),
-        ExcludableCheckBox("#Music", "296"),
-        ExcludableCheckBox("Villain", "297"),
-        ExcludableCheckBox("Psychopath", "298"),
-        ExcludableCheckBox("Battle Royale", "299"),
-        ExcludableCheckBox("Progression", "300"),
-        ExcludableCheckBox("Billionaire", "301"),
-        ExcludableCheckBox("Beast Tamer", "302"),
-        ExcludableCheckBox("#HighIntensity", "303"),
-        ExcludableCheckBox("#Enterprise", "304"),
-        ExcludableCheckBox("#Growth", "305"),
-        ExcludableCheckBox("#Obsession", "306"),
-        ExcludableCheckBox("#Multiverse", "307"),
-        ExcludableCheckBox("#Academy", "308"),
-        ExcludableCheckBox("#NTL", "309"),
-        ExcludableCheckBox("#MaleOriented", "310"),
-        ExcludableCheckBox("#Possession", "311"),
-        ExcludableCheckBox("#Isekai", "312"),
-        ExcludableCheckBox("#Idol", "313"),
-        ExcludableCheckBox("#Filming", "314"),
-        ExcludableCheckBox("#Training", "315"),
-        ExcludableCheckBox("Hitler", "316"),
-        ExcludableCheckBox("Early Modern", "317"),
-        ExcludableCheckBox("Alternate History", "318"),
-        ExcludableCheckBox("Salvation", "319"),
-        ExcludableCheckBox("fate", "320"),
-        ExcludableCheckBox("DevotedMaleLead", "321"),
-        ExcludableCheckBox("PowerfulMaleLead", "322"),
-        ExcludableCheckBox("StrongAbility", "323"),
-        ExcludableCheckBox("gate", "324"),
-        ExcludableCheckBox("childbirth", "325"),
-        ExcludableCheckBox("Hetrosexual", "326"),
-        ExcludableCheckBox("ClubOwner", "327"),
-        ExcludableCheckBox("SlowPaced", "328"),
-        ExcludableCheckBox("Western", "329"),
-        ExcludableCheckBox("Cheat", "330"),
-        ExcludableCheckBox("Gunslinger", "331"),
-        ExcludableCheckBox("Pure Romance", "332"),
-        ExcludableCheckBox("Humiliation", "333"),
-        ExcludableCheckBox("#Territory", "334"),
-        ExcludableCheckBox("Assistant", "335"),
-        ExcludableCheckBox("Rich", "336"),
-        ExcludableCheckBox("#Zombie", "337"),
-        ExcludableCheckBox("#StatusWindow", "338"),
-        ExcludableCheckBox("#Apocalypse", "339"),
-        ExcludableCheckBox("#GirlGroup", "340"),
-        ExcludableCheckBox("Labyrinth", "341"),
-        ExcludableCheckBox("Gender Reversal", "342")
+    override fun getFilterList(): FilterList = FilterList(
+        SortFilter("Sort", sortOptions),
+        StatusFilter("Status", statusOptions),
+        TypeFilter("Type", typeOptions),
+        GenreFilter("Genres", genreList),
     )
-)
 
+    class SortFilter(name: String, private val options: List<Triple<String, String, String>>) :
+        Filter.Select<String>(name, options.map { it.third }.toTypedArray()) {
+        fun toValue(): Pair<String, String>? = if (state == 0) {
+            null
+        } else {
+            options.getOrNull(state)?.let { it.first to it.second }
+        }
+    }
+
+    class StatusFilter(name: String, private val options: List<Pair<String, String>>) :
+        Filter.Select<String>(name, arrayOf("All") + options.map { it.second }.toTypedArray()) {
+        fun toValue(): String? = if (state == 0) null else options.getOrNull(state - 1)?.first
+    }
+
+    class TypeFilter(name: String, private val options: List<Pair<String, String>>) :
+        Filter.Select<String>(name, arrayOf("All") + options.map { it.second }.toTypedArray()) {
+        fun toValue(): String? = if (state == 0) null else options.getOrNull(state - 1)?.first
+    }
+
+    class GenreFilter(name: String, genres: List<Pair<String, String>>) :
+        Filter.Group<Filter.TriState>(name, genres.map { GenreCheckBox(it.second, it.first) })
+
+    class GenreCheckBox(name: String, val id: String) : Filter.TriState(name)
+
+    // Triple: (orderBy field, orderDirection, display name)
+    private val sortOptions = listOf(
+        Triple("", "", "Default"),
+        Triple("lastChapterAddedAt", "desc", "Latest Update"),
+        Triple("createdAt", "desc", "Recently Added"),
+        Triple("createdAt", "asc", "Oldest"),
+        Triple("postTitle", "asc", "A-Z"),
+        Triple("postTitle", "desc", "Z-A"),
+        Triple("views", "desc", "Most Views"),
+    )
+
+    private val statusOptions = listOf(
+        Pair("ONGOING", "Ongoing"),
+        Pair("COMPLETED", "Completed"),
+        Pair("DROPPED", "Dropped"),
+        Pair("CANCELLED", "Cancelled"),
+        Pair("HIATUS", "Hiatus"),
+        Pair("MASS RELEASED", "Mass Released"),
+        Pair("COMING SOON", "Coming Soon"),
+    )
+
+    private val typeOptions = listOf(
+        Pair("NOVEL", "Novel"),
+        Pair("MANHWA", "Manhwa"),
+        Pair("MANGA", "Manga"),
+        Pair("MANHUA", "Manhua"),
+    )
+
+    private val genreList = listOf(
+        Pair("1", "Reincarnation"),
+        Pair("2", "System"),
+        Pair("3", "Mystery"),
+        Pair("4", "Action"),
+        Pair("5", "Detective Conan"),
+        Pair("6", "Isekai"),
+        Pair("7", "Weak to Strong"),
+        Pair("8", "Anime"),
+        Pair("9", "Romance"),
+        Pair("10", "School Life"),
+        Pair("11", "Wuxia"),
+        Pair("12", "Fantasy"),
+        Pair("13", "Drama"),
+        Pair("14", "Comedy"),
+        Pair("15", "Martial Arts"),
+        Pair("16", "Supernatural"),
+        Pair("17", "Cunning Protagonist"),
+        Pair("18", "Light Novel"),
+        Pair("19", "Military"),
+        Pair("20", "Harem"),
+        Pair("21", "Modern Day"),
+        Pair("22", "Transmigration"),
+        Pair("23", "Urban Fantasy"),
+        Pair("24", "Adopted Sister"),
+        Pair("25", "Male Protagonist"),
+        Pair("26", "Faction Building"),
+        Pair("27", "Superpowers"),
+        Pair("28", "Science"),
+        Pair("29", " Fiction"),
+        Pair("30", "Space-Time Travel"),
+        Pair("31", " Dimensional Travel"),
+        Pair("32", "MAGIC"),
+        Pair("33", "WIZARDS"),
+        Pair("34", "Adult"),
+        Pair("35", "Life "),
+        Pair("36", "Adventure "),
+        Pair("37", " Shounen"),
+        Pair("38", "Psychological"),
+        Pair("39", "Academy "),
+        Pair("40", "Character Growth "),
+        Pair("41", "Game "),
+        Pair("42", "Elements "),
+        Pair("43", "Transported into a Game World"),
+        Pair("44", "Gender Bender "),
+        Pair("45", "Slice of Life"),
+        Pair("46", "Sports"),
+        Pair("47", "Revenge"),
+        Pair("48", "Hard Work"),
+        Pair("49", "Survival"),
+        Pair("50", "Historical"),
+        Pair("51", "Healing Romance"),
+        Pair("52", "shoujo"),
+        Pair("53", "Possession"),
+        Pair("54", "Regression"),
+        Pair("55", "Seinen"),
+        Pair("56", "Sci-Fi"),
+        Pair("57", "Tragedy"),
+        Pair("58", "Shounen"),
+        Pair("59", "Mature"),
+        Pair("60", "cultivation-elements"),
+        Pair("61", "secret-organization"),
+        Pair("62", "Horror"),
+        Pair("63", "weak-to-strong"),
+        Pair("64", "Crime"),
+        Pair("65", "Police"),
+        Pair("66", "Urban Life"),
+        Pair("67", "Workplace"),
+        Pair("68", "Finance"),
+        Pair("69", "Business Management"),
+        Pair("70", "wall-street"),
+        Pair("71", "beautiful-female-leads"),
+        Pair("72", "wealth-building"),
+        Pair("73", "stock-market"),
+        Pair("74", "Second Chance"),
+        Pair("75", "silicon-valley"),
+        Pair("76", "financial-warfare"),
+        Pair("77", "Dystopia"),
+        Pair("78", "Another World"),
+        Pair("79", "Thriller"),
+        Pair("80", "Genius Protagonist"),
+        Pair("81", "Business / Management"),
+        Pair("82", "gallery"),
+        Pair("83", "Investor"),
+        Pair("84", "Obsession"),
+        Pair("85", "Misunderstandings"),
+        Pair("86", "Ecchi"),
+        Pair("87", "Yuri"),
+        Pair("88", "Shoujo AI"),
+        Pair("89", "summoned to a tower, gallery system"),
+        Pair("90", "game element"),
+        Pair("91", "Xianxia"),
+        Pair("92", "Serial Killers"),
+        Pair("93", "Murders"),
+        Pair("94", "Unconditional Love"),
+        Pair("95", "Demons "),
+        Pair("96", "Regret"),
+        Pair("97", "Josei"),
+        Pair("98", "murim"),
+        Pair("99", "Dark Fantasy"),
+        Pair("100", "Game World"),
+        Pair("101", "religious"),
+        Pair("102", "TerritoryManagement"),
+        Pair("103", "Genius"),
+        Pair("104", "Scoundrel"),
+        Pair("105", "Nobility"),
+        Pair("106", "Tower Climbing"),
+        Pair("107", "Professional"),
+        Pair("108", "Overpowered"),
+        Pair("109", "Singer"),
+        Pair("110", "Veteran"),
+        Pair("111", "Effort"),
+        Pair("112", "Manager"),
+        Pair("113", "Supernatural Ability"),
+        Pair("114", "Devour or Absorption"),
+        Pair("115", "Artifact"),
+        Pair("116", "Mortal Path"),
+        Pair("117", "Decisive and Ruthless"),
+        Pair("118", "Idol"),
+        Pair("119", "Heroes"),
+        Pair("120", "Cultivation"),
+        Pair("121", "Love Triangle"),
+        Pair("122", "First Love"),
+        Pair("123", "Reverse Harem"),
+        Pair("124", "One-Sided Love"),
+        Pair("125", "Smut"),
+        Pair("126", "War"),
+        Pair("127", "Apocalypse"),
+        Pair("128", "Chaos"),
+        Pair("129", "Magic and sword"),
+        Pair("130", "Mecha "),
+        Pair("131", "Actor"),
+        Pair("132", "MMORPG"),
+        Pair("133", "Virtual Reality"),
+        Pair("134", "Xuanhuan "),
+        Pair("135", "Yaoi"),
+        Pair("136", "matur"),
+        Pair("137", "ghoststory"),
+        Pair("138", "GL"),
+        Pair("139", "Necrosmith"),
+        Pair("140", "Necromancer"),
+        Pair("141", "Blacksmith"),
+        Pair("142", "artist"),
+        Pair("143", "Childcare"),
+        Pair("144", "Streaming"),
+        Pair("145", "All-Rounder"),
+        Pair("146", "OP(Munchkin)"),
+        Pair("147", "gambling"),
+        Pair("148", "money"),
+        Pair("149", "r18"),
+        Pair("150", "Tsundere"),
+        Pair("151", "Proactive Protagonist"),
+        Pair("152", " Cute Story"),
+        Pair("153", "Alternate Universe"),
+        Pair("154", "Movie"),
+        Pair("155", "adhesion"),
+        Pair("156", "illusion"),
+        Pair("157", "Villain role"),
+        Pair("158", "ModernFantasy"),
+        Pair("159", "hunter"),
+        Pair("160", "TS"),
+        Pair("161", "munchkin"),
+        Pair("162", "tower"),
+        Pair("163", "hyundai"),
+        Pair("164", "modern fantasy"),
+        Pair("165", "alchemy"),
+        Pair("166", "worldwar"),
+        Pair("167", "WarHero"),
+        Pair("168", "#AlternativeHistory"),
+        Pair("169", "famous famaily"),
+        Pair("170", "dark"),
+        Pair("171", "yandere"),
+        Pair("172", "ghost"),
+        Pair("173", "catfight"),
+        Pair("174", "sauce"),
+        Pair("175", "food"),
+        Pair("176", "cook"),
+        Pair("177", "cyberpunk"),
+        Pair("178", "mind control"),
+        Pair("179", "hypnosis"),
+        Pair("180", "# Mukbang/Cooking"),
+        Pair("181", "fusion"),
+        Pair("182", "Awakening"),
+        Pair("183", "Farming"),
+        Pair("184", "Pure Love"),
+        Pair("185", "slave"),
+        Pair("186", "Kingdom Building"),
+        Pair("187", "Political"),
+        Pair("188", "Redemption"),
+        Pair("189", "Ai"),
+        Pair("190", "showbiz"),
+        Pair("191", "Orthodox"),
+        Pair("192", "EntertainmentIndustry"),
+        Pair("193", "writer"),
+        Pair("194", "Healing"),
+        Pair("195", "Medical"),
+        Pair("196", "Mana"),
+        Pair("197", "Medieval"),
+        Pair("198", "Schemes "),
+        Pair("199", "love"),
+        Pair("200", "Marriage "),
+        Pair("201", "netrori"),
+        Pair("202", "gods"),
+        Pair("203", "crazy love interest "),
+        Pair("204", "MMA"),
+        Pair("205", "ice age"),
+        Pair("206", "management"),
+        Pair("207", "Female Protagonist"),
+        Pair("208", "Royalty"),
+        Pair("209", "Mob Protagonist"),
+        Pair("210", "climbing"),
+        Pair("211", "middleAge"),
+        Pair("212", "romance fantasy"),
+        Pair("213", "cooking"),
+        Pair("214", "return"),
+        Pair("215", "northern air force"),
+        Pair("216", "National Management"),
+        Pair("217", "#immortality"),
+        Pair("218", "Fist Techniques"),
+        Pair("219", "Retired Expert"),
+        Pair("220", "Returnee"),
+        Pair("221", "Hidden Identity"),
+        Pair("222", "Zombie"),
+        Pair("223", "Knight"),
+        Pair("224", "NTL"),
+        Pair("225", "bitcoins"),
+        Pair("226", "crypto"),
+        Pair("227", "actia"),
+        Pair("228", "Brainwashing"),
+        Pair("229", "Tentacles"),
+        Pair("230", "Slime"),
+        Pair("231", "cultivators"),
+        Pair("232", "bully"),
+        Pair("233", "#university"),
+        Pair("234", "BL"),
+        Pair("235", "Omegaverse"),
+        Pair("236", "Girl's Love"),
+        Pair("237", "theater"),
+        Pair("238", "Broadcasting"),
+        Pair("239", "Success"),
+        Pair("240", "Internet Broadcasting"),
+        Pair("241", "rape"),
+        Pair("242", "Madman"),
+        Pair("243", "Soccer"),
+        Pair("244", "#SoloProtagonist"),
+        Pair("245", "#Underworld"),
+        Pair("246", "#Politics"),
+        Pair("247", "#Army"),
+        Pair("248", "#ThreeKingdoms"),
+        Pair("249", "#Conspiracy"),
+        Pair("250", " Possessive Characters"),
+        Pair("251", "European Ambience"),
+        Pair("252", "Love Interest Falls in Love First"),
+        Pair("253", "Reincarnated in a Game World"),
+        Pair("254", "Male Yandere"),
+        Pair("255", "Handsome Male Lead "),
+        Pair("256", "Monsters "),
+        Pair("257", "Urban Legend"),
+        Pair("258", "modern"),
+        Pair("259", "summoning"),
+        Pair("260", "LightNovel"),
+        Pair("261", "vampire"),
+        Pair("262", "GameDevelopment"),
+        Pair("263", "Normalization"),
+        Pair("264", "GameFantasy"),
+        Pair("265", "VirtualReality"),
+        Pair("266", "Infinite Money Glitch"),
+        Pair("267", "Tycoon"),
+        Pair("268", "#CampusLife"),
+        Pair("269", "#Regression"),
+        Pair("270", "#Chaebol"),
+        Pair("271", "#Business"),
+        Pair("272", "#RealEstate"),
+        Pair("273", "#Revenge"),
+        Pair("274", "#Healing"),
+        Pair("275", "SF"),
+        Pair("276", "Community"),
+        Pair("277", "Anomaly"),
+        Pair("278", "CosmicHorror"),
+        Pair("279", "CreepypastaUniverse"),
+        Pair("280", "growth"),
+        Pair("281", "Bingyi"),
+        Pair("282", "Healer"),
+        Pair("283", "#TSHeroine"),
+        Pair("284", "#management"),
+        Pair("285", "#GoldenSun"),
+        Pair("286", "GrowthMunchkin"),
+        Pair("287", "Fundamentals"),
+        Pair("288", "broadcast"),
+        Pair("289", "Luck"),
+        Pair("290", "Investment"),
+        Pair("291", "Divorced"),
+        Pair("292", "#mercenary"),
+        Pair("293", "#Art"),
+        Pair("294", "#All-Rounder"),
+        Pair("295", "#EntertainmentIndustry"),
+        Pair("296", "#Music"),
+        Pair("297", "Villain"),
+        Pair("298", "Psychopath"),
+        Pair("299", "Battle Royale"),
+        Pair("300", "Progression"),
+        Pair("301", "Billionaire"),
+        Pair("302", "Beast Tamer"),
+        Pair("303", "#HighIntensity"),
+        Pair("304", "#Enterprise"),
+        Pair("305", "#Growth"),
+        Pair("306", "#Obsession"),
+        Pair("307", "#Multiverse"),
+        Pair("308", "#Academy"),
+        Pair("309", "#NTL"),
+        Pair("310", "#MaleOriented"),
+        Pair("311", "#Possession"),
+        Pair("312", "#Isekai"),
+        Pair("313", "#Idol"),
+        Pair("314", "#Filming"),
+        Pair("315", "#Training"),
+        Pair("316", "Hitler"),
+        Pair("317", "Early Modern"),
+        Pair("318", "Alternate History"),
+        Pair("319", "Salvation"),
+        Pair("320", "fate"),
+        Pair("321", "DevotedMaleLead"),
+        Pair("322", "PowerfulMaleLead"),
+        Pair("323", "StrongAbility"),
+        Pair("324", "gate"),
+        Pair("325", "childbirth"),
+        Pair("326", "Hetrosexual"),
+        Pair("327", "ClubOwner"),
+        Pair("328", "SlowPaced"),
+        Pair("329", "Western"),
+        Pair("330", "Cheat"),
+        Pair("331", "Gunslinger"),
+        Pair("332", "Pure Romance"),
+        Pair("333", "Humiliation"),
+        Pair("334", "#Territory"),
+        Pair("335", "Assistant"),
+        Pair("336", "Rich"),
+        Pair("337", "#Zombie"),
+        Pair("338", "#StatusWindow"),
+        Pair("339", "#Apocalypse"),
+        Pair("340", "#GirlGroup"),
+        Pair("341", "Labyrinth"),
+        Pair("342", "Gender Reversal"),
+    )
 }
 
+// Safe JSON extension functions - return null instead of throwing
+private val kotlinx.serialization.json.JsonElement.jsonObjectOrNull: kotlinx.serialization.json.JsonObject?
+    get() = this as? kotlinx.serialization.json.JsonObject
+
 private val kotlinx.serialization.json.JsonElement.jsonObject: kotlinx.serialization.json.JsonObject
-    get() = this as kotlinx.serialization.json.JsonObject
+    get() = this as? kotlinx.serialization.json.JsonObject ?: kotlinx.serialization.json.JsonObject(emptyMap())
+
+private val kotlinx.serialization.json.JsonElement.jsonPrimitiveOrNull: kotlinx.serialization.json.JsonPrimitive?
+    get() = this as? kotlinx.serialization.json.JsonPrimitive
 
 private val kotlinx.serialization.json.JsonElement.jsonPrimitive: kotlinx.serialization.json.JsonPrimitive
-    get() = this as kotlinx.serialization.json.JsonPrimitive
+    get() = this as? kotlinx.serialization.json.JsonPrimitive ?: kotlinx.serialization.json.JsonPrimitive("")
 
 private val kotlinx.serialization.json.JsonPrimitive.contentOrNull: String?
-    get() = if (isString) content else null
+    get() = try {
+        if (isString) content else content.takeIf { it != "null" }
+    } catch (e: Exception) {
+        null
+    }

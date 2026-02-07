@@ -102,13 +102,15 @@ class FansMTL : HttpSource(), NovelSource {
     // ======================== Search ========================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        // Check if genre filter is selected
+        // Check if genre/status/sort filters are selected
         var selectedGenre = "all"
+        var selectedStatus = "all"
         var sortBy = "newstime"
 
         filters.forEach { filter ->
             when (filter) {
                 is GenreFilter -> if (filter.state != 0) selectedGenre = filter.toUriPart()
+                is StatusFilter -> if (filter.state != 0) selectedStatus = filter.toUriPart()
                 is SortFilter -> sortBy = filter.toUriPart()
                 else -> {}
             }
@@ -132,8 +134,8 @@ class FansMTL : HttpSource(), NovelSource {
                 body,
             )
         } else {
-            // Genre browsing with pagination
-            GET("$baseUrl/list/$selectedGenre/all-$sortBy-${page - 1}.html", headers)
+            // Genre browsing with pagination: /list/{genre}/{status}-{sort}-{page-1}.html
+            GET("$baseUrl/list/$selectedGenre/$selectedStatus-$sortBy-${page - 1}.html", headers)
         }
     }
 
@@ -240,61 +242,77 @@ class FansMTL : HttpSource(), NovelSource {
     override fun getFilterList() = FilterList(
         Filter.Header("Text search ignores filters"),
         GenreFilter(),
+        StatusFilter(),
         SortFilter(),
     )
 
     private class GenreFilter : Filter.Select<String>(
         "Genre",
         arrayOf(
-            "All", "Fan-Fiction", "Billionaire", "Douluo", "Faloo", "Dragon Ball",
-            "Football", "NBA", "Marvel", "Pokemon", "Elf", "Hogwarts", "System",
-            "Naruto", "One Piece", "Villain", "Sign in", "Derivative Fanfic",
-            "Hot", "Action", "Adventure", "Anime", "Comedy", "Systemflow",
-            "Competitive Sports", "Contemporary Romance", "Detective", "Drama",
-            "Eastern Fantasy", "Ecchi", "Fantasy", "Fantasy Romance", "Game",
-            "Gender Bender", "Harem", "Historical", "Historical Romance", "Horror",
+            "All", "Action", "Adventure", "Anime", "BG", "Billionaire", "BL",
+            "Comedy", "Competitive Sports", "Contemporary Romance", "Crossing",
+            "Derivative Fanfic", "Detective", "Douluo", "Dragon Ball", "Drama",
+            "Eastern Fantasy", "Ecchi", "Elf", "Faloo", "Fan-Fiction", "Fantasy",
+            "Fantasy Romance", "Football", "Game", "Gender Bender", "GL", "Harem",
+            "Historical", "Historical Romance", "Hogwarts", "Horror", "Hot",
             "Josei", "LGBT", "Lolicon", "Magic", "Magical Realism", "Martial Arts",
-            "Mecha", "Military", "Modern Life", "Movies", "Mystery", "Psychological",
-            "Realistic Fiction", "Reincarnation", "Romance", "School Life", "Sci-fi",
-            "Science fiction", "Secret", "Seinen", "Shoujo", "Shoujo Ai", "Shounen",
-            "Shounen Ai", "Slice of Life", "Smut", "Sports", "Supernatural", "Suspense",
-            "Terror", "Tragedy", "Video Games", "War", "Wuxia", "Xianxia", "Xuanhuan",
-            "Yaoi", "Yuri", "Urban Life", "Travel Through Time", "BL", "BG", "GL",
-            "Other", "Crossing", "Rebirth",
+            "Marvel", "Mecha", "Military", "Modern Life", "Movies", "Mystery",
+            "Naruto", "NBA", "One Piece", "Other", "Pokemon", "Psychological",
+            "Realistic Fiction", "Rebirth", "Reincarnation", "Romance",
+            "School Life", "Sci-fi", "Science Fiction", "Secret", "Seinen",
+            "Shoujo", "Shoujo Ai", "Shounen", "Shounen Ai", "Sign in",
+            "Slice of Life", "Smut", "Sports", "Supernatural", "Suspense",
+            "System", "Systemflow", "Terror", "Tragedy", "Travel Through Time",
+            "Urban Life", "Video Games", "Villain", "War", "Wuxia", "Xianxia",
+            "Xuanhuan", "Yaoi", "Yuri",
         ),
         0,
     ) {
         fun toUriPart(): String {
             val values = arrayOf(
-                "all", "fan-fiction", "billionaire", "douluo", "faloo", "dragon-ball",
-                "football", "nba", "marvel", "pokemon", "elf", "hogwarts", "system",
-                "naruto", "one-piece", "villain", "sign-in", "derivative-fanfic",
-                "hot", "action", "adventure", "anime", "comedy", "systemflow",
-                "competitive-sports", "contemporary-romance", "detective", "drama",
-                "eastern-fantasy", "ecchi", "fantasy", "fantasy-romance", "game",
-                "gender-bender", "harem", "historical", "historical-romance", "horror",
+                "all", "action", "adventure", "anime", "bg", "billionaire", "bl",
+                "comedy", "competitive-sports", "contemporary-romance", "crossing",
+                "derivative-fanfic", "detective", "douluo", "dragon-ball", "drama",
+                "eastern-fantasy", "ecchi", "elf", "faloo", "fan-fiction", "fantasy",
+                "fantasy-romance", "football", "game", "gender-bender", "gl", "harem",
+                "historical", "historical-romance", "hogwarts", "horror", "hot",
                 "josei", "lgbt", "lolicon", "magic", "magical-realism", "martial-arts",
-                "mecha", "military", "modern-life", "movies", "mystery", "psychological",
-                "realistic-fiction", "reincarnation", "romance", "school-life", "sci-fi",
-                "science-fiction", "secret", "seinen", "shoujo", "shoujo-ai", "shounen",
-                "shounen-ai", "slice-of-life", "smut", "sports", "supernatural", "suspense",
-                "terror", "tragedy", "video-games", "war", "wuxia", "xianxia", "xuanhuan",
-                "yaoi", "yuri", "urban-life", "travel-through-time", "bl", "bg", "gl",
-                "other", "crossing", "rebirth",
+                "marvel", "mecha", "military", "modern-life", "movies", "mystery",
+                "naruto", "nba", "one-piece", "other", "pokemon", "psychological",
+                "realistic-fiction", "rebirth", "reincarnation", "romance",
+                "school-life", "sci-fi", "science-fiction", "secret", "seinen",
+                "shoujo", "shoujo-ai", "shounen", "shounen-ai", "sign-in",
+                "slice-of-life", "smut", "sports", "supernatural", "suspense",
+                "system", "systemflow", "terror", "tragedy", "travel-through-time",
+                "urban-life", "video-games", "villain", "war", "wuxia", "xianxia",
+                "xuanhuan", "yaoi", "yuri",
             )
             return values[state]
         }
     }
 
-    private class SortFilter : Filter.Select<String>(
-        "Sort by",
-        arrayOf("Latest Update", "Popular", "New"),
+    private class StatusFilter : Filter.Select<String>(
+        "Status",
+        arrayOf("All", "Completed", "Ongoing"),
         0,
     ) {
         fun toUriPart() = when (state) {
-            0 -> "lastdotime"
+            0 -> "all"
+            1 -> "Completed"
+            2 -> "Ongoing"
+            else -> "all"
+        }
+    }
+
+    private class SortFilter : Filter.Select<String>(
+        "Sort by",
+        arrayOf("New", "Popular", "Latest Update"),
+        0,
+    ) {
+        fun toUriPart() = when (state) {
+            0 -> "newstime"
             1 -> "onclick"
-            2 -> "newstime"
+            2 -> "lastdotime"
             else -> "newstime"
         }
     }

@@ -297,42 +297,58 @@ class RoyalRoad : HttpSource(), NovelSource, ConfigurableSource {
 
     private fun parseNovelsFromSearch(doc: Document): MangasPage {
         val novels = doc.select(".fiction-list-item").mapNotNull { element ->
-            val titleElement = element.select("img").first() ?: return@mapNotNull null
-            val linkElement = element.select("a").first() ?: return@mapNotNull null
+            // Find the fiction link - usually in an <a> tag wrapping the content
+            val linkElement = element.selectFirst("a[href*=/fiction/]") ?: return@mapNotNull null
+            val href = linkElement.attr("href")
 
-            val path = linkElement.attr("href").removePrefix("/").split("/")
-            if (path.size < 2) return@mapNotNull null
+            // Extract the fiction path
+            val fictionPath = extractFictionPath(href)
+            if (fictionPath.isEmpty()) return@mapNotNull null
+
+            // Get the thumbnail image
+            val imgElement = element.selectFirst("img")
 
             SManga.create().apply {
-                title = titleElement.attr("alt")
-                thumbnail_url = titleElement.attr("src").let { src ->
+                title = imgElement?.attr("alt") ?: linkElement.attr("title") ?: "Unknown Title"
+                thumbnail_url = imgElement?.attr("src")?.let { src ->
                     when {
                         src.startsWith("http") -> src
+                        src.startsWith("//") -> "https:$src"
                         src.startsWith("/") -> "$baseUrl$src"
                         else -> "$baseUrl/$src"
                     }
-                }
-                url = "${path[0]}/${path[1]}"
+                } ?: ""
+                url = fictionPath
             }
         }
 
-        // RoyalRoad pagination: <ul class="pagination"><li><a data-page="X">Next ›</a></li>
-        // Check for Next link, › symbol, or numbered pages after current
-        val hasNextPage = run {
-            // Check for "Next ›" link
-            if (doc.select(".pagination a:contains(Next)").isNotEmpty()) return@run true
-            if (doc.select(".pagination a:contains(›)").isNotEmpty()) return@run true
-            if (doc.select(".pagination a:contains(»)").isNotEmpty()) return@run true
+        val hasNextPage = doc.select(".page-link:contains(Next), .pagination a:contains(Next)").isNotEmpty() ||
+            doc.select("a:contains(›):not(:has(*))").isNotEmpty()
 
-            // Check for data-page attribute on next page
-            val currentPageEl = doc.selectFirst(".pagination .page-active a, .pagination li.active a")
-            val currentPage = currentPageEl?.attr("data-page")?.toIntOrNull() ?: 1
-            doc.select(".pagination a[data-page]").any { link ->
-                val pageNum = link.attr("data-page").toIntOrNull() ?: 0
-                pageNum > currentPage
-            }
-        }
         return MangasPage(novels, hasNextPage)
+    }
+
+    private fun extractFictionPath(url: String): String {
+        val cleanUrl = url.replace(Regex("""royalroad\.comfiction/"""), "royalroad.com/fiction/")
+        // Extract the fiction/slug part from various URL formats
+        val patterns = listOf(
+            Regex("""/fiction/(\d+)/([^/?#]+)"""), // /fiction/12345/slug
+            Regex("""/fiction/([^/?#]+)"""), // /fiction/slug
+            Regex("""^fiction/(\d+)/([^/?#]+)"""), // fiction/12345/slug
+            Regex("""^fiction/([^/?#]+)"""), // fiction/slug
+        )
+
+        for (pattern in patterns) {
+            pattern.find(url)?.let { match ->
+                return if (match.groupValues.size >= 3) {
+                    "fiction/${match.groupValues[1]}/${match.groupValues[2]}"
+                } else {
+                    "fiction/${match.groupValues[1]}"
+                }
+            }
+        }
+
+        return ""
     }
 
     // Manga details
@@ -373,34 +389,10 @@ class RoyalRoad : HttpSource(), NovelSource, ConfigurableSource {
 
         val genres = doc.select("span.tags a, a.fiction-tag").joinToString(", ") { it.text() }
 
-        // Extract chapters and volumes from script content
-        val scriptContent = doc.select("script").joinToString("\n") { it.html() }
-
-        val chaptersJson = extractVariable(scriptContent, "chapters")
-        val volumesJson = extractVariable(scriptContent, "volumes")
-
-        val chapters = try {
-            json.decodeFromString<List<ChapterEntry>>(chaptersJson)
-        } catch (e: Exception) {
-            emptyList()
-        }
-
-        val volumes = try {
-            json.decodeFromString<List<VolumeEntry>>(volumesJson)
-        } catch (e: Exception) {
-            emptyList()
-        }
-
         return SManga.create().apply {
             this.title = title
             this.author = author
-            this.description = buildString {
-                append(description)
-                append("\n\n<!--CHAPTERS_JSON-->")
-                append(chaptersJson)
-                append("\n<!--VOLUMES_JSON-->")
-                append(volumesJson)
-            }
+            this.description = description
             this.status = status
             this.thumbnail_url = cover
             this.genre = genres
@@ -438,12 +430,13 @@ class RoyalRoad : HttpSource(), NovelSource, ConfigurableSource {
 
         return chapters.mapNotNull { chapter ->
             val volume = volumeMap[chapter.volumeId]
-            val pathParts = chapter.url.removePrefix("/").split("/")
-            if (pathParts.size < 6) return@mapNotNull null
+            // Use the full URL path - RoyalRoad needs the complete URL format
+            // URL format: fiction/{id}/{slug}/chapter/{chapterId}/{chapterSlug}
+            val chapterUrl = chapter.url.removePrefix("/")
 
             SChapter.create().apply {
                 name = chapter.title
-                url = "${pathParts[0]}/${pathParts[1]}/${pathParts[3]}/${pathParts[4]}"
+                url = chapterUrl
                 date_upload = parseDate(chapter.date)
                 chapter_number = chapter.order.toFloat()
                 if (volume != null) {
@@ -670,10 +663,15 @@ class RoyalRoad : HttpSource(), NovelSource, ConfigurableSource {
 @Serializable
 private data class ChapterEntry(
     val id: Int,
-    val volumeId: Int,
+    val volumeId: Int? = null,
     val title: String,
+    val slug: String = "",
     val date: String,
     val order: Int,
+    val visible: Int = 1,
+    val subscriptionTiers: String? = null,
+    val doesNotRollOver: Boolean = false,
+    val isUnlocked: Boolean = true,
     val url: String,
 )
 

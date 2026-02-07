@@ -120,6 +120,12 @@ class NovelFire : HttpSource(), NovelSource {
             url.addQueryParameter("rating", "0")
             url.addQueryParameter("status", "-1")
             url.addQueryParameter("sort", "rank-top")
+            url.addQueryParameter("tagcon", "and")
+        }
+
+        // Always add tagcon for filter consistency with the site
+        if (filters.isNotEmpty()) {
+            url.addQueryParameter("tagcon", "and")
         }
 
         return GET(url.build(), headers)
@@ -162,12 +168,11 @@ class NovelFire : HttpSource(), NovelSource {
             }
         }
 
-        // Check for next page
-        val hasNextPage = doc.selectFirst(
-            ".pagination .page-item:not(.disabled) a[rel=\"next\"], " +
-                "a.page-link:contains(›):not(.disabled)",
-        ) != null ||
-            doc.selectFirst(".pagination .page-item.active + .page-item:not(.disabled)") != null
+        // Check for next page - handles multiple pagination formats
+        val hasNextPage = doc.selectFirst(".pagination .page-item:not(.disabled) a[rel=\"next\"]") != null ||
+            doc.selectFirst(".pagination li.page-item a.page-link[rel=\"next\"]") != null ||
+            doc.selectFirst(".pagination .page-item.active + .page-item:not(.disabled) a") != null ||
+            doc.selectFirst("a.page-link[aria-label*=\"Next\"]") != null
 
         return MangasPage(novels, hasNextPage)
     }

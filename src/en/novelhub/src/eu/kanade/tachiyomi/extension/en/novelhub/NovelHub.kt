@@ -1,19 +1,29 @@
 package eu.kanade.tachiyomi.extension.en.novelhub
 
+import android.app.Application
+import android.content.SharedPreferences
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
+import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
+import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
 import java.net.URLEncoder
 
@@ -21,7 +31,7 @@ import java.net.URLEncoder
  * NovelHub.net - Novel reading extension
  * Per instructions.html: Popular from trending section, flip chapter list
  */
-class NovelHub : HttpSource(), NovelSource {
+class NovelHub : HttpSource(), NovelSource, ConfigurableSource {
 
     override val name = "NovelHub"
     override val baseUrl = "https://novelhub.net"
@@ -30,6 +40,14 @@ class NovelHub : HttpSource(), NovelSource {
 
     override val client = network.cloudflareClient
     private val json: Json by injectLazy()
+
+    private val preferences: SharedPreferences by lazy {
+        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+    }
+
+    private var genresList: List<Pair<String, String>> = emptyList()
+    private var fetchGenresAttempts = 0
+    private val scope = CoroutineScope(Dispatchers.IO)
 
     // ======================== Popular ========================
 
@@ -132,23 +150,77 @@ class NovelHub : HttpSource(), NovelSource {
     )
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val encodedQuery = URLEncoder.encode(query, "UTF-8")
-        return GET("$baseUrl/api/search/autocomplete?q=$encodedQuery", headers)
-    }
+        if (query.isNotBlank()) {
+            val encodedQuery = URLEncoder.encode(query, "UTF-8")
+            return GET("$baseUrl/api/search/autocomplete?q=$encodedQuery", headers)
+        }
 
-    override fun searchMangaParse(response: Response): MangasPage {
-        val searchResponse = json.decodeFromString<SearchResponse>(response.body.string())
-
-        val novels = searchResponse.results.map { result ->
-            SManga.create().apply {
-                url = "/novel/${result.slug}"
-                title = result.title
-                thumbnail_url = result.cover_image
-                author = result.author
+        // Check for genre filter
+        filters.forEach { filter ->
+            when (filter) {
+                is GenreFilter -> {
+                    val genre = filter.toValue()
+                    if (genre != null) {
+                        return GET("$baseUrl/genre/$genre?page=$page", headers)
+                    }
+                }
+                else -> {}
             }
         }
 
-        return MangasPage(novels, false)
+        // Default to trending
+        return GET("$baseUrl/trending?page=$page", headers)
+    }
+
+    override fun searchMangaParse(response: Response): MangasPage {
+        val responseBody = response.body.string()
+
+        // Check if it's JSON response (from API search) or HTML (from genre filter)
+        return if (response.request.url.toString().contains("/api/")) {
+            val searchResponse = json.decodeFromString<SearchResponse>(responseBody)
+            val novels = searchResponse.results.map { result ->
+                SManga.create().apply {
+                    url = "/novel/${result.slug}"
+                    title = result.title
+                    thumbnail_url = result.cover_image
+                    author = result.author
+                }
+            }
+            MangasPage(novels, false)
+        } else {
+            // HTML response from genre filter - parse like popular
+            val doc = Jsoup.parse(responseBody)
+            val novels = mutableListOf<SManga>()
+
+            doc.select("a[href*=/novel/]").forEach { element ->
+                try {
+                    val url = element.attr("href").replace(baseUrl, "")
+                    if (url.isBlank() || !url.contains("/novel/")) return@forEach
+
+                    val title = element.selectFirst("h4, h3, .title")?.text()?.trim()
+                        ?: element.attr("title").ifEmpty { null }
+                        ?: element.selectFirst("img")?.attr("alt")
+                        ?: return@forEach
+
+                    val cover = element.selectFirst("img")?.let { img ->
+                        img.attr("data-src").ifEmpty { img.attr("src") }
+                    } ?: ""
+
+                    novels.add(
+                        SManga.create().apply {
+                            this.title = title
+                            this.url = url
+                            thumbnail_url = if (cover.startsWith("http")) cover else "$baseUrl/$cover"
+                        },
+                    )
+                } catch (e: Exception) {
+                    // Skip
+                }
+            }
+
+            val hasNextPage = doc.selectFirst("a[rel=next], a:contains(Next)") != null
+            MangasPage(novels.distinctBy { it.url }, hasNextPage)
+        }
     }
 
     // ======================== Details ========================
@@ -224,5 +296,66 @@ class NovelHub : HttpSource(), NovelSource {
             ?: ""
     }
 
-    override fun getFilterList(): FilterList = FilterList()
+    // ======================== Filters ========================
+
+    override fun getFilterList(): FilterList {
+        scope.launch { fetchGenres() }
+
+        val filters = mutableListOf<Filter<*>>()
+
+        val genres = getCachedGenres()
+        if (genres.isNotEmpty()) {
+            filters.add(GenreFilter("Genre", genres))
+        } else {
+            filters.add(Filter.Header("Press 'Reset' to load genres"))
+        }
+
+        return FilterList(filters)
+    }
+
+    private fun getCachedGenres(): List<Pair<String, String>> {
+        val cached = preferences.getString("genres_cache", null) ?: return emptyList()
+        return try {
+            json.decodeFromString(cached)
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun fetchGenres() {
+        if (fetchGenresAttempts >= 3 || genresList.isNotEmpty()) return
+
+        try {
+            val response = client.newCall(GET("$baseUrl/genres", headers)).execute()
+            val doc = Jsoup.parse(response.body.string())
+
+            // Parse genres from the /genres page
+            // <a href="https://novelhub.net/genre/action" class="block p-6">
+            //   <h3 class="...">Action</h3>
+            val genres = doc.select("a[href*=/genre/]").mapNotNull { element ->
+                val href = element.attr("href")
+                val slug = href.substringAfterLast("/genre/").takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                val name = element.selectFirst("h3")?.text()?.trim() ?: return@mapNotNull null
+                Pair(slug, name)
+            }.distinctBy { it.first }
+
+            if (genres.isNotEmpty()) {
+                genresList = genres
+                preferences.edit().putString("genres_cache", json.encodeToString(genres)).apply()
+            }
+        } catch (e: Exception) {
+            // Ignore
+        } finally {
+            fetchGenresAttempts++
+        }
+    }
+
+    class GenreFilter(name: String, private val genres: List<Pair<String, String>>) :
+        Filter.Select<String>(name, arrayOf("All") + genres.map { it.second }.toTypedArray()) {
+        fun toValue(): String? = if (state == 0) null else genres.getOrNull(state - 1)?.first
+    }
+
+    override fun setupPreferenceScreen(screen: androidx.preference.PreferenceScreen) {
+        // No preferences needed
+    }
 }

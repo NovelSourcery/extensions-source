@@ -1,0 +1,11 @@
+ext {
+    extName = 'KDT Novels'
+    extClass = '.KdtNovels'
+    themePkg = 'lightnovelwpnovel'
+    baseUrl = 'https://kdtnovels.net'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

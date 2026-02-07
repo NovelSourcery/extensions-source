@@ -1,8 +1,11 @@
 package eu.kanade.tachiyomi.extension.en.sonicmtl
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
+import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Request
 
 class SonicMTL : MadaraNovel(
     baseUrl = "https://www.sonicmtl.com",
@@ -11,9 +14,66 @@ class SonicMTL : MadaraNovel(
 ) {
     override val useNewChapterEndpointDefault = true
 
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+        val url = baseUrl.toHttpUrl().newBuilder().apply {
+            addQueryParameter("s", query)
+            addQueryParameter("post_type", "wp-manga")
+
+            filters.forEach { filter ->
+                when (filter) {
+                    is GenreFilter -> {
+                        filter.state.forEachIndexed { index, genre ->
+                            if (genre.state) {
+                                addQueryParameter("genre[$index]", genre.id)
+                            }
+                        }
+                    }
+                    is StatusFilter -> {
+                        val status = filter.toUriPart()
+                        if (status.isNotEmpty()) {
+                            addQueryParameter("status[]", status)
+                        }
+                    }
+                    is SortFilter -> {
+                        val sort = filter.toUriPart()
+                        if (sort.isNotEmpty()) {
+                            addQueryParameter("m_orderby", sort)
+                        }
+                    }
+                    is AdultFilter -> {
+                        val adult = filter.toUriPart()
+                        if (adult.isNotEmpty()) {
+                            addQueryParameter("adult", adult)
+                        }
+                    }
+                    is GenreConditionFilter -> {
+                        if (filter.state == 1) {
+                            addQueryParameter("op", "1")
+                        }
+                    }
+                    else -> {}
+                }
+            }
+
+            if (page > 1) {
+                // For pagination, add page to path
+            }
+        }.build()
+
+        val finalUrl = if (page > 1) {
+            "$baseUrl/page/$page/?${url.query}"
+        } else {
+            url.toString()
+        }
+
+        return GET(finalUrl, headers)
+    }
+
     override fun getFilterList() = FilterList(
         GenreFilter(),
+        GenreConditionFilter(),
         StatusFilter(),
+        AdultFilter(),
         SortFilter(),
     )
 
@@ -71,6 +131,22 @@ class SonicMTL : MadaraNovel(
     )
 
     private class Genre(name: String, val id: String) : Filter.CheckBox(name)
+
+    private class GenreConditionFilter : Filter.Select<String>(
+        "Genre Condition",
+        arrayOf("OR (having one of selected)", "AND (having all selected)"),
+    )
+
+    private class AdultFilter : Filter.Select<String>(
+        "Adult Content",
+        arrayOf("All", "No Adult", "Only Adult"),
+    ) {
+        fun toUriPart() = when (state) {
+            1 -> "0"
+            2 -> "1"
+            else -> ""
+        }
+    }
 
     private class StatusFilter : Filter.Select<String>(
         "Status",

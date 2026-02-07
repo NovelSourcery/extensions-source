@@ -1,0 +1,8 @@
+ext {
+    extName = 'Light Novel Translations'
+    extClass = '.LightNovelTranslation'
+    extVersionCode = 1
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

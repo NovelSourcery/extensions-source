@@ -433,7 +433,30 @@ class NovelUpdates : HttpSource(), NovelSource, ConfigurableSource {
 
         return when {
             sortValue == "popmonth" || sortValue == "popular" -> {
-                "$baseUrl/series-ranking/?rank=$sortValue&pg=$page"
+                buildString {
+                    append("$baseUrl/series-ranking/?rank=$sortValue")
+
+                    // Series ranking supports genre, language, and status filters
+                    val includedGenres = genreFilter.state.filter { it.isIncluded() }.map { it.id }
+                    val excludedGenres = genreFilter.state.filter { it.isExcluded() }.map { it.id }
+                    if (includedGenres.isNotEmpty()) {
+                        append("&gi=").append(includedGenres.joinToString(","))
+                    }
+                    if (excludedGenres.isNotEmpty()) {
+                        append("&ge=").append(excludedGenres.joinToString(","))
+                    }
+
+                    val selectedLanguages = languageFilter.state.filter { it.state }.map { it.id }
+                    if (selectedLanguages.isNotEmpty()) {
+                        append("&org=").append(selectedLanguages.joinToString(","))
+                    }
+
+                    if (statusFilter.state != 0) {
+                        append("&ss=").append(statusFilter.toUriPart())
+                    }
+
+                    append("&pg=$page")
+                }
             }
             sortValue == "latest" -> {
                 buildString {

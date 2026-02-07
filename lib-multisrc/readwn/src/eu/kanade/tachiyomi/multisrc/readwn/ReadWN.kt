@@ -86,22 +86,62 @@ abstract class ReadWN(
     // ======================== Search ========================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val body = FormBody.Builder()
-            .add("show", "title")
-            .add("tempid", "1")
-            .add("tbname", "news")
-            .add("keyboard", query)
-            .build()
+        // If there's a search query, use POST search
+        if (query.isNotBlank()) {
+            val body = FormBody.Builder()
+                .add("show", "title")
+                .add("tempid", "1")
+                .add("tbname", "news")
+                .add("keyboard", query)
+                .build()
 
-        return POST(
-            "$baseUrl/e/search/index.php",
-            headers.newBuilder()
-                .add("Content-Type", "application/x-www-form-urlencoded")
-                .add("Referer", "$baseUrl/search.html")
-                .add("Origin", baseUrl)
-                .build(),
-            body,
-        )
+            return POST(
+                "$baseUrl/e/search/index.php",
+                headers.newBuilder()
+                    .add("Content-Type", "application/x-www-form-urlencoded")
+                    .add("Referer", "$baseUrl/search.html")
+                    .add("Origin", baseUrl)
+                    .build(),
+                body,
+            )
+        }
+
+        // Otherwise, use filters with list URL
+        // URL format: /list/{genre}/{status}-{sort}-{page}.html
+        var genre = "all"
+        var status = "all"
+        var sort = "newstime"
+
+        filters.forEach { filter ->
+            when (filter) {
+                is GenreFilter -> {
+                    if (filter.state > 0) {
+                        genre = genreValues[filter.state].lowercase().replace(" ", "-")
+                    }
+                }
+                is StatusFilter -> {
+                    if (filter.state > 0) {
+                        status = when (filter.state) {
+                            1 -> "ongoing"
+                            2 -> "completed"
+                            else -> "all"
+                        }
+                    }
+                }
+                is SortFilter -> {
+                    sort = when (filter.state) {
+                        0 -> "lastdotime" // Latest
+                        1 -> "newstime" // Popular (new)
+                        2 -> "allvisit" // Views
+                        else -> "newstime"
+                    }
+                }
+                else -> {}
+            }
+        }
+
+        val url = "$baseUrl/list/$genre/$status-$sort-${page - 1}.html"
+        return GET(url, headers)
     }
 
     override fun searchMangaSelector() = popularMangaSelector()
@@ -227,23 +267,34 @@ abstract class ReadWN(
     // ======================== Filters ========================
 
     override fun getFilterList(): FilterList = FilterList(
+        Filter.Header("Note: Filters are ignored when searching by text"),
+        Filter.Separator(),
         GenreFilter(),
         StatusFilter(),
         SortFilter(),
     )
 
-    protected class GenreFilter : Filter.Select<String>(
-        "Genre",
-        arrayOf(
-            "All", "Action", "Adult", "Adventure", "Comedy", "Drama",
-            "Ecchi", "Fantasy", "Gender Bender", "Harem", "Historical",
-            "Horror", "Josei", "Martial Arts", "Mature", "Mecha",
-            "Mystery", "Psychological", "Romance", "School Life",
-            "Sci-fi", "Seinen", "Shoujo", "Shounen", "Slice of Life",
-            "Smut", "Sports", "Supernatural", "Tragedy", "Wuxia", "Xianxia", "Xuanhuan", "Yaoi",
-        ),
-        0,
+    protected open val genreValues = arrayOf(
+        "All", "Action", "Adult", "Adventure", "Comedy", "Drama",
+        "Ecchi", "Fantasy", "Gender Bender", "Harem", "Historical",
+        "Horror", "Josei", "Martial Arts", "Mature", "Mecha",
+        "Mystery", "Psychological", "Romance", "School Life",
+        "Sci-fi", "Seinen", "Shoujo", "Shounen", "Slice of Life",
+        "Smut", "Sports", "Supernatural", "Tragedy", "Wuxia", "Xianxia", "Xuanhuan", "Yaoi",
     )
+
+    protected class GenreFilter(genres: Array<String> = defaultGenres) : Filter.Select<String>("Genre", genres, 0) {
+        companion object {
+            val defaultGenres = arrayOf(
+                "All", "Action", "Adult", "Adventure", "Comedy", "Drama",
+                "Ecchi", "Fantasy", "Gender Bender", "Harem", "Historical",
+                "Horror", "Josei", "Martial Arts", "Mature", "Mecha",
+                "Mystery", "Psychological", "Romance", "School Life",
+                "Sci-fi", "Seinen", "Shoujo", "Shounen", "Slice of Life",
+                "Smut", "Sports", "Supernatural", "Tragedy", "Wuxia", "Xianxia", "Xuanhuan", "Yaoi",
+            )
+        }
+    }
 
     protected class StatusFilter : Filter.Select<String>(
         "Status",
@@ -253,7 +304,7 @@ abstract class ReadWN(
 
     protected class SortFilter : Filter.Select<String>(
         "Sort by",
-        arrayOf("Latest", "Popular", "New"),
+        arrayOf("Latest", "New", "Views"),
         0,
     )
 

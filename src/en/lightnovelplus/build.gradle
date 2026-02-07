@@ -1,0 +1,11 @@
+ext {
+    extName = 'LightNovelPlus'
+    extClass = '.LightNovelPlus'
+    themePkg = 'readnovelfull'
+    baseUrl = 'https://lightnovelplus.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

@@ -231,7 +231,11 @@ abstract class ReadNovelFull(
         }
 
         // Try multiple selectors for description
-        description = document.selectFirst("div.desc-text, div.inner, div.desc, div.m-desc div.txt div.inner")?.text()?.trim()
+        description = document.selectFirst(
+            "div.desc-text, div.inner, div.desc, div.m-desc div.txt div.inner, " +
+                "div.summary div.content, div#editdescription, div.desc-text-full, " +
+                "div.novel-detail-body div.summary, div.desc_panel",
+        )?.text()?.trim()
     }
 
     private fun parseStatus(status: String): Int = when {
@@ -394,18 +398,23 @@ abstract class ReadNovelFull(
         Genre("Adventure", "adventure"),
         Genre("Comedy", "comedy"),
         Genre("Drama", "drama"),
+        Genre("Eastern", "eastern"),
         Genre("Ecchi", "ecchi"),
         Genre("Fantasy", "fantasy"),
+        Genre("Game", "game"),
         Genre("Gender Bender", "gender-bender"),
         Genre("Harem", "harem"),
         Genre("Historical", "historical"),
         Genre("Horror", "horror"),
         Genre("Josei", "josei"),
+        Genre("Lolicon", "lolicon"),
         Genre("Martial Arts", "martial-arts"),
         Genre("Mature", "mature"),
         Genre("Mecha", "mecha"),
+        Genre("Modern Life", "modern-life"),
         Genre("Mystery", "mystery"),
         Genre("Psychological", "psychological"),
+        Genre("Reincarnation", "reincarnation"),
         Genre("Romance", "romance"),
         Genre("School Life", "school-life"),
         Genre("Sci-fi", "sci-fi"),
@@ -416,7 +425,10 @@ abstract class ReadNovelFull(
         Genre("Smut", "smut"),
         Genre("Sports", "sports"),
         Genre("Supernatural", "supernatural"),
+        Genre("System", "system"),
+        Genre("Thriller", "thriller"),
         Genre("Tragedy", "tragedy"),
+        Genre("Transmigration", "transmigration"),
         Genre("Wuxia", "wuxia"),
         Genre("Xianxia", "xianxia"),
         Genre("Xuanhuan", "xuanhuan"),
