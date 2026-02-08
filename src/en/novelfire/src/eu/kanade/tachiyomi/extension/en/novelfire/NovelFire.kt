@@ -1,6 +1,11 @@
 package eu.kanade.tachiyomi.extension.en.novelfire
 
+import android.app.Application
+import android.content.SharedPreferences
+import androidx.preference.PreferenceScreen
+import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -12,20 +17,24 @@ import eu.kanade.tachiyomi.source.online.HttpSource
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
+import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
 
 /**
  * NovelFire novel source - ported from LN Reader plugin
  * @see https://github.com/LNReader/lnreader-plugins novelfire.ts
- * Features: Advanced filters, JSON chapter API, rate limiting detection
+ * Features: Advanced filters, JSON chapter API, rate limiting detection,
+ *           tag caching with include/exclude advanced search
  */
-class NovelFire : HttpSource(), NovelSource {
+class NovelFire : HttpSource(), NovelSource, ConfigurableSource {
 
     override val name = "NovelFire"
     override val baseUrl = "https://novelfire.net"
@@ -37,11 +46,93 @@ class NovelFire : HttpSource(), NovelSource {
 
     override val isNovelSource = true
 
+    // SharedPreferences for tag caching and settings
+    private val preferences: SharedPreferences by lazy {
+        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+    }
+
+    // In-memory tag cache (id -> name)
+    private var tagCache: List<TagItem> = emptyList()
+
     // Custom error for rate limiting
     private class NovelFireThrottlingError(message: String = "Novel Fire is rate limiting requests") : Exception(message)
 
     // Custom error for AJAX not found
     private class NovelFireAjaxNotFound(message: String = "Novel Fire says its Ajax interface is not found") : Exception(message)
+
+    // ======================== Tag Caching ========================
+
+    @Serializable
+    data class TagItem(val id: Int, val name: String)
+
+    @Serializable
+    data class TagResponse(val status: Int = 0, val data: List<TagItem> = emptyList())
+
+    /**
+     * Load cached tags from SharedPreferences into memory.
+     */
+    private fun loadCachedTags(): List<TagItem> {
+        if (tagCache.isNotEmpty()) return tagCache
+        val cached = preferences.getString(TAGS_CACHE_KEY, null) ?: return emptyList()
+        return try {
+            json.decodeFromString<List<TagItem>>(cached).also { tagCache = it }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Fetch all tags from the NovelFire AJAX endpoint and cache them.
+     * Called lazily on first search that uses tags.
+     */
+    private fun fetchAndCacheTags(): List<TagItem> {
+        return try {
+            val response = client.newCall(GET("$baseUrl/ajax/getTags?term=", headers)).execute()
+            val body = response.body.string()
+            val tagResponse = json.decodeFromString<TagResponse>(body)
+            val tags = tagResponse.data
+            if (tags.isNotEmpty()) {
+                preferences.edit()
+                    .putString(TAGS_CACHE_KEY, json.encodeToString(tags))
+                    .putLong(TAGS_CACHE_TIME_KEY, System.currentTimeMillis())
+                    .apply()
+                tagCache = tags
+            }
+            tags
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Get tags, using cache if available, otherwise fetching from network.
+     * Refreshes cache if older than 7 days.
+     */
+    private fun getTags(): List<TagItem> {
+        val cached = loadCachedTags()
+        if (cached.isNotEmpty()) {
+            val cacheTime = preferences.getLong(TAGS_CACHE_TIME_KEY, 0L)
+            val sevenDaysMs = 7L * 24 * 60 * 60 * 1000
+            if (System.currentTimeMillis() - cacheTime < sevenDaysMs) {
+                return cached
+            }
+        }
+        return fetchAndCacheTags().ifEmpty { cached }
+    }
+
+    /**
+     * Resolve comma-separated tag names to their numeric IDs.
+     * Case-insensitive, partial matching supported.
+     */
+    private fun resolveTagNames(input: String, tags: List<TagItem>): List<Int> {
+        if (input.isBlank()) return emptyList()
+        val names = input.split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() }
+        return names.mapNotNull { name ->
+            // Try exact match first, then prefix match
+            tags.find { it.name.lowercase() == name }?.id
+                ?: tags.find { it.name.lowercase().startsWith(name) }?.id
+        }
+    }
 
     override fun imageUrlParse(response: Response): String = ""
 
@@ -83,6 +174,9 @@ class NovelFire : HttpSource(), NovelSource {
         val url = "$baseUrl/search-adv".toHttpUrl().newBuilder()
             .addQueryParameter("page", page.toString())
 
+        // Collect tag inputs to resolve later
+        var tagOperator = "and"
+
         // Apply filters if provided
         filters.forEach { filter ->
             when (filter) {
@@ -108,9 +202,28 @@ class NovelFire : HttpSource(), NovelSource {
                 is RatingOperatorFilter -> url.addQueryParameter("ratcon", filter.toUriPart())
                 is RatingFilter -> url.addQueryParameter("rating", filter.toUriPart())
                 is ChaptersFilter -> url.addQueryParameter("totalchapter", filter.toUriPart())
+                is TagOperatorFilter -> tagOperator = filter.toUriPart()
+                is TagFilter -> {
+                    // Tri-state tags: included = STATE_INCLUDE, excluded = STATE_EXCLUDE
+                    val included = filter.state.filter { it.isIncluded() }.map { it.id }
+                    val excluded = filter.state.filter { it.isExcluded() }.map { it.id }
+                    included.forEach { id ->
+                        url.addQueryParameter("tags[]", id.toString())
+                    }
+                    excluded.forEach { id ->
+                        url.addQueryParameter("tags_excluded[]", id.toString())
+                    }
+                    // If tags cache is empty, fetch tags now for next time
+                    if (tagCache.isEmpty()) {
+                        fetchAndCacheTags()
+                    }
+                }
                 else -> {}
             }
         }
+
+        // Always add tagcon
+        url.addQueryParameter("tagcon", tagOperator)
 
         // Set defaults if no filters
         if (filters.isEmpty()) {
@@ -120,12 +233,6 @@ class NovelFire : HttpSource(), NovelSource {
             url.addQueryParameter("rating", "0")
             url.addQueryParameter("status", "-1")
             url.addQueryParameter("sort", "rank-top")
-            url.addQueryParameter("tagcon", "and")
-        }
-
-        // Always add tagcon for filter consistency with the site
-        if (filters.isNotEmpty()) {
-            url.addQueryParameter("tagcon", "and")
         }
 
         return GET(url.build(), headers)
@@ -172,7 +279,9 @@ class NovelFire : HttpSource(), NovelSource {
         val hasNextPage = doc.selectFirst(".pagination .page-item:not(.disabled) a[rel=\"next\"]") != null ||
             doc.selectFirst(".pagination li.page-item a.page-link[rel=\"next\"]") != null ||
             doc.selectFirst(".pagination .page-item.active + .page-item:not(.disabled) a") != null ||
-            doc.selectFirst("a.page-link[aria-label*=\"Next\"]") != null
+            doc.selectFirst("a.page-link[aria-label*=\"Next\"]") != null ||
+            doc.selectFirst("nav[aria-label*=\"Pagination\"] a[rel=\"next\"]") != null ||
+            doc.selectFirst("nav[role=\"navigation\"] a[rel=\"next\"]") != null
 
         return MangasPage(novels, hasNextPage)
     }
@@ -435,6 +544,13 @@ class NovelFire : HttpSource(), NovelSource {
     // ======================== Filters ========================
 
     override fun getFilterList(): FilterList {
+        val cachedTags = loadCachedTags()
+        val tagList = cachedTags.sortedBy { it.name.lowercase() }.map { TagTriState(it.name, it.id) }
+        val tagNote = if (cachedTags.isEmpty()) {
+            "Tags will be fetched on first search with tags"
+        } else {
+            "${cachedTags.size} tags cached"
+        }
         return FilterList(
             SortFilter(),
             StatusFilter(),
@@ -444,7 +560,30 @@ class NovelFire : HttpSource(), NovelSource {
             RatingOperatorFilter(),
             RatingFilter(),
             ChaptersFilter(),
+            Filter.Separator(),
+            Filter.Header("Tags ($tagNote)"),
+            TagOperatorFilter(),
+            if (tagList.isNotEmpty()) TagFilter(tagList) else TagFilter(emptyList()),
         )
+    }
+
+    // ======================== Preferences ========================
+
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        SwitchPreferenceCompat(screen.context).apply {
+            key = CLEAR_TAG_CACHE_KEY
+            title = "Clear Tag Cache"
+            summary = "Toggle this to clear the cached tag list (${loadCachedTags().size} tags). Tags will be re-fetched on next search."
+            setDefaultValue(false)
+            setOnPreferenceChangeListener { _, _ ->
+                preferences.edit()
+                    .remove(TAGS_CACHE_KEY)
+                    .remove(TAGS_CACHE_TIME_KEY)
+                    .apply()
+                tagCache = emptyList()
+                true
+            }
+        }.also(screen::addPreference)
     }
 
     // Filter Classes
@@ -640,5 +779,23 @@ class NovelFire : HttpSource(), NovelSource {
                 else -> "0"
             }
         }
+    }
+
+    // Tag filters for include/exclude advanced search (tri-state: include/exclude/ignore)
+    private class TagOperatorFilter : Filter.Select<String>(
+        "Tag Mode (for included tags)",
+        arrayOf("AND (match all)", "OR (match any)"),
+    ) {
+        fun toUriPart(): String = if (state == 1) "or" else "and"
+    }
+
+    private class TagTriState(name: String, val id: Int) : Filter.TriState(name)
+
+    private class TagFilter(tags: List<TagTriState>) : Filter.Group<TagTriState>("Tags", tags)
+
+    companion object {
+        private const val TAGS_CACHE_KEY = "novelfire_tags_cache"
+        private const val TAGS_CACHE_TIME_KEY = "novelfire_tags_cache_time"
+        private const val CLEAR_TAG_CACHE_KEY = "novelfire_clear_tag_cache"
     }
 }

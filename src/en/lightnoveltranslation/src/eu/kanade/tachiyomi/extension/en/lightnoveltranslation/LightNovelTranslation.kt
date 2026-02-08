@@ -64,10 +64,7 @@ class LightNovelTranslation : HttpSource(), NovelSource {
     // ======================== Search ========================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        if (page > 1) {
-            // lightnoveltranslation only supports first page search
-            return GET("$baseUrl/read/page/1", headers)
-        }
+        // Search only works on first page per the site's behavior
         val body = FormBody.Builder()
             .add("field-search", query)
             .build()
@@ -76,6 +73,7 @@ class LightNovelTranslation : HttpSource(), NovelSource {
 
     override fun searchMangaParse(response: Response): MangasPage {
         val mangas = popularMangaParse(response).mangas
+        // Search is single-page only (site doesn't support paginated search)
         return MangasPage(mangas, false)
     }
 

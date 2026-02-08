@@ -23,6 +23,11 @@ class NovelHall : HttpSource(), NovelSource {
 
     override val client = network.cloudflareClient
 
+    // Auto-detected genre slug from page 1 pagination links
+    // e.g. /genre/action/ shows pagination with /genre/action3/2/ → slug = "action3"
+    private var lastGenreSlug: String? = null
+    private var lastGenreName: String? = null
+
     // ======================== Popular ========================
 
     override fun popularMangaRequest(page: Int): Request {
@@ -31,7 +36,10 @@ class NovelHall : HttpSource(), NovelSource {
 
     override fun popularMangaParse(response: Response): MangasPage {
         val document = Jsoup.parse(response.body.string())
+        return parseNovelList(document)
+    }
 
+    private fun parseNovelList(document: org.jsoup.nodes.Document): MangasPage {
         // Try list format first (li.btm)
         var novels = document.select("li.btm").mapNotNull { element ->
             val link = element.selectFirst("a") ?: return@mapNotNull null
@@ -60,40 +68,8 @@ class NovelHall : HttpSource(), NovelSource {
             }.distinctBy { it.url }
         }
 
-        // Check for next page using multiple selectors
-        val requestUrl = response.request.url.toString()
-        val hasNextPage = when {
-            // Genre pages: check for pagination at bottom
-            requestUrl.contains("/genre/") -> {
-                // Genre pages use .page-nav with numbered links
-                // Example: <div class="page-nav mt20">
-                //   <a href="/genre/harem20223/2/" rel="next">next page</a>
-                //   <a href="/genre/harem20223/22/" data-ci-pagination-page="22">last page</a>
-                // </div>
-                val pageNav = document.selectFirst(".page-nav, .pagenav, div.page-nav")
-                if (pageNav != null) {
-                    // Check if there's a "next" link or "next page" text
-                    pageNav.selectFirst("a[rel=next]") != null ||
-                        pageNav.selectFirst("a:containsOwn(next)") != null ||
-                        pageNav.selectFirst("a:containsOwn(Next)") != null ||
-                        pageNav.selectFirst("a:containsOwn(next page)") != null
-                } else {
-                    // No pagination found, check if we have enough results to assume more pages
-                    novels.size >= 15
-                }
-            }
-            // Type/status pages
-            requestUrl.contains("/type/") -> {
-                document.selectFirst(".page-nav a[rel=next]") != null ||
-                    document.selectFirst("a:contains(next)") != null
-            }
-            // Default pages (all2022-X.html)
-            else -> {
-                document.selectFirst(".page-nav a[rel=next]") != null ||
-                    document.selectFirst("a:contains(next page)") != null ||
-                    document.selectFirst("a.page-numbers:not(.current) + a.page-numbers") != null
-            }
-        }
+        // Keep paging while results are returned
+        val hasNextPage = novels.isNotEmpty()
 
         return MangasPage(novels, hasNextPage)
     }
@@ -109,26 +85,21 @@ class NovelHall : HttpSource(), NovelSource {
     // ======================== Search ========================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        // Note: You can either use sort OR genre OR keyword - they are mutually exclusive
         if (query.isNotBlank()) {
-            // Keyword search (no pagination)
             val url = "$baseUrl/index.php?s=so&module=book&keyword=${java.net.URLEncoder.encode(query, "UTF-8")}"
             return GET(url, headers)
         }
 
-        // Check filters - genre and sort are mutually exclusive
         filters.forEach { filter ->
             when (filter) {
                 is GenreFilter -> {
                     val selectedGenre = filter.getSelectedGenre()
                     if (selectedGenre != null) {
-                        // Genre browsing: /genre/{slug}/ or /genre/{slug}/{page}/
-                        val genreUrl = if (page == 1) {
-                            "$baseUrl/genre/$selectedGenre/"
+                        return if (page == 1) {
+                            GET("$baseUrl/genre/$selectedGenre/", headers)
                         } else {
-                            "$baseUrl/genre/$selectedGenre/$page/"
+                            GET("$baseUrl/genre/$selectedGenre/$page/", headers)
                         }
-                        return GET(genreUrl, headers)
                     }
                 }
                 is SortFilter -> {
@@ -141,21 +112,18 @@ class NovelHall : HttpSource(), NovelSource {
             }
         }
 
-        // Default: popular list
         return popularMangaRequest(page)
     }
 
     override fun searchMangaParse(response: Response): MangasPage {
         val requestUrl = response.request.url.toString()
 
-        // Genre/type pages use same parsing as popular
         if (requestUrl.contains("/genre/") || requestUrl.contains("/type/") ||
             requestUrl.contains("/lastupdate") || requestUrl.contains("all2022")
         ) {
             return popularMangaParse(response)
         }
 
-        // Keyword search results
         val document = Jsoup.parse(response.body.string())
 
         val novels = document.select("table tr").mapNotNull { row ->
@@ -175,7 +143,6 @@ class NovelHall : HttpSource(), NovelSource {
             }
         }
 
-        // Search has no pagination
         return MangasPage(novels, false)
     }
 
@@ -325,13 +292,13 @@ class NovelHall : HttpSource(), NovelSource {
 
     class SortFilter : Filter.Select<String>("Sort/List", sortOptions.map { it.first }.toTypedArray()) {
         fun getSelectedSort(): String? {
-            return if (state > 0) sortOptions[state].second else null
+            return if (state > 0 && state < sortOptions.size) sortOptions[state].second else null
         }
     }
 
     class GenreFilter : Filter.Select<String>("Genre", genres.map { it.first }.toTypedArray()) {
         fun getSelectedGenre(): String? {
-            return if (state > 0) genres[state].second else null
+            return if (state > 0 && state < genres.size) genres[state].second else null
         }
     }
 
@@ -341,39 +308,39 @@ class NovelHall : HttpSource(), NovelSource {
             Pair("Latest Updates", "lastupdate.html"),
         )
 
-        // Genre paths: /genre/{slug}/ with pagination /genre/{slug}/{page}/
-        // Slugs confirmed from site (e.g. drama20233)
+        // Genre paths are specific so we use these values
         private val genres = listOf(
             Pair("All", ""),
-            Pair("Action", "action20231"),
-            Pair("Adventure", "adventure20232"),
+            Pair("Fantasy", "fantasy20223"),
+            Pair("Romance", "romance20223"),
+            Pair("Romantic", "romantic3"),
+            Pair("Modern Romance", "modern_romance"),
+            Pair("CEO", "ceo2022"),
+            Pair("Action", "action3"),
+            Pair("Urban", "urban"),
+            Pair("Billionaire", "billionaire20223"),
+            Pair("Modern Life", "modern_life"),
+            Pair("Historical Romance", "historical_romance2023"),
+            Pair("Adult", "adult"),
+            Pair("Game", "game20233"),
+            Pair("Xianxia", "xianxia2022"),
+            Pair("Sci-fi", "scifi"),
+            Pair("Historical", "historical2023"),
             Pair("Drama", "drama20233"),
-            Pair("Comedy", "comedy20234"),
-            Pair("Fantasy", "fantasy20235"),
-            Pair("Harem", "harem20236"),
-            Pair("Historical", "historical20237"),
-            Pair("Horror", "horror20238"),
-            Pair("Josei", "josei20239"),
-            Pair("Martial Arts", "martial-arts20240"),
-            Pair("Mature", "mature20241"),
-            Pair("Mecha", "mecha20242"),
-            Pair("Mystery", "mystery20243"),
-            Pair("Psychological", "psychological20244"),
-            Pair("Romance", "romance20245"),
-            Pair("School Life", "school-life20246"),
-            Pair("Sci-fi", "sci-fi20247"),
-            Pair("Seinen", "seinen20248"),
-            Pair("Shoujo", "shoujo20249"),
-            Pair("Shounen", "shounen20250"),
-            Pair("Slice of Life", "slice-of-life20251"),
-            Pair("Sports", "sports20252"),
-            Pair("Supernatural", "supernatural20253"),
-            Pair("Tragedy", "tragedy20254"),
-            Pair("Wuxia", "wuxia20255"),
-            Pair("Xianxia", "xianxia20256"),
-            Pair("Xuanhuan", "xuanhuan20257"),
-            Pair("Yaoi", "yaoi20258"),
-            Pair("Yuri", "yuri20259"),
+            Pair("Urban Life", "urban_life"),
+            Pair("Harem", "harem20223"),
+            Pair("Fantasy Romance", "fantasy_romance"),
+            Pair("Comedy", "comedy3"),
+            Pair("Adventure", "adventure"),
+            Pair("Farming", "farming2023"),
+            Pair("Military", "military2023"),
+            Pair("Son-In-Law", "soninlaw2022"),
+            Pair("Wuxia", "wuxia"),
+            Pair("Games", "games3"),
+            Pair("Josei", "josei"),
+            Pair("Ecchi", "ecchi"),
+            Pair("Mystery", "mystery"),
+            Pair("School Life", "school_life"),
         )
     }
 }

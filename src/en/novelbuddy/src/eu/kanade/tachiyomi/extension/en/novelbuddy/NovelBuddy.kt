@@ -54,7 +54,11 @@ class NovelBuddy : HttpSource(), NovelSource {
     override fun popularMangaParse(response: Response): MangasPage {
         val document = response.asJsoup()
         val mangas = parseNovels(document)
-        val hasNextPage = document.selectFirst(".pagination .page-item.active + .page-item:not(.disabled)") != null
+        val hasNextPage = document.selectFirst(".pagination .page-item.active + .page-item:not(.disabled)") != null ||
+            (
+                document.selectFirst(".paginator") != null &&
+                    document.select(".paginator a.btn.link:not(.active)").isNotEmpty()
+                )
         return MangasPage(mangas, hasNextPage)
     }
 
