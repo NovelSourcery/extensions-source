@@ -301,7 +301,7 @@ class NovelFire : HttpSource(), NovelSource, ConfigurableSource {
 
             // Get cover image
             val coverElement = doc.selectFirst(".cover > img")
-            val coverUrl = coverElement?.attr("data-src") ?: coverElement?.attr("src")
+            val coverUrl = coverElement?.attr("src") ?: coverElement?.attr("data-src")
             // Default cover fallback
             thumbnail_url = when {
                 coverUrl.isNullOrEmpty() -> "$baseUrl/images/no-cover.jpg"
