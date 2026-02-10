@@ -41,12 +41,9 @@ android {
             archivesName = "mihonnovel-$applicationIdSuffix-v$versionName"
         }
         assert extClass.startsWith(".")
-        // Build full class path using eu.kanade.tachiyomi namespace (source code namespace)
-        // since the APK package name is app.mihonnovel.extension but source classes are in eu.kanade.tachiyomi
-        String fullExtClass = "eu.kanade.tachiyomi.extension." + project.parent.name + "." + project.name + extClass
         manifestPlaceholders = [
                 appName : "MihonNovel: $extName",
-                extClass: fullExtClass,
+                extClass: extClass,
                 nsfw    : project.ext.find("isNsfw") ? 1 : 0,
                 novel   : project.ext.find("isNovel") ? 1 : 0,
         ]
