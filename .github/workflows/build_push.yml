@@ -64,7 +64,7 @@ jobs:
     name: Build extensions (${{ matrix.chunk.number }})
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 30
     if: ${{ toJson(fromJson(needs.prepare.outputs.matrix).chunk) != '[]' }}
     strategy:
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
@@ -162,33 +162,13 @@ jobs:
           path: main
           persist-credentials: false
 
-      - name: Create repo artifacts (move APKs and run Inspector)
+      - name: Create repo artifacts
         run: |
           cd main
           python ./.github/scripts/move-built-apks.py
-
-          # Ensure any artifacts downloaded by the workflow are included. Download step saves
-          # artifacts to ~/apk-artifacts — copy them into the repo/apk directory so Inspector
-          # will see all APKs.
-          mkdir -p repo/apk || true
-          echo "Copying artifacts from ~/apk-artifacts to main/repo/apk"
-          cp -a ~/apk-artifacts/* repo/apk/ || true
-
-          # Download Inspector release and run it to produce output.json used by create-repo.py
-          # Inspector is used to inspect APKs and produce a JSON metadata file (output.json).
-          # It installs APKs into a simulated Android environment and extracts metadata used
-          # by create-repo.py to generate the index files. Removing Inspector breaks create-repo.py
-          # because it expects output.json to exist.
-          echo "Looking up latest Inspector release..."
           INSPECTOR_LINK="$(curl -s "https://api.github.com/repos/keiyoushi/extensions-inspector/releases/latest" | jq -r '.assets[0].browser_download_url')"
-          echo "Inspector download link: $INSPECTOR_LINK"
           curl -L "$INSPECTOR_LINK" -o ./Inspector.jar
-
-          echo "Running Inspector to generate output.json"
-          java -jar ./Inspector.jar "repo/apk" "output.json" "tmp" || { echo "Inspector failed"; exit 1; }
-
-          echo "Inspector output files:"; ls -lah output.json tmp || true
-
+          java -jar ./Inspector.jar "repo/apk" "output.json" "tmp"
           python ./.github/scripts/create-repo.py
 
       - name: Checkout repo branch
