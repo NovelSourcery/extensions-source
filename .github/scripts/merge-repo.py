@@ -18,7 +18,7 @@ print(f"Local repo (main/repo): {LOCAL_REPO}")
 print(f"Modules to delete: {to_delete}")
 
 for module in to_delete:
-    apk_name = f"tachiyomi-{module}-v*.*.*.apk"
+    apk_name = f"mihonnovel-{module}-v*.*.*.apk"
     icon_name = f"eu.kanade.tachiyomi.extension.{module}.png"
     for file in REMOTE_REPO.joinpath("apk").glob(apk_name):
         print(file.name)
