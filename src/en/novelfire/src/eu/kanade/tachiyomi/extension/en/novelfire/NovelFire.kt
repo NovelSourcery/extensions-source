@@ -372,20 +372,20 @@ class NovelFire :
         return if (postId != null) {
             // Use JSON Ajax endpoint (primary method)
             try {
-                getAllChaptersFromAjax(novelPath, postId)
+                getAllChaptersFromAjax(novelPath, postId).reversed()
             } catch (e: Exception) {
                 // Fall back to HTML parsing
                 val totalChaptersText = doc.selectFirst(".header-stats .icon-book-open")?.parent()?.text()?.trim() ?: "0"
                 val totalChapters = totalChaptersText.replace(Regex("[^0-9]"), "").toIntOrNull() ?: 0
                 val pages = (totalChapters + 99) / 100
-                getAllChaptersFromHtml(novelPath, pages)
+                getAllChaptersFromHtml(novelPath, pages).reversed()
             }
         } else {
             // Fallback to HTML parsing
             val totalChaptersText = doc.selectFirst(".header-stats .icon-book-open")?.parent()?.text()?.trim() ?: "0"
             val totalChapters = totalChaptersText.replace(Regex("[^0-9]"), "").toIntOrNull() ?: 0
             val pages = (totalChapters + 99) / 100
-            getAllChaptersFromHtml(novelPath, pages)
+            getAllChaptersFromHtml(novelPath, pages).reversed()
         }
     }
 
