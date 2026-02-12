@@ -64,7 +64,7 @@ jobs:
     name: Build extensions (${{ matrix.chunk.number }})
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     if: ${{ toJson(fromJson(needs.prepare.outputs.matrix).chunk) != '[]' }}
     strategy:
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}

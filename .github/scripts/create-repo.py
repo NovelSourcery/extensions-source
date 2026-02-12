@@ -11,7 +11,7 @@ VERSION_NAME_REGEX = re.compile(r"versionName='([^']+)'")
 IS_NSFW_REGEX = re.compile(r"'tachiyomi.extension.nsfw' value='([^']+)'")
 APPLICATION_LABEL_REGEX = re.compile(r"^application-label:'([^']+)'", re.MULTILINE)
 APPLICATION_ICON_320_REGEX = re.compile(r"^application-icon-320:'([^']+)'", re.MULTILINE)
-LANGUAGE_REGEX = re.compile(r"mihonnovel-([^.]+)")
+LANGUAGE_REGEX = re.compile(r"tsundoku-([^.]+)")
 
 *_, ANDROID_BUILD_TOOLS = (Path(os.environ["ANDROID_HOME"]) / "build-tools").iterdir()
 REPO_DIR = Path("repo")

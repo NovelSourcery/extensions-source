@@ -38,11 +38,11 @@ android {
         versionCode = theme == null ? extVersionCode : theme.baseVersionCode + overrideVersionCode
         versionName = "1.4.$versionCode"
         base {
-            archivesName = "mihonnovel-$applicationIdSuffix-v$versionName"
+            archivesName = "tsundoku-$applicationIdSuffix-v$versionName"
         }
         assert extClass.startsWith(".")
         manifestPlaceholders = [
-                appName : "MihonNovel: $extName",
+                appName : "Tsundoku: $extName",
                 extClass: extClass,
                 nsfw    : project.ext.find("isNsfw") ? 1 : 0,
                 novel   : project.ext.find("isNovel") ? 1 : 0,
