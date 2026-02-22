@@ -287,6 +287,6 @@ class WebNovelComics : HttpSource() {
 
         private const val CSRF_TOKEN_NAME = "_csrfToken"
 
-        private const val WEBNOVEL_UPLOAD_TIME = "https://keiyoushi.github.io/webnovel-upload-time"
+        private const val WEBNOVEL_UPLOAD_TIME = "https://novelsourcery.github.io/webnovel-upload-time"
     }
 }

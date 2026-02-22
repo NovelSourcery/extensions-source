@@ -125,7 +125,7 @@ small, just do a normal full clone instead.**
 3. Configure remotes.
     ```bash
     # add upstream
-    git remote add upstream <keiyoushi-repo-url>
+    git remote add upstream <novelsourcery-repo-url>
     # optionally disable push to upstream
     git remote set-url --push upstream no_pushing
     # optionally fetch main only (ignore all other branches)

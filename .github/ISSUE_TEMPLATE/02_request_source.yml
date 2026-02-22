@@ -1,5 +1,5 @@
 name: 🌐 Source request
-description: Suggest a new source for Keiyoushi
+description: Suggest a new source for NovelSourcery
 labels: [Source request]
 body:
 
@@ -45,7 +45,7 @@ body:
       label: Acknowledgements
       description: Your issue will be closed if you haven't done these steps.
       options:
-        - label: I have checked that the extension does not already exist by searching the [extension listing](https://keiyoushi.github.io/extensions/) and verified it does not appear there.
+        - label: I have checked that the extension does not already exist by searching the [extension listing](https://novelsourcery.github.io/extensions/) and verified it does not appear there.
           required: true
         - label: I have searched the existing issues and this is a new ticket, **NOT** a duplicate or related to another open or closed issue.
           required: true
