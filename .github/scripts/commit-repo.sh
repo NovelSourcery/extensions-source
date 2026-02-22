@@ -9,7 +9,7 @@ if [ -n "$(git status --porcelain)" ]; then
     git commit -m "Update extensions repo"
     git push
 
-    curl https://purge.jsdelivr.net/gh/tsundoku-otaku/extensions@repo/index.min.json
+    curl https://purge.jsdelivr.net/gh/novelsourcery/extensions@repo/index.min.json
 else
     echo "No changes to commit"
 fi

@@ -5,7 +5,7 @@ it carefully** if you're a new contributor or don't have any experience on the r
 and knowledges.
 
 This guide is not definitive and it's being updated over time. If you find any issue on it, feel
-free to report it through a [Meta Issue](https://github.com/tsundoku-otaku/extensions-source/issues/new?assignees=&labels=Meta+request&template=06_request_meta.yml)
+free to report it through a [Meta Issue](https://github.com/novelsourcery/extensions-source/issues/new?assignees=&labels=Meta+request&template=06_request_meta.yml)
 or fixing it directly by submitting a Pull Request.
 
 ## Table of Contents
@@ -262,7 +262,7 @@ Referencing the actual implementation will help with understanding extensions' c
 
 #### DataImage library
 
-[`lib-dataimage`](https://github.com/tsundoku-otaku/extensions-source/tree/main/lib/dataimage) is a library
+[`lib-dataimage`](https://github.com/novelsourcery/extensions-source/tree/main/lib/dataimage) is a library
 for handling [base 64 encoded image data](https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/Data_URIs)
 using an [OkHttp interceptor](https://square.github.io/okhttp/interceptors/).
 
@@ -274,7 +274,7 @@ dependencies {
 
 #### i18n library
 
-[`lib-i18n`](https://github.com/tsundoku-otaku/extensions-source/tree/main/lib/i18n) is a library for handling
+[`lib-i18n`](https://github.com/novelsourcery/extensions-source/tree/main/lib/i18n) is a library for handling
 internationalization in the sources. It allows loading `.properties` files with messages located under
 the `assets/i18n` folder of each extension, that can be used to translate strings under the source.
 
@@ -503,7 +503,7 @@ There is some cases where existing sources changes their name on the website. To
 these changes in the extension, you need to explicity set the `id` to the same old value, otherwise
 it will get changed by the new `name` value and users will be forced to migrate back to the source.
 
-To get the current `id` value before the name change, you can search the source name in the [repository JSON file](https://github.com/tsundoku-otaku/extensions/blob/repo/index.json)
+To get the current `id` value before the name change, you can search the source name in the [repository JSON file](https://github.com/novelsourcery/extensions/blob/repo/index.json)
 by looking into the `sources` attribute of the extension. When you have the `id` copied, you can
 override it in the source:
 

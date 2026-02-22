@@ -21,8 +21,8 @@ concurrency:
 env:
   CI_CHUNK_SIZE: 65
   IS_PR_CHECK: false
-  PUBLISH_REPOSITORY: tsundoku-otaku/extensions
-  SOURCE_REPOSITORY: tsundoku-otaku/extensions-source
+  PUBLISH_REPOSITORY: novelsourcery/extensions
+  SOURCE_REPOSITORY: novelsourcery/extensions-source
 
 jobs:
   prepare:
@@ -101,7 +101,7 @@ jobs:
 
       - name: Upload APKs (${{ matrix.chunk.number }})
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        if: "github.repository == 'tsundoku-otaku/extensions-source'"
+        if: "github.repository == 'novelsourcery/extensions-source'"
         with:
           name: "individual-apks-${{ matrix.chunk.number }}"
           path: "**/*.apk"
@@ -113,7 +113,7 @@ jobs:
   publish:
     name: Publish extension repo
     needs: [prepare, build]
-    if: "github.repository == 'tsundoku-otaku/extensions-source'"
+    if: "github.repository == 'novelsourcery/extensions-source'"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -147,8 +147,7 @@ jobs:
       - name: Checkout repo branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: tsundoku-otaku/extensions
-          token: ${{ secrets.BOT_PAT }}
+          repository: novelsourcery/extensions
           ref: repo
           path: repo
           persist-credentials: true
