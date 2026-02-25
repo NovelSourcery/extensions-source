@@ -50,7 +50,6 @@ class LightNovelPlus :
             GET("$baseUrl/book/bookclass.html?$pageParam=$page", headers)
         }
     }
-
     // ======================== Filters ========================
 
     override fun getFilterList() = FilterList(

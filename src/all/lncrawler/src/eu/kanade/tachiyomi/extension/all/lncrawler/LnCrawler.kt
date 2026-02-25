@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.all.lncrawler
+﻿package eu.kanade.tachiyomi.extension.all.lncrawler
 
 import android.app.Application
 import android.content.SharedPreferences
@@ -52,7 +52,6 @@ class LnCrawler :
             val request = chain.request()
             val response = chain.proceed(request)
 
-            // Cache CSRF token from cookies
             response.headers("Set-Cookie").forEach { cookie ->
                 if (cookie.startsWith("csrftoken=")) {
                     val token = cookie.substringAfter("csrftoken=").substringBefore(";")
@@ -94,7 +93,6 @@ class LnCrawler :
             url.append("&query=${java.net.URLEncoder.encode(query, "UTF-8")}")
         }
 
-        // Process filters
         var sortBy = "popularity"
         var sortOrder = "desc"
 
@@ -161,7 +159,6 @@ class LnCrawler :
     // ======================== Details ========================
 
     override fun mangaDetailsRequest(manga: SManga): Request {
-        // URL format: /novels/slug or /novels/slug/source-slug
         val slug = manga.url.removePrefix("/novels/").substringBefore("/")
         return GET("$apiUrl/novels/$slug/", headers)
     }
@@ -169,7 +166,6 @@ class LnCrawler :
     override fun mangaDetailsParse(response: Response): SManga {
         val novel = json.decodeFromString<NovelDetail>(response.body.string())
 
-        // Determine which source to use based on preference
         val source = getPreferredSource(novel)
 
         return SManga.create().apply {
@@ -179,7 +175,6 @@ class LnCrawler :
             author = source?.authors?.joinToString(", ") ?: novel.preferedSource?.authors?.joinToString(", ")
 
             description = buildString {
-                // Remove HTML tags from synopsis
                 val synopsis = source?.synopsis ?: novel.preferedSource?.synopsis ?: ""
                 append(Jsoup.parse(synopsis).text())
 
@@ -197,7 +192,6 @@ class LnCrawler :
 
             genre = source?.tags?.joinToString(", ") ?: novel.preferedSource?.tags?.joinToString(", ") ?: ""
 
-            // Determine status - check if last chapter looks like an ending
             status = SManga.UNKNOWN
         }
     }
@@ -210,7 +204,6 @@ class LnCrawler :
         val sourceSlug = parts.getOrNull(1)
 
         return if (sourceSlug.isNullOrEmpty()) {
-            // Get novel details first to find preferred source
             GET("$apiUrl/novels/$novelSlug/", headers)
         } else {
             GET("$apiUrl/novels/$novelSlug/$sourceSlug/chapters/?page=1&page_size=1000", headers)
@@ -220,14 +213,11 @@ class LnCrawler :
     override fun chapterListParse(response: Response): List<SChapter> {
         val body = response.body.string()
 
-        // Check if this is a novel detail response or chapter list response
         return if (body.contains("\"chapters\":")) {
-            // Chapter list response
             val chapterResponse = json.decodeFromString<ChapterListResponse>(body)
 
             chapterResponse.chapters.map { chapter ->
                 SChapter.create().apply {
-                    // Store source info in URL for chapter fetching
                     url = "/novels/${chapterResponse.novelSlug}/${chapterResponse.sourceSlug}/chapter/${chapter.chapterId}"
                     name = buildString {
                         if (chapter.volumeTitle != null) {
@@ -237,14 +227,12 @@ class LnCrawler :
                     }
                     chapter_number = chapter.chapterId.toFloat()
                 }
-            } // API returns ascending (ch1, ch2...), Mihon expects descending (newest first)
+            }.reversed()
         } else {
-            // Novel detail response - need to fetch chapters from preferred source
             val novel = json.decodeFromString<NovelDetail>(body)
             val source = getPreferredSource(novel)
 
             if (source != null) {
-                // Fetch chapters from the preferred source
                 val chaptersRequest = GET("$apiUrl/novels/${novel.slug}/${source.sourceSlug}/chapters/?page=1&page_size=1000", headers)
                 val chaptersResponse = client.newCall(chaptersRequest).execute()
                 return chapterListParse(chaptersResponse)
@@ -256,10 +244,7 @@ class LnCrawler :
 
     // ======================== Pages ========================
 
-    override fun pageListRequest(chapter: SChapter): Request {
-        // URL format: /novels/slug/source-slug/chapter/id
-        return GET("$apiUrl${chapter.url.replace("/chapter/", "/chapter/")}/", headers)
-    }
+    override fun pageListRequest(chapter: SChapter): Request = GET("$apiUrl${chapter.url.replace("/chapter/", "/chapter/")}/", headers)
 
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
 
@@ -272,10 +257,8 @@ class LnCrawler :
 
         val content = StringBuilder()
 
-        // Parse HTML body content
         val document = Jsoup.parse(chapter.body)
 
-        // Process content - handle both text and images
         document.body().children().forEach { element ->
             when (element.tagName()) {
                 "h1", "h2", "h3" -> {
@@ -283,7 +266,6 @@ class LnCrawler :
                 }
 
                 "p" -> {
-                    // Check if paragraph contains only an image
                     val img = element.selectFirst("img")
                     if (img != null) {
                         val imgSrc = img.attr("src")

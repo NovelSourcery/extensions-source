@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.all.lnori
+﻿package eu.kanade.tachiyomi.extension.all.lnori
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
@@ -31,7 +31,6 @@ class Lnori :
 
     private val json: Json by injectLazy()
 
-    // Cache for all novels loaded from homepage
     private var cachedNovels: List<NovelData>? = null
     private var cacheTimestamp: Long = 0
     private val cacheLifetime = 10 * 60 * 1000 // 10 minutes
@@ -133,7 +132,6 @@ class Lnori :
 
     override fun popularMangaParse(response: Response): MangasPage {
         val novels = loadAllNovels()
-        // Sort by relevance (rel) - higher is more popular
         val sorted = novels.sortedByDescending { it.rel }
         val mangas = sorted.map { novelDataToSManga(it) }
         return MangasPage(mangas, false) // All loaded at once, no pagination
@@ -145,7 +143,6 @@ class Lnori :
 
     override fun latestUpdatesParse(response: Response): MangasPage {
         val novels = loadAllNovels()
-        // Sort by date (newest first)
         val sorted = novels.sortedByDescending { it.date }
         val mangas = sorted.map { novelDataToSManga(it) }
         return MangasPage(mangas, false)
@@ -155,15 +152,11 @@ class Lnori :
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = GET(baseUrl, headers)
 
-    override fun searchMangaParse(response: Response): MangasPage {
-        // This will be overridden by fetchSearchManga
-        return MangasPage(emptyList(), false)
-    }
+    override fun searchMangaParse(response: Response): MangasPage = MangasPage(emptyList(), false)
 
     override fun fetchSearchManga(page: Int, query: String, filters: FilterList): rx.Observable<MangasPage> = rx.Observable.fromCallable {
         var novels = loadAllNovels()
 
-        // Apply search query
         if (query.isNotBlank()) {
             val queryLower = query.lowercase()
             novels = novels.filter { novel ->
@@ -173,7 +166,6 @@ class Lnori :
             }
         }
 
-        // Apply filters
         filters.forEach { filter ->
             when (filter) {
                 is TagFilter -> {
@@ -207,7 +199,6 @@ class Lnori :
                     novels = when (filter.state) {
                         0 -> novels.sortedByDescending { it.rel }
 
-                        // Popularity
                         1 -> novels.sortedByDescending { it.date }
 
                         // Newest
@@ -287,7 +278,6 @@ class Lnori :
         val document = Jsoup.parse(response.body.string())
         val chapters = mutableListOf<SChapter>()
 
-        // Get the novel ID from the URL (e.g., /3336/ -> 3336)
         val novelId = response.request.url.pathSegments.firstOrNull { it.isNotEmpty() } ?: ""
 
         // Each volume is treated as a chapter
@@ -296,7 +286,6 @@ class Lnori :
             val volumeNum = card.selectFirst("h3.c-title a")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull() ?: (index + 1)
             val subtitle = card.selectFirst("p.card-sub")?.text()?.trim() ?: ""
 
-            // Get the volume/book ID from the link
             val href = link.attr("href")
             val bookId = href.replace(Regex("[^0-9]"), "").ifEmpty { null }
 
@@ -346,12 +335,10 @@ class Lnori :
 
         val content = StringBuilder()
 
-        // Try to get chapter structure from JSON-LD data
         val jsonLdScript = document.selectFirst("script#app-data[type='application/ld+json']")
         if (jsonLdScript != null) {
             try {
                 val jsonText = jsonLdScript.html()
-                // Parse chapters from hasPart array
                 val chapterMatches = Regex(""""name"\s*:\s*"([^"]+)"\s*,\s*"url"\s*:\s*"([^"]+)"""")
                     .findAll(jsonText)
 
@@ -359,10 +346,8 @@ class Lnori :
                     val chapterName = match.groupValues[1]
                     val pageId = match.groupValues[2].removePrefix("#")
 
-                    // Get corresponding section content
                     val section = document.selectFirst("section.chapter#$pageId") ?: continue
 
-                    // Check if it's an image section
                     val images = section.select("picture img")
                     if (images.isNotEmpty() && section.select("p").isEmpty()) {
                         // Image-only section
@@ -379,7 +364,6 @@ class Lnori :
                                 content.append("<p>$text</p>\n")
                             }
                         }
-                        // Also include any inline images
                         section.select("picture img").forEach { img ->
                             val imgUrl = img.attr("src").let { if (it.startsWith("http")) it else baseUrl + it }
                             content.append("<img src=\"$imgUrl\">\n")
@@ -388,11 +372,9 @@ class Lnori :
                     content.append("\n<hr>\n\n")
                 }
             } catch (e: Exception) {
-                // Fallback to simple parsing
             }
         }
 
-        // Fallback: parse all sections directly
         if (content.isEmpty()) {
             document.select("section.chapter").forEach { section ->
                 val title = section.selectFirst("h2.chapter-title")?.text()?.trim()
@@ -400,13 +382,11 @@ class Lnori :
                     content.append("<h2>$title</h2>\n")
                 }
 
-                // Get images
                 section.select("picture img").forEach { img ->
                     val imgUrl = img.attr("src").let { if (it.startsWith("http")) it else baseUrl + it }
                     content.append("<img src=\"$imgUrl\">\n")
                 }
 
-                // Get text
                 section.select("p").forEach { p ->
                     val text = p.text()?.trim()
                     if (!text.isNullOrEmpty()) {

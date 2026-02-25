@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.libread
+﻿package eu.kanade.tachiyomi.extension.en.libread
 
 import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
 import eu.kanade.tachiyomi.source.model.Filter
@@ -41,14 +41,12 @@ class LibRead :
         }
     }
 
-    // Override pagination selector to use div.pages ul structure
     override fun popularMangaNextPageSelector() = "div.pages ul li a[rel=next], div.pages ul li.next:not(.disabled) a"
 
     override fun popularMangaParse(response: Response): MangasPage {
         val document = response.asJsoup()
         val mangas = document.select(popularMangaSelector()).map { popularMangaFromElement(it) }
 
-        // Check for next page using the pages ul structure
         val hasNextPage = document.selectFirst("div.pages ul li a[rel=next]") != null ||
             document.selectFirst("div.pages ul li.active + li a") != null
 
@@ -66,7 +64,6 @@ class LibRead :
 
     override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
 
-    // Search/Filter - Use type (sort by novel origin) and genre Picker from libread.json
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (query.isNotBlank()) {
             // Text search
@@ -76,7 +73,6 @@ class LibRead :
                 .build()
         }
 
-        // Check for genre filter first (takes priority over type)
         val genreFilter = filters.filterIsInstance<GenreFilter>().firstOrNull()
         val selectedGenre = genreFilter?.getSelectedGenre()
         if (selectedGenre != null) {
@@ -86,7 +82,6 @@ class LibRead :
                 .build()
         }
 
-        // Check for type/sort filter
         val typeFilter = filters.filterIsInstance<TypeFilter>().firstOrNull()
         val selectedType = typeFilter?.getSelectedType()
         if (selectedType != null) {
@@ -102,7 +97,6 @@ class LibRead :
 
     override fun searchMangaParse(response: Response) = popularMangaParse(response)
 
-    // Filters from libread.json
     override fun getFilterList() = FilterList(
         Filter.Header("Note: Genre/Type filter only works with empty search"),
         TypeFilter(),
@@ -161,7 +155,6 @@ class LibRead :
         }
     }
 
-    // Novel detail page parsing - parse from div.txt structure
     override fun mangaDetailsParse(document: Document): SManga = SManga.create().apply {
         document.selectFirst("div.m-imgtxt, div.m-book1")?.let { info ->
             thumbnail_url = info.selectFirst("img")?.let { img ->
@@ -171,7 +164,6 @@ class LibRead :
             title = info.selectFirst("h1.tit")?.text()?.trim() ?: ""
         }
 
-        // Parse info from div.txt div.item structure
         document.select("div.txt div.item, div.m-imgtxt div.item").forEach { element ->
             val label = element.selectFirst("span.s1")?.text()?.trim()?.removeSuffix(":")?.trim() ?: ""
             val value = element.selectFirst("span.s2, span.s3")
@@ -200,11 +192,9 @@ class LibRead :
         description = document.selectFirst("div.m-desc div.txt div.inner, div.desc-text")?.text()?.trim()
     }
 
-    // Chapter list parsing - LibRead uses select with options
     override fun chapterListParse(response: Response): List<SChapter> {
         val document = response.asJsoup()
 
-        // Try to get chapters from select options
         val chapters = document.select("select#idData option, ul#idData li a").mapIndexedNotNull { index, element ->
             val chapterUrl = if (element.tagName() == "option") {
                 val value = element.attr("value")
@@ -226,7 +216,7 @@ class LibRead :
             }
         }
 
-        return chapters
+        return chapters.reversed()
     }
 
     // Content parsing
@@ -236,7 +226,6 @@ class LibRead :
 
         val content = document.selectFirst("div.txt div#article, div#chapter-content, div.chapter-content, div#chr-content")
         if (content != null) {
-            // Remove ads and unwanted elements
             content.select("div.ads, script, ins, .adsbygoogle, .chapter-ad").remove()
             return content.html()
         }

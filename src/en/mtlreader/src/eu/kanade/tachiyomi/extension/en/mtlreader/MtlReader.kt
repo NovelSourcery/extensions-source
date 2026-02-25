@@ -38,14 +38,11 @@ class MtlReader :
 
     // Note: isNovel=true is set in build.gradle
 
-    // Preference keys
     private val reverseChapterList: Boolean
         get() = preferences.getBoolean(PREF_REVERSE_CHAPTERS, false)
 
-    // Cache token for search
     private var searchToken: String? = null
 
-    // Popular novels
     override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/novels?sort=popular&page=$page", headers)
 
     override fun popularMangaParse(response: Response): MangasPage {
@@ -53,14 +50,11 @@ class MtlReader :
         return parseNovelList(doc)
     }
 
-    // Latest updates
     override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/novels?sort=latest&page=$page", headers)
 
     override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
 
-    // Search - MTLReader uses token-based search
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        // Get token if not cached
         if (searchToken == null) {
             val tokenResponse = client.newCall(GET(baseUrl, headers)).execute()
             val tokenDoc = Jsoup.parse(tokenResponse.body.string())
@@ -78,10 +72,8 @@ class MtlReader :
     override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
 
     private fun parseNovelList(doc: Document): MangasPage {
-        // Parse .property_item elements from the listing page
         val novels = doc.select(".property_item").mapNotNull { element ->
             try {
-                // Find the main link - it's in h5 a or directly as a[href*=/novels/]
                 val link = element.selectFirst("h5 a, a[href*=/novels/]")
                     ?: return@mapNotNull null
 
@@ -90,11 +82,9 @@ class MtlReader :
 
                 val url = href.removePrefix(baseUrl)
 
-                // Get full title from img alt attribute (contains full untruncated title)
                 val img = element.selectFirst("img")
                 val imgAltTitle = img?.attr("alt")?.trim()
 
-                // Fallback to link text (may be truncated)
                 val title = imgAltTitle?.takeIf { it.isNotEmpty() && it != "cover" }
                     ?: link.text().trim()
                         .ifEmpty { element.selectFirst("h5")?.text()?.trim() ?: "" }
@@ -121,46 +111,38 @@ class MtlReader :
         return MangasPage(novels, hasNextPage)
     }
 
-    // Manga details
     override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
 
     override fun mangaDetailsParse(response: Response): SManga {
         val doc = Jsoup.parse(response.body.string())
 
         return SManga.create().apply {
-            // Get title from agent-title
             title = doc.selectFirst(".agent-title")?.text()?.trim() ?: ""
 
-            // Get cover from agent-p-img
             thumbnail_url = doc.selectFirst(".agent-p-img > img")?.attr("src")
                 ?: doc.selectFirst("img.thumbnail")?.attr("src")
                 ?: doc.selectFirst(".property_img img")?.attr("src")
 
-            // Get description
             description = doc.selectFirst("#editdescription")?.text()?.trim()
                 ?: doc.selectFirst("meta[name=description]")?.attr("content")
                 ?: doc.selectFirst(".novel-description")?.text()
                 ?: ""
 
-            // Get author from fa-user icon
             author = doc.selectFirst("i.fa-user")?.parent()?.text()
                 ?.replace("Author:", "")?.trim()
                 ?.replace("Author：", "")?.trim()
                 ?: doc.selectFirst(".novel-author a")?.text()
                 ?: doc.selectFirst(".author")?.text()
 
-            // Get alt titles/aliases
             val aliasesElement = doc.select(".agent-p-contact div.mb-2:contains(Aliases:)").firstOrNull()
             val aliasesText = aliasesElement?.text()
                 ?.replace("Aliases:", "")?.trim()
                 ?.replace("Aliases：", "")?.trim()
 
             if (!aliasesText.isNullOrEmpty()) {
-                // Store in genre field if no other genre field exists
                 genre = "Alt Title: $aliasesText"
             }
 
-            // Get genres
             val genres = doc.select(".novel-genre a, .genre a").map { it.text() }
             if (genres.isNotEmpty()) {
                 genre = if (genre.isNullOrEmpty()) {
@@ -174,7 +156,6 @@ class MtlReader :
         }
     }
 
-    // Chapter list
     override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
 
     override fun chapterListParse(response: Response): List<SChapter> {
@@ -185,11 +166,9 @@ class MtlReader :
         var currentDoc = Jsoup.parse(response.body.string())
 
         while (hasNextPage) {
-            // Parse chapters from current page
             val chapters = parseChaptersFromPage(currentDoc)
             allChapters.addAll(chapters)
 
-            // Check for next page
             val nextPageElement = currentDoc.selectFirst(
                 """
                 .page-item a[rel="next"],
@@ -204,7 +183,6 @@ class MtlReader :
                     currentDoc = Jsoup.parse(resp.body.string())
                     page++
 
-                    // Safety limit
                     if (page > 100) break
                 } catch (e: Exception) {
                     break
@@ -236,7 +214,6 @@ class MtlReader :
         }
     }
 
-    // Page list - returns single page with chapter URL for fetchPageText
     override fun pageListParse(response: Response): List<Page> {
         val url = response.request.url.encodedPath
         return listOf(Page(0, url))
@@ -244,25 +221,20 @@ class MtlReader :
 
     override fun imageUrlParse(response: Response): String = ""
 
-    // Chapter content extraction
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
         val doc = Jsoup.parse(response.body.string())
 
-        // Remove unwanted elements
         doc.select("ins, script, .mtlreader, .fb-like, nav, header, footer, .ads, noscript").remove()
 
         var contentDiv: Element? = null
 
-        // Strategy 1: Try to find div with style containing "font-family: Arial" and "font-size: 18px"
         contentDiv = doc.selectFirst("div[style*=\"font-family: Arial\"][style*=\"font-size: 18px\"]")
 
-        // Strategy 2: Try to find div with font-size: 18px (any font family)
         if (contentDiv == null) {
             contentDiv = doc.selectFirst("div[style*=\"font-size: 18px\"]")
         }
 
-        // Strategy 3: Look for div with random hash class name (8+ hex characters)
         // MTLReader often uses classes like "a1b2c3d4e5f6" for content divs
         if (contentDiv == null) {
             val hashClassRegex = Regex("^[0-9a-f]{8,}$", RegexOption.IGNORE_CASE)
@@ -272,7 +244,6 @@ class MtlReader :
                 val hasHashClass = classNames.any { hashClassRegex.matches(it) }
                 if (hasHashClass) {
                     val text = div.text().trim()
-                    // Content divs typically have substantial text (>100 chars)
                     if (text.length > 100) {
                         contentDiv = div
                         break
@@ -281,7 +252,6 @@ class MtlReader :
             }
         }
 
-        // Strategy 4: Look for the div after the container that has the chapter title
         if (contentDiv == null) {
             val titleContainer = doc.selectFirst("div.container:has(div[style*=\"font-size: 30px\"])")
             if (titleContainer != null) {
@@ -299,20 +269,17 @@ class MtlReader :
             }
         }
 
-        // Strategy 5: Find div with most text content (>500 chars minimum)
         if (contentDiv == null) {
             var maxTextLength = 0
             var bestDiv: Element? = null
 
             val allDivs = doc.select("div")
             for (div in allDivs) {
-                // Skip divs that are likely navigation or small UI elements
                 if (div.hasClass("container") || div.hasClass("row") || div.hasClass("col")) continue
 
                 val text = div.ownText().trim() // Use ownText to avoid counting nested div text
                 val fullText = div.text().trim()
 
-                // Prefer divs with substantial own text, or with many paragraphs
                 val paragraphCount = div.select("p").size
                 val contentScore = if (paragraphCount > 5) fullText.length else text.length
 
@@ -358,7 +325,6 @@ class MtlReader :
                 }
 
                 else -> {
-                    // Try to parse as date format
                     try {
                         SimpleDateFormat("MMM d, yyyy", Locale.US).parse(dateStr)?.time ?: 0L
                     } catch (e: Exception) {
@@ -373,7 +339,6 @@ class MtlReader :
 
     override fun getFilterList(): FilterList = FilterList()
 
-    // Preferences
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         SwitchPreferenceCompat(screen.context).apply {
             key = PREF_REVERSE_CHAPTERS

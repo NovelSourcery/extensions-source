@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.readfromnet
+﻿package eu.kanade.tachiyomi.extension.en.readfromnet
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
@@ -31,7 +31,6 @@ class ReadFromNet :
     override val lang = "en"
 
     override val supportsLatest = true
-
     // ======================== Popular ========================
 
     override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/allbooks/page/$page/", headers)
@@ -42,13 +41,11 @@ class ReadFromNet :
         val hasNextPage = doc.selectFirst("div.navigation a:contains(Next)") != null
         return MangasPage(novels, hasNextPage)
     }
-
     // ======================== Latest ========================
 
     override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/last_added_books/page/$page/", headers)
 
     override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
-
     // ======================== Search ========================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
@@ -62,7 +59,6 @@ class ReadFromNet :
         val novels = parseNovels(doc, isSearch = true)
         return MangasPage(novels, false) // Search doesn't support pagination
     }
-
     // ======================== Parsing ========================
 
     private fun parseNovels(doc: Document, isSearch: Boolean): List<SManga> {
@@ -93,7 +89,6 @@ class ReadFromNet :
             }
         }
     }
-
     // ======================== Details ========================
 
     override fun mangaDetailsRequest(manga: SManga): Request = GET("$baseUrl/${manga.url}", headers)
@@ -108,7 +103,6 @@ class ReadFromNet :
 
             thumbnail_url = doc.selectFirst("article.box > div > center > div > a > img")?.attr("src")
 
-            // Parse from detail page directly (no caching per instructions.html)
             val descElement = doc.selectFirst("div.text3, div.text5")
             descElement?.select(".coll-ellipsis, a")?.remove()
             // Include hidden content (from .coll-hidden span)
@@ -138,7 +132,6 @@ class ReadFromNet :
             }
         }
     }
-
     // ======================== Chapters ========================
 
     override fun chapterListRequest(manga: SManga): Request = GET("$baseUrl/${manga.url}", headers)
@@ -179,15 +172,13 @@ class ReadFromNet :
             )
         }
 
-        return chapters
+        return chapters.reversed()
     }
-
     // ======================== Pages ========================
 
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
 
     override fun imageUrlParse(response: Response): String = ""
-
     // ======================== Novel Content ========================
 
     override suspend fun fetchPageText(page: Page): String {
@@ -219,7 +210,6 @@ class ReadFromNet :
                         chapterHtml.append("<p>").append(paragraph.toString().trim()).append("</p>")
                         paragraph = StringBuilder()
                     }
-                    // Skip br tags, add other elements
                     if (node.tagName() != "br") {
                         chapterHtml.append(node.outerHtml())
                     }
@@ -227,7 +217,6 @@ class ReadFromNet :
             }
         }
 
-        // Close any remaining paragraph
         if (paragraph.isNotEmpty()) {
             chapterHtml.append("<p>").append(paragraph.toString().trim()).append("</p>")
         }

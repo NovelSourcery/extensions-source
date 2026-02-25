@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.novelsknight
+﻿package eu.kanade.tachiyomi.extension.en.novelsknight
 
 import android.app.Application
 import android.content.SharedPreferences
@@ -40,7 +40,6 @@ class NovelsKnight :
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
 
-    // Popular novels - from instructions.txt: ?order=popular
     override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/series/?page=$page&order=popular", headers)
 
     override fun popularMangaParse(response: Response): MangasPage {
@@ -48,12 +47,10 @@ class NovelsKnight :
         return parseNovelList(doc)
     }
 
-    // Latest updates
     override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/series/?page=$page&order=update", headers)
 
     override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
 
-    // Search with filters - from instructions.txt
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val url = "$baseUrl/series/".toHttpUrl().newBuilder().apply {
             addQueryParameter("page", page.toString())
@@ -94,7 +91,6 @@ class NovelsKnight :
 
     override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
 
-    // Parse novel list from article.maindet - from instructions.txt
     private fun parseNovelList(doc: Document): MangasPage {
         val novels = doc.select("article.maindet").mapNotNull { article ->
             try {
@@ -116,12 +112,14 @@ class NovelsKnight :
             }
         }
 
-        // Check for next page: a.r with "Next" text
-        val hasNextPage = doc.selectFirst("a.r:contains(Next)") != null
+        val hasNextPage = doc.selectFirst("a.r:contains(Next)") != null ||
+            doc.selectFirst("a.next.page-numbers") != null ||
+            doc.selectFirst(".hpage a.r") != null ||
+            doc.selectFirst(".pagination a:contains(next)") != null ||
+            doc.selectFirst(".wp-pagenavi a.nextpostslink") != null
         return MangasPage(novels, hasNextPage)
     }
 
-    // Manga details - from instructions.txt structure
     override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
 
     override fun mangaDetailsParse(response: Response): SManga {
@@ -155,7 +153,6 @@ class NovelsKnight :
         }
     }
 
-    // Chapter list - from instructions.txt: div.eplister ul li
     // Per LN Reader plugin: reverseChapters=true
     override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
 
@@ -168,9 +165,7 @@ class NovelsKnight :
                 val link = li.selectFirst("a[href]") ?: return@mapNotNull null
                 val chapterUrl = link.attr("href").replace(baseUrl, "")
 
-                // Chapter number from div.epl-num
                 val chapterNum = li.selectFirst("div.epl-num")?.text()?.trim() ?: ""
-                // Chapter title from div.epl-title
                 val chapterTitle = li.selectFirst("div.epl-title")?.text()?.trim() ?: ""
                 // Date from div.epl-date
                 val dateText = li.selectFirst("div.epl-date")?.text()?.trim() ?: ""
@@ -190,7 +185,6 @@ class NovelsKnight :
         }.reversed() // Per LN Reader plugin: reverseChapters=true
     }
 
-    // Page list - returns single page with chapter URL for fetchPageText
     override fun pageListParse(response: Response): List<Page> {
         val url = response.request.url.encodedPath
         return listOf(Page(0, url))
@@ -198,13 +192,11 @@ class NovelsKnight :
 
     override fun imageUrlParse(response: Response): String = ""
 
-    // Novel content - per LNReader: extract from epcontent to bottomnav
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
         val html = response.body.string()
         val doc = Jsoup.parse(html)
 
-        // Remove unwanted elements
         doc.select("script, ins, .ads, noscript").remove()
 
         // Primary: Use epcontent selector
@@ -220,17 +212,14 @@ class NovelsKnight :
         }
 
         if (epcontent != null) {
-            // Remove bottomnav and any navigation elements within
             epcontent.select(".bottomnav, .chapternav, .nextprev").remove()
             return epcontent.html()
         }
 
-        // Fallback: regex approach like LNReader - extract from epcontent to bottomnav
         val contentMatch = Regex("""<div[^>]*class="epcontent[^>]*>(.*?)<div[^>]*class="?bottomnav""", RegexOption.DOT_MATCHES_ALL)
             .find(html)?.groupValues?.get(1)
 
         if (contentMatch != null) {
-            // Extract all paragraph content
             val paragraphs = Regex("""<p[^>]*>(.*?)</p>""", RegexOption.DOT_MATCHES_ALL)
                 .findAll(contentMatch)
                 .map { "<p>${it.groupValues[1]}</p>" }
@@ -268,7 +257,6 @@ class NovelsKnight :
         }
     }
 
-    // Filters - from instructions.txt
     override fun getFilterList(): FilterList = FilterList(
         StatusFilter(),
         OrderFilter(),

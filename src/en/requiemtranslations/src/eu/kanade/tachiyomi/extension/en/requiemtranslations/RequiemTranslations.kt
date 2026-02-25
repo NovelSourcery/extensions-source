@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.requiemtranslations
+﻿package eu.kanade.tachiyomi.extension.en.requiemtranslations
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 import eu.kanade.tachiyomi.source.model.Page
@@ -59,16 +59,12 @@ class RequiemTranslations :
 
         val doc = response.asJsoup()
 
-        // Build URL exactly like TS: site + chapterPath.slice(0, -1)
-        // page.url is like "/chapter-path/" so we need to drop the trailing slash
         val chapterPath = page.url.trimEnd('/')
         val decodeUrl = baseUrl + chapterPath
 
-        // Remove scripts and unwanted elements first (like TS)
         doc.select("div.entry-content script").remove()
         doc.select(".unlock-buttons, .ads, style, .sharedaddy, .code-block").remove()
 
-        // Get content - TS uses div.entry-content > p (direct children only)
         val contentElement = doc.selectFirst("div.entry-content")
             ?: doc.selectFirst(".epcontent")
             ?: doc.selectFirst("#chapter-content")

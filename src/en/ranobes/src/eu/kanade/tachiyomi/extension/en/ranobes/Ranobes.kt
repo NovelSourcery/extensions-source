@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.ranobes
+﻿package eu.kanade.tachiyomi.extension.en.ranobes
 
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
@@ -43,9 +43,7 @@ class Ranobes :
 
     override val client = network.cloudflareClient
 
-    // Cache dle_hash for search
     private var dleHash: String? = null
-
     // ======================== Popular ========================
 
     override fun popularMangaRequest(page: Int): Request = if (page == 1) {
@@ -79,12 +77,10 @@ class Ranobes :
             }
         }.filterNotNull()
 
-        // Check if there's more pages by looking for pagination
         val hasNextPage = document.select("div.pages a").isNotEmpty()
 
         return MangasPage(novels, hasNextPage)
     }
-
     // ======================== Latest ========================
 
     override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/updates/page/$page/", headers)
@@ -96,9 +92,7 @@ class Ranobes :
             val link = block.selectFirst("a") ?: return@map null
 
             SManga.create().apply {
-                // URL goes to chapter, need to extract novel URL
                 url = link.attr("href").let { href ->
-                    // Convert chapter URL to novel URL
                     // e.g., /cultivation-being-immortal-1206585/3089467.html -> /novels/1206585-cultivation-being-immortal.html
                     val match = Regex("""(/[^/]+-(\d+)/\d+\.html)""").find(href)
                     if (match != null) {
@@ -121,11 +115,9 @@ class Ranobes :
 
         return MangasPage(novels, hasNextPage)
     }
-
     // ======================== Search ========================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        // Apply filters
         var genreId: String? = null
         var statusId: String? = null
         var sortBy: String? = null
@@ -156,7 +148,6 @@ class Ranobes :
             return GET("$baseUrl/novels/$statusId${if (page > 1) "page/$page/" else ""}", headers)
         }
 
-        // Use search if query provided
         if (query.isNotBlank()) {
             val url = if (page == 1) {
                 "$baseUrl/search/${URLEncoder.encode(query, "UTF-8")}/"
@@ -245,7 +236,6 @@ class Ranobes :
     }
 
     private fun parseNovelsPage(response: Response): MangasPage = popularMangaParse(response)
-
     // ======================== Details ========================
 
     override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
@@ -289,14 +279,12 @@ class Ranobes :
                     append(it.replace("Read more", "").trim())
                 }
 
-                // Add alternative titles
                 document.selectFirst("h1.title span.subtitle")?.text()?.let {
                     if (it.isNotBlank()) {
                         append("\n\nAlternative: $it")
                     }
                 }
 
-                // Add additional info
                 document.selectFirst("li:contains(Year) span")?.text()?.let {
                     append("\n\nYear: $it")
                 }
@@ -312,11 +300,9 @@ class Ranobes :
             }
         }
     }
-
     // ======================== Chapters ========================
 
     override fun chapterListRequest(manga: SManga): Request {
-        // Extract novel ID from URL like /novels/22198-martial-world-v812312.html
         val novelId = manga.url.substringAfter("/novels/").substringBefore("-")
         return GET("$baseUrl/chapters/$novelId/", headers)
     }
@@ -326,7 +312,6 @@ class Ranobes :
         var currentPage = 1
         var document = Jsoup.parse(response.body.string())
 
-        // Get base URL for pagination (without trailing slash issues)
         val baseChapterUrl = response.request.url.toString()
             .substringBefore("/page/")
             .trimEnd('/')
@@ -335,7 +320,6 @@ class Ranobes :
             val chapters = parseChaptersFromDocument(document)
             allChapters.addAll(chapters)
 
-            // Check for more pages from the JSON data or dropdown
             val jsonData = extractWindowData(document)
             val maxPage = jsonData?.get("pages_count")?.toString()?.toIntOrNull()
                 ?: document.select("select option").mapNotNull { it.attr("value").toIntOrNull() }.maxOrNull()
@@ -349,7 +333,7 @@ class Ranobes :
             document = Jsoup.parse(nextResponse.body.string())
         }
 
-        return if (reverseChapterList) allChapters.reversed() else allChapters
+        return allChapters.reversed()
     }
 
     /**
@@ -361,7 +345,6 @@ class Ranobes :
 
         val scriptContent = script.data()
 
-        // Try multiple patterns to extract JSON
         val jsonStr = run {
             // Pattern 1: window.__DATA__ = {...};
             val match1 = Regex("""window\.__DATA__\s*=\s*(\{.+\});""", RegexOption.DOT_MATCHES_ALL)
@@ -387,19 +370,14 @@ class Ranobes :
     }
 
     private fun parseChaptersFromDocument(document: org.jsoup.nodes.Document): List<SChapter> {
-        // First try to parse from window.__DATA__ JSON (more reliable)
         val jsonData = extractWindowData(document)
         if (jsonData != null) {
-            android.util.Log.d("Ranobes", "Found window.__DATA__ with keys: ${jsonData.keys}")
-
             val chaptersJson = jsonData["chapters"]
             if (chaptersJson is org.json.JSONArray && chaptersJson.length() > 0) {
-                android.util.Log.d("Ranobes", "Found ${chaptersJson.length()} chapters in JSON")
                 return (0 until chaptersJson.length()).mapNotNull { i ->
                     try {
                         val chapterObj = chaptersJson.getJSONObject(i)
                         SChapter.create().apply {
-                            // Try different key names for URL
                             url = (
                                 chapterObj.optString("link", "")
                                     .ifEmpty { chapterObj.optString("url", "") }
@@ -409,13 +387,11 @@ class Ranobes :
 
                             if (url.isEmpty()) return@mapNotNull null
 
-                            // Try different key names for title
                             name = chapterObj.optString("title", "")
                                 .ifEmpty { chapterObj.optString("name", "") }
                                 .ifEmpty { chapterObj.optString("chapter_title", "") }
                                 .ifEmpty { "Chapter" }
 
-                            // Parse date
                             val dateStr = chapterObj.optString("date", "")
                                 .ifEmpty { chapterObj.optString("created_at", "") }
                                 .ifEmpty { chapterObj.optString("published_at", "") }
@@ -438,44 +414,36 @@ class Ranobes :
                                 )
                             }
 
-                            // Try to extract chapter number
                             val numMatch = Regex("""Chapter\s*(\d+(?:\.\d+)?)""", RegexOption.IGNORE_CASE).find(name)
                             chapter_number = numMatch?.groupValues?.getOrNull(1)?.toFloatOrNull()
                                 ?: chapterObj.optDouble("chapter_number", 0.0).toFloat()
                                     .let { if (it == 0f) chapterObj.optInt("num", 0).toFloat() else it }
                         }
                     } catch (e: Exception) {
-                        android.util.Log.e("Ranobes", "Error parsing chapter at index $i", e)
                         null
                     }
                 }
             }
         }
 
-        // Fallback to HTML parsing
-        android.util.Log.d("Ranobes", "Falling back to HTML parsing for chapters")
         return document.select("div.cat_block.cat_line a").map { link ->
             SChapter.create().apply {
                 url = link.attr("href").removePrefix(baseUrl)
                 name = link.selectFirst("h6.title")?.text()?.trim() ?: link.attr("title")
 
-                // Try to extract chapter number
                 val numMatch = Regex("""Chapter\s*(\d+(?:\.\d+)?)""", RegexOption.IGNORE_CASE).find(name)
                 chapter_number = numMatch?.groupValues?.getOrNull(1)?.toFloatOrNull() ?: 0f
 
-                // Parse date
                 val dateText = link.selectFirst("small span.comment-count")?.text()?.trim() ?: ""
                 date_upload = parseRelativeDate(dateText)
             }
         }
     }
-
     // ======================== Pages ========================
 
     override fun pageListRequest(chapter: SChapter): Request = GET(baseUrl + chapter.url, headers)
 
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
-
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
@@ -485,13 +453,11 @@ class Ranobes :
 
         val content = StringBuilder()
 
-        // Get chapter title
         val chapterTitle = document.selectFirst("h1.h4.title")?.ownText()?.trim()
         if (!chapterTitle.isNullOrEmpty()) {
             content.append("<h2>$chapterTitle</h2>\n")
         }
 
-        // Get chapter content
         val textDiv = document.selectFirst("div.text#arrticle")
         textDiv?.children()?.forEach { element ->
             when (element.tagName()) {
@@ -517,7 +483,6 @@ class Ranobes :
     }
 
     override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
-
     // ======================== Filters ========================
 
     override fun getFilterList(): FilterList = FilterList(
@@ -595,7 +560,6 @@ class Ranobes :
 
         private const val PREF_REVERSE_CHAPTERS = "pref_reverse_chapters"
     }
-
     // ======================== Settings ========================
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
@@ -606,7 +570,6 @@ class Ranobes :
             setDefaultValue(false)
         }.also(screen::addPreference)
     }
-
     // ======================== Helpers ========================
 
     private fun extractBackgroundUrl(style: String): String? {
