@@ -195,7 +195,7 @@ class FansMTL :
                         addedAny = true
                     }
 
-    // ======================== Chapters ========================
+                    // ======================== Chapters ========================
 
                     if (!addedAny) break
                     page++
