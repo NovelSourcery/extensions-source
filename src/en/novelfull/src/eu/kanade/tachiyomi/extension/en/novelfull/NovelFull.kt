@@ -17,7 +17,6 @@ class NovelFull :
     override val chapterListing = "ajax-chapter-option"
 
     override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/most-popular?page=$page", headers)
-
     // ======================== Filters ========================
 
     override fun getFilterList() = FilterList(

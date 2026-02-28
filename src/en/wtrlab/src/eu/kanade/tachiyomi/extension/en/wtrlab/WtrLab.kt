@@ -65,24 +65,19 @@ class WtrLab :
 
     private val imgBaseUrl = "https://wtr-lab.com/api/v2/img"
 
-    // Convert image URL to wtr-lab API format
     // Example: "https://img.wtr-lab.com/cdn/series/JtiyvIDCk8L3qSgbIIAO2BPQ-xP-szSp7LbLKfz7yJ8.jpg"
     // becomes: "https://wtr-lab.com/api/v2/img?src=s3://wtrimg/series/JtiyvIDCk8L3qSgbIIAO2BPQ-xP-szSp7LbLKfz7yJ8.jpg&w=344"
     private fun transformImageUrl(imageUrl: String?): String? {
         if (imageUrl.isNullOrBlank()) return null
 
-        // If already a wtr-lab API URL, return as-is
         if (imageUrl.startsWith("$imgBaseUrl")) return imageUrl
 
-        // Extract the path from various URL formats
         val path = when {
             imageUrl.contains("img.wtr-lab.com/cdn/") -> {
-                // Format: https://img.wtr-lab.com/cdn/series/xxx.jpg
                 imageUrl.substringAfter("img.wtr-lab.com/cdn/")
             }
 
             imageUrl.contains("wtrimg/") -> {
-                // Format: s3://wtrimg/series/xxx.jpg or similar
                 imageUrl.substringAfter("wtrimg/")
             }
 
@@ -94,13 +89,11 @@ class WtrLab :
             else -> return imageUrl // Unknown format, return as-is
         }
 
-        // Build the API URL with encoded s3 path
         val s3Path = "s3://wtrimg/$path"
         val encodedPath = java.net.URLEncoder.encode(s3Path, "UTF-8")
         return "$imgBaseUrl?src=$encodedPath&w=344"
     }
 
-    // Cache buildId for Next.js data fetching
     private var cachedBuildId: String? = null
 
     private fun getBuildId(): String {
@@ -120,9 +113,7 @@ class WtrLab :
         return buildId
     }
 
-    // AES-GCM Decryption for encrypted chapter content
     private fun decryptContent(encryptedData: String): String {
-        // Format: arr:[IV_base64]:[ciphertext_base64]:[tag_base64]
         val parts = encryptedData.split(":")
         if (parts.size != 4 || parts[0] != "arr") {
             throw Exception("Invalid encrypted data format")
@@ -132,10 +123,8 @@ class WtrLab :
         val ciphertext = Base64.getDecoder().decode(parts[2])
         val tag = Base64.getDecoder().decode(parts[3])
 
-        // Combine tag and ciphertext (GCM expects tag appended to ciphertext)
         val ciphertextWithTag = tag + ciphertext
 
-        // Get encryption key from preferences
         val encryptionKey = getDecryptionKey()
         if (encryptionKey.isEmpty()) {
             throw Exception("Decryption key not configured. Please set it in extension settings.")
@@ -154,21 +143,16 @@ class WtrLab :
         return rawArray
     }
 
-    // Google Translate API for web translation mode
     private fun translateWithGoogle(paragraphs: List<String>): String {
         val apiKey = getGoogleApiKey()
         if (apiKey.isEmpty()) {
-            // No API key configured, return decrypted content as-is
             return paragraphs.joinToString("") { "<p>$it</p>" }
         }
 
-        // Format paragraphs with <a i=N> tags as required by the API
         val formattedParagraphs = paragraphs.mapIndexed { index, text ->
             "<a i=$index>$text</a>"
         }
 
-        // Build the full request using proper JSON serialization for correct escaping
-        // Format: [[[para1, para2, ...], "zh-CN", "en"], "te_lib"]
         val innerArray = buildJsonArray {
             add(
                 buildJsonArray {
@@ -195,7 +179,6 @@ class WtrLab :
 
         val response = client.newCall(request).execute()
         if (!response.isSuccessful) {
-            // Fallback to decrypted content if translation fails
             return paragraphs.joinToString("") { "<p>$it</p>" }
         }
 
@@ -203,38 +186,30 @@ class WtrLab :
         Log.d("WtrLab", "Google Translate Response: $responseBody")
 
         return try {
-            // Parse response: format is [[translated_para1, translated_para2, ...]]
             val jsonResponse = json.parseToJsonElement(responseBody).jsonArray
 
             if (jsonResponse.isEmpty()) {
                 throw Exception("Empty response from Google Translate")
             }
 
-            // The response is [[para1, para2, ...]] - outer array with inner array of translated paragraphs
             val innerArray = jsonResponse[0]
             if (innerArray !is JsonArray || innerArray.isEmpty()) {
                 throw Exception("Invalid response structure: expected array inside array")
             }
 
-            // Extract each translated paragraph and wrap in <p> tags
             // Each element is a string like "<a i=N>translated text</a>"
             val translatedParagraphs = innerArray.mapNotNull { element ->
                 element.jsonPrimitive.contentOrNull?.trim()
             }.filter { it.isNotEmpty() }
 
-            // Join each paragraph with <p> tags
             translatedParagraphs.joinToString("") { "<p>$it</p>" }
         } catch (e: Exception) {
-            // Fallback to decrypted content if parsing fails
             Log.e("WtrLab", "Failed to parse Google Translate response: ${e.message}", e)
             paragraphs.joinToString("") { "<p>$it</p>" }
         }
     }
 
-    // Novel source implementation
     override suspend fun fetchPageText(page: Page): String {
-        // Extract rawId and chapterNo from URL
-        // URL formats: /en/serie-{rawId}/{slug}/chapter-{chapterNo} OR /en/novel/{rawId}/{slug}/chapter-{chapterNo}
         val urlPath = page.url.removePrefix(baseUrl).removePrefix("/")
         val match = Regex("""(?:serie-|novel/)(\d+)/[^/]+/chapter-(\d+)""").find(urlPath)
             ?: throw Exception("Invalid chapter URL format: ${page.url}")
@@ -244,7 +219,6 @@ class WtrLab :
 
         var translationMode = getTranslationMode()
 
-        // Determine API translate parameter:
         // - "ai" mode: server-side AI translation (TS plugin uses this)
         // - "web" mode: encrypted content intended for web-translation flow
         // - "raw" mode: encrypted raw content
@@ -270,7 +244,6 @@ class WtrLab :
         var response = client.newCall(createRequest(apiTranslateParam)).execute()
         var responseBody = response.body.string()
 
-        // Check if AI mode failed, and fallback to RAW mode if so
         if (apiTranslateParam == "ai") {
             val isFailure = !response.isSuccessful || try {
                 val j = json.parseToJsonElement(responseBody).jsonObject
@@ -280,7 +253,6 @@ class WtrLab :
             }
 
             if (isFailure) {
-                // Fallback to raw
                 translationMode = "raw"
                 apiTranslateParam = "raw"
                 response = client.newCall(createRequest(apiTranslateParam)).execute()
@@ -304,47 +276,37 @@ class WtrLab :
             ?.get("body")
             ?: throw Exception("Could not find chapter content in API response")
 
-        // Check if body is encrypted string or JsonArray
         val paragraphs = if (body is JsonArray) {
-            // AI mode: body is already translated paragraphs
             body.mapNotNull { it.jsonPrimitive.contentOrNull?.trim() }.filter { it.isNotEmpty() }
         } else {
-            // RAW/WEB mode: body is encrypted string - decrypt it
             val encryptedData = body.jsonPrimitive.content
             val decryptedText = decryptContent(encryptedData)
 
-            // Try to parse as JSON array first (decrypted content is often JSON)
             try {
                 val decryptedJson = json.parseToJsonElement(decryptedText).jsonArray
                 decryptedJson.mapNotNull { it.jsonPrimitive.contentOrNull?.trim() }.filter { it.isNotEmpty() }
             } catch (e: Exception) {
-                // Fallback: treat as plain text and split by newlines
                 decryptedText.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
             }
         }
 
-        // Build HTML based on translation mode
         val htmlContent = when (translationMode) {
             "raw" -> {
-                // Raw mode: return decrypted Chinese text without translation
                 paragraphs.joinToString("") { "<p>$it</p>" }
             }
 
             "web" -> {
-                // Web mode: decrypt and translate using Google Translate API
                 // Requires user to set Google API key in extension settings
                 translateWithGoogle(paragraphs)
             }
 
             "ai" -> {
-                // AI mode: already translated by server
                 paragraphs.joinToString("") { "<p>$it</p>" }
             }
 
             else -> paragraphs.joinToString("") { "<p>$it</p>" }
         }
 
-        // Apply glossary replacements if available (only for AI mode)
         if (translationMode == "ai") {
             val glossaryTerms = jsonResult["data"]?.jsonObject
                 ?.get("data")?.jsonObject
@@ -376,7 +338,6 @@ class WtrLab :
         return result
     }
 
-    // Popular novels - using novel-finder JSON endpoint
     override fun popularMangaRequest(page: Int): Request {
         val buildId = getBuildId()
         val url = "$baseUrl/_next/data/$buildId/en/novel-finder.json?orderBy=views&order=desc&page=$page"
@@ -397,7 +358,6 @@ class WtrLab :
             val obj = element.jsonObject
             val rawId = obj["raw_id"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
 
-            // Skip duplicates
             if (rawId in seenIds) return@mapNotNull null
             seenIds.add(rawId)
 
@@ -411,14 +371,11 @@ class WtrLab :
             }
         }
 
-        // Check if there are more pages
-        // Use series.size (raw count) instead of mangas.size (filtered count) to avoid premature end
         val hasNextPage = series.isNotEmpty()
 
         return MangasPage(mangas, hasNextPage)
     }
 
-    // Latest updates - using api/home/recent
     override fun latestUpdatesRequest(page: Int): Request {
         val requestBody = buildJsonObject {
             put("page", page)
@@ -450,19 +407,16 @@ class WtrLab :
         return MangasPage(mangas, hasNextPage)
     }
 
-    // Search
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val buildId = getBuildId()
 
         val params = mutableListOf<String>()
 
-        // Add text search if query is not empty
         if (query.isNotEmpty()) {
             val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
             params.add("text=$encodedQuery")
         }
 
-        // Process filters
         filters.forEach { filter ->
             when (filter) {
                 is OrderByFilter -> params.add("orderBy=${filter.selected}")
@@ -538,7 +492,6 @@ class WtrLab :
         return GET(url, headers)
     } override fun searchMangaParse(response: Response) = popularMangaParse(response)
 
-    // Manga details
     override fun mangaDetailsRequest(manga: SManga): Request = GET("$baseUrl${manga.url}", headers)
 
     override fun mangaDetailsParse(response: Response): SManga {
@@ -574,11 +527,9 @@ class WtrLab :
                     }
                 }
             } catch (e: Exception) {
-                // Fall back to HTML parsing
             }
         }
 
-        // Fallback to HTML parsing if JSON parsing failed
         if (manga.title.isEmpty()) {
             manga.title = doc.selectFirst("h1.text-uppercase")?.text()
                 ?: doc.selectFirst("h1.long-title")?.text()
@@ -599,7 +550,6 @@ class WtrLab :
                 ?: doc.selectFirst(".lead")?.text()?.trim()
         }
 
-        // Parse genres
         val genres = doc.select("td:contains(Genre) + td a").map { it.text().trim() }
             .ifEmpty { doc.select(".genre").map { it.text().trim() } }
             .ifEmpty { doc.select(".genres .genre").map { it.text().trim() } }
@@ -611,7 +561,6 @@ class WtrLab :
         return manga
     }
 
-    // Chapter list
     override fun chapterListRequest(manga: SManga): Request = GET("$baseUrl${manga.url}", headers)
 
     override fun chapterListParse(response: Response): List<SChapter> {
@@ -619,24 +568,20 @@ class WtrLab :
         val doc = Jsoup.parse(html)
         val url = response.request.url.toString()
 
-        // Extract rawId and slug from URL (handles both /serie-{id}/ and /novel/{id}/ formats)
         val urlMatch = Regex("""(?:serie-|novel/)(\d+)/([^/]+)""").find(url)
             ?: return emptyList()
 
         val rawId = urlMatch.groupValues[1].toInt()
         val slug = urlMatch.groupValues[2]
 
-        // Get chapter count from HTML (more reliable than JSON)
         var chapterCount = 0
 
-        // Try to find chapter count from page text
         val pageText = doc.text()
         val chapterCountMatch = Regex("""(\d+)\s+Chapters?""", RegexOption.IGNORE_CASE).find(pageText)
         if (chapterCountMatch != null) {
             chapterCount = chapterCountMatch.groupValues[1].toIntOrNull() ?: 0
         }
 
-        // Fallback: try __NEXT_DATA__ JSON
         if (chapterCount == 0) {
             val nextDataText = doc.selectFirst("#__NEXT_DATA__")?.data()
             if (nextDataText != null) {
@@ -648,7 +593,6 @@ class WtrLab :
                         ?.get("serie_data")?.jsonObject
                     chapterCount = serieData?.get("chapter_count")?.jsonPrimitive?.intOrNull ?: 0
                 } catch (e: Exception) {
-                    // Ignore JSON parsing errors
                 }
             }
         }
@@ -712,18 +656,15 @@ class WtrLab :
         }
     }
 
-    // Page list - return single page with chapter URL
     override fun pageListRequest(chapter: SChapter): Request = GET("$baseUrl${chapter.url}", headers)
 
     override fun pageListParse(response: Response): List<Page> {
-        // Return single page with the full chapter URL
         // fetchPageText will parse the URL to extract rawId and chapterNo
         return listOf(Page(0, response.request.url.toString(), null))
     }
 
     override fun imageUrlParse(response: Response) = ""
 
-    // Preferences
     private fun getTranslationMode() = preferences.getString(TRANSLATION_MODE_KEY, "ai") ?: "ai"
     private fun getDecryptionKey() = preferences.getString(DECRYPTION_KEY, "") ?: ""
     private fun getGoogleApiKey() = preferences.getString(GOOGLE_API_KEY, "") ?: ""
@@ -755,7 +696,6 @@ class WtrLab :
         }.also(screen::addPreference)
     }
 
-    // Filters
     override fun getFilterList() = FilterList(
         Filter.Header("Note: Filters are applied together with search"),
         OrderByFilter(),
@@ -779,7 +719,6 @@ private const val TRANSLATION_MODE_KEY = "translationMode"
 private const val DECRYPTION_KEY = "decryptionKey"
 private const val GOOGLE_API_KEY = "googleApiKey"
 
-// Filter classes
 private class OrderByFilter :
     SelectFilter(
         "Order by",
@@ -1825,7 +1764,6 @@ private class LibraryExcludeFilter :
         ),
     )
 
-// Helper classes
 private open class SelectFilter(
     displayName: String,
     val options: Array<Pair<String, String>>,

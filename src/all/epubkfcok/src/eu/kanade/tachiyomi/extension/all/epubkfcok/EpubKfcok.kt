@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.all.epubkfcok
+﻿package eu.kanade.tachiyomi.extension.all.epubkfcok
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
@@ -27,20 +27,15 @@ class EpubKfcok :
 
     override val client = network.cloudflareClient
 
-    // Cache total pages from pagination
     private var cachedTotalPages: Int = 0
 
     // ======================== Popular ========================
 
-    override fun popularMangaRequest(page: Int): Request {
-        // Popular and Latest return the same thing on this site
-        return GET("$baseUrl/?page=$page", headers)
-    }
+    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/?page=$page", headers)
 
     override fun popularMangaParse(response: Response): MangasPage {
         val document = Jsoup.parse(response.body.string())
 
-        // Parse pagination to get total pages
         parseTotalPages(document)
 
         val novels = document.select("div.card").mapNotNull { parseNovelCard(it) }
@@ -64,7 +59,6 @@ class EpubKfcok :
             url.append("&q=${java.net.URLEncoder.encode(query, "UTF-8")}")
         }
 
-        // Process filters
         filters.forEach { filter ->
             when (filter) {
                 is TagFilter -> {
@@ -115,7 +109,6 @@ class EpubKfcok :
             description = document.select("section.description-box .description, section.box.description-box .description")
                 .firstOrNull()?.text()?.trim() ?: ""
 
-            // Tags/genres from .tags a elements
             genre = document.select("div.tags a, .tags-box a")
                 .mapNotNull { it.text()?.trim() }
                 .filter { it.isNotEmpty() }
@@ -133,7 +126,6 @@ class EpubKfcok :
                 else -> SManga.UNKNOWN
             }
 
-            // Also check status badge
             if (status == SManga.UNKNOWN) {
                 val badgeText = document.selectFirst(".status-badge")?.text()?.lowercase() ?: ""
                 status = when {
@@ -153,7 +145,6 @@ class EpubKfcok :
         val document = Jsoup.parse(response.body.string())
         val chapters = mutableListOf<SChapter>()
 
-        // Parse chapter list from ul.chapter-list li
         document.select("ul.chapter-list li, section.chapters-box ul li").forEach { li ->
             val link = li.selectFirst("a") ?: return@forEach
             val chapterNum = li.attr("data-ch").toIntOrNull()
@@ -177,7 +168,7 @@ class EpubKfcok :
             )
         }
 
-        return chapters // Keep original order (chapter 1 first for reading), Mihon displays newest first
+        return chapters.reversed()
     }
 
     // ======================== Pages ========================
@@ -198,18 +189,14 @@ class EpubKfcok :
         val response = client.newCall(request).execute()
         val document = Jsoup.parse(response.body.string())
 
-        // Parse content from div.reader
         val reader = document.selectFirst("div.reader") ?: return ""
 
-        // Clean up the content
         val content = StringBuilder()
 
-        // Get chapter title if present
         reader.selectFirst("h1")?.let { h1 ->
             content.append("<h1>${h1.text()}</h1>\n")
         }
 
-        // Get all paragraphs
         reader.select("p").forEach { p ->
             val text = p.text()?.trim()
             if (!text.isNullOrEmpty()) {
@@ -217,7 +204,6 @@ class EpubKfcok :
             }
         }
 
-        // If no paragraphs found, try to get raw text
         if (content.isEmpty()) {
             val text = reader.text()?.trim() ?: ""
             return "<p>$text</p>"
@@ -256,13 +242,11 @@ class EpubKfcok :
             }
             title = card.selectFirst("div.info strong")?.text()?.trim() ?: ""
 
-            // Extract cover URL from style attribute
             val coverDiv = card.selectFirst("div.cover")
             thumbnail_url = coverDiv?.attr("style")?.let { style ->
                 extractCoverUrl(style)
             }
 
-            // Get tags/genres
             genre = card.select("div.tags a")
                 .mapNotNull { it.text()?.trim() }
                 .filter { it.isNotEmpty() }
@@ -271,7 +255,6 @@ class EpubKfcok :
     }
 
     private fun extractCoverUrl(style: String): String? {
-        // Extract URL from: background-image:url(novels/xxx/cover.jpg)
         val match = Regex("""url\(([^)]+)\)""").find(style)
         val path = match?.groupValues?.getOrNull(1) ?: return null
 

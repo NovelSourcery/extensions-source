@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.fictionzone
+﻿package eu.kanade.tachiyomi.extension.en.fictionzone
 
 import android.app.Application
 import android.content.SharedPreferences
@@ -230,7 +230,6 @@ class FictionZone :
     override fun getMangaUrl(manga: SManga): String = baseUrl + manga.url
     override fun mangaDetailsRequest(manga: SManga): Request {
         if (manga.url.startsWith("/omniportal/")) {
-            // Parse: /omniportal/{source_id}/{source_key}
             val parts = manga.url.removePrefix("/omniportal/").split("/")
             val sourceId = parts[0]
             val sourceKey = parts[1]
@@ -353,7 +352,7 @@ class FictionZone :
 
                     chapter_number = obj["chapter_number"]?.jsonPrimitive?.double?.toFloat() ?: -1f
                 }
-            }
+            }.reversed()
         }
     }
 

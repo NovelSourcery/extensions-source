@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.mtlbooks
+﻿package eu.kanade.tachiyomi.extension.en.mtlbooks
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
@@ -35,7 +35,6 @@ class MtlBooks :
     private val json: Json by injectLazy()
 
     override val client = network.cloudflareClient
-
     // ======================== Popular ========================
 
     override fun popularMangaRequest(page: Int): Request {
@@ -66,7 +65,6 @@ class MtlBooks :
         val hasNextPage = novels.size >= 20
         return MangasPage(novels, hasNextPage)
     }
-
     // ======================== Latest ========================
 
     override fun latestUpdatesRequest(page: Int): Request {
@@ -75,7 +73,6 @@ class MtlBooks :
     }
 
     override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
-
     // ======================== Search ========================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
@@ -168,7 +165,6 @@ class MtlBooks :
     }
 
     override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
-
     // ======================== Details ========================
 
     override fun mangaDetailsRequest(manga: SManga): Request {
@@ -196,7 +192,6 @@ class MtlBooks :
             }
         }
     }
-
     // ======================== Chapters ========================
 
     override fun chapterListRequest(manga: SManga): Request {
@@ -212,7 +207,6 @@ class MtlBooks :
         val chapters = mutableListOf<SChapter>()
         val slug = response.request.url.toString().substringAfter("novel_slug=").substringBefore("&")
 
-        // Parse first page
         val firstPage = json.decodeFromString<ChapterListResponse>(response.body.string())
         val totalPages = (firstPage.result.pagination.total + firstPage.result.pagination.limit - 1) / firstPage.result.pagination.limit
         val novelSlug = firstPage.result.novelSlug
@@ -227,7 +221,6 @@ class MtlBooks :
             )
         }
 
-        // Fetch remaining pages
         for (page in 2..totalPages) {
             try {
                 val body = json.encodeToString(
@@ -252,13 +245,11 @@ class MtlBooks :
             }
         }
 
-        return chapters
+        return chapters.reversed()
     }
-
     // ======================== Pages ========================
 
     override fun pageListRequest(chapter: SChapter): Request {
-        // URL format: /novel/$novelSlug/chapter/$chapterSlug
         val parts = chapter.url.split("/")
         val novelSlug = parts.getOrNull(2) ?: ""
         val chapterSlug = parts.getOrNull(4) ?: ""
@@ -272,26 +263,20 @@ class MtlBooks :
     }
 
     override fun pageListParse(response: Response): List<Page> {
-        // Store the chapter URL (which has the slugs) in the page URL for fetchPageText
-        // The response body contains the content, but we need to pass slugs to fetchPageText
         val chapterResponse = json.decodeFromString<ChapterReadResponse>(response.body.string())
         val novelSlug = chapterResponse.result.novelSlug
         val chapterSlug = chapterResponse.result.chapter.chapterSlug
 
-        // Store slugs in a custom format that fetchPageText can parse
         return listOf(Page(0, "mtlbooks://$novelSlug/$chapterSlug"))
     }
-
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        // Parse slugs from our custom format: mtlbooks://$novelSlug/$chapterSlug
         val cleanUrl = page.url.removePrefix("mtlbooks://")
         val parts = cleanUrl.split("/")
         val novelSlug = parts.getOrNull(0) ?: ""
         val chapterSlug = parts.getOrNull(1) ?: ""
 
-        // Fetch the chapter content using POST
         val body = json.encodeToString(
             ChapterReadRequest.serializer(),
             ChapterReadRequest(novelSlug, chapterSlug),
@@ -320,7 +305,6 @@ class MtlBooks :
     }
 
     override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
-
     // ======================== Filters ========================
 
     override fun getFilterList(): FilterList = FilterList(
@@ -395,7 +379,6 @@ class MtlBooks :
         "Ongoing",
         "Hiatus",
     )
-
     // ======================== Helpers ========================
 
     private fun buildImageUrl(thumbnail: String?): String? {

@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.pawread
+﻿package eu.kanade.tachiyomi.extension.en.pawread
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
@@ -26,7 +26,6 @@ class PawRead :
     override val supportsLatest = true
     override val isNovelSource = true
     override val client = network.cloudflareClient
-
     // ======================== Popular ========================
 
     override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/list/?sort=click&page=$page", headers)
@@ -34,16 +33,14 @@ class PawRead :
     override fun popularMangaParse(response: Response): MangasPage {
         val doc = response.asJsoup()
         val mangas = parseNovels(doc)
-        val hasNextPage = doc.selectFirst("a.next, a:contains(Next), .pagination a.active + a") != null
-        return MangasPage(mangas, hasNextPage)
+        // Always assume next page exists if we got results
+        return MangasPage(mangas, mangas.isNotEmpty())
     }
-
     // ======================== Latest ========================
 
     override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/list/?sort=update&page=$page", headers)
 
     override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
-
     // ======================== Search ========================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
@@ -51,7 +48,6 @@ class PawRead :
             return GET("$baseUrl/search/?keywords=$query&page=$page", headers)
         }
 
-        // Build URL from filters
         var url = "$baseUrl/list/"
 
         val filterValues = mutableListOf<String>()
@@ -93,7 +89,6 @@ class PawRead :
     }
 
     override fun searchMangaParse(response: Response) = popularMangaParse(response)
-
     // ======================== Parse Novels ========================
 
     private fun parseNovels(doc: Document): List<SManga> {
@@ -105,7 +100,6 @@ class PawRead :
                 val url = element.attr("href")
                 val path = url.split("/").filter { it.isNotEmpty() }.take(2).joinToString("/")
 
-                // Find the cover image in parent container
                 val parent = element.parent() ?: element.parents().firstOrNull()
                 val cover = parent?.selectFirst("img")?.attr("src") ?: ""
 
@@ -119,7 +113,6 @@ class PawRead :
             }
         }
     }
-
     // ======================== Details ========================
 
     override fun mangaDetailsRequest(manga: SManga): Request {
@@ -134,10 +127,16 @@ class PawRead :
             // Cover and name from #Cover div
             val coverDiv = doc.selectFirst("#Cover")
             val img = coverDiv?.selectFirst("img")
-            title = img?.attr("title")?.trim() ?: ""
             thumbnail_url = img?.attr("src")
 
-            // Parse status and author from txtItme paragraphs
+            // Title: try img title, then h1, then <title> tag minus " - PawRead"
+            title = img?.attr("title")?.trim()?.ifBlank { null }
+                ?: doc.selectFirst("h1")?.text()?.trim()?.ifBlank { null }
+                ?: doc.selectFirst("title")?.text()
+                    ?.replace(Regex("\\s*-\\s*PawRead.*$", RegexOption.IGNORE_CASE), "")
+                    ?.trim()
+                ?: ""
+
             val infoItems = doc.select("p.txtItme")
             if (infoItems.size >= 1) {
                 status = parseStatus(infoItems[0].text())
@@ -165,7 +164,6 @@ class PawRead :
 
         else -> SManga.UNKNOWN
     }
-
     // ======================== Chapters ========================
 
     override fun chapterListRequest(manga: SManga): Request = mangaDetailsRequest(manga)
@@ -178,13 +176,11 @@ class PawRead :
 
         return doc.select("div.item-box").mapNotNull { element ->
             try {
-                // Chapter path is extracted from onclick attribute
                 val chapterId = element.attr("onclick")
                     .let { Regex("\\d+").find(it)?.value } ?: return@mapNotNull null
 
                 val chapterPath = "$novelPath/$chapterId.html"
 
-                // Chapter name from first span
                 val spans = element.select("span")
                 val chapterName = spans.firstOrNull()?.text()?.trim() ?: "Chapter $chapterId"
 
@@ -200,7 +196,6 @@ class PawRead :
                     0L
                 }
 
-                // Skip advanced/premium chapters
                 if (dateStr.contains("Advanced", ignoreCase = true)) return@mapNotNull null
 
                 SChapter.create().apply {
@@ -211,15 +206,13 @@ class PawRead :
             } catch (e: Exception) {
                 null
             }
-        }
+        }.reversed()
     }
-
     // ======================== Pages ========================
 
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
 
     override fun imageUrlParse(response: Response): String = ""
-
     // ======================== Novel Content ========================
 
     override suspend fun fetchPageText(page: Page): String {
@@ -228,7 +221,6 @@ class PawRead :
 
         val content = doc.selectFirst("div.main") ?: return ""
 
-        // Remove watermark/ad content
         val watermarks = listOf("pawread", "tinyurl", "bit.ly")
         content.select("p").forEach { p ->
             val text = p.text().lowercase()
@@ -239,7 +231,6 @@ class PawRead :
 
         return content.html()
     }
-
     // ======================== Filters ========================
 
     override fun getFilterList() = FilterList(

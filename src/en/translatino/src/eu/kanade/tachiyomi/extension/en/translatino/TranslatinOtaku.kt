@@ -154,8 +154,6 @@ class TranslatinOtaku :
             SManga.create().apply {
                 title = link.text().trim()
                 setUrlWithoutDomain(link.attr("href"))
-                // Images may use data-src, data-lazy-src, srcset, or src
-                // Some are lazy-loaded with class "lazyloaded"
                 thumbnail_url = img?.let { imgEl ->
                     val src = imgEl.attr("data-src").ifEmpty {
                         imgEl.attr("data-lazy-src").ifEmpty {
@@ -163,13 +161,10 @@ class TranslatinOtaku :
                                 ?: imgEl.attr("src")
                         }
                     }
-                    // Return null if placeholder image
                     if (src.contains("placeholder") || src.isBlank()) null else src
                 }
             }
         }
-        // Check pagination - Madara uses multiple pagination patterns
-        // Look for: nav-previous, nextpostslink, page-item links, or numbered pages
         val hasNext = doc.selectFirst(".nav-previous a, a.nextpostslink, .wp-pagenavi a.nextpostslink") != null ||
             doc.select(".page-item:not(.active):last-child a").isNotEmpty() ||
             doc.selectFirst("a.next.page-numbers") != null ||
@@ -200,7 +195,6 @@ class TranslatinOtaku :
                 }
             }
         }
-        // AJAX pages always have more if results returned
         return MangasPage(novels, novels.isNotEmpty())
     }
 
@@ -232,7 +226,6 @@ class TranslatinOtaku :
         val doc = Jsoup.parse(response.body.string())
         val mangaUrl = response.request.url.encodedPath
 
-        // Use new chapter endpoint
         val body = FormBody.Builder().build()
         val chapResponse = client.newCall(
             POST("$baseUrl${mangaUrl}ajax/chapters/", headers, body),

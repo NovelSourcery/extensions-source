@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.mznovels
+﻿package eu.kanade.tachiyomi.extension.en.mznovels
 
 import android.app.Application
 import android.content.SharedPreferences
@@ -53,10 +53,8 @@ class MzNovels :
 
         val content = doc.selectFirst("div.formatted-content") ?: return ""
 
-        // Remove ads
         content.select("div.chapter-ad-banner").remove()
 
-        // Handle author notes based on setting
         val authorNotesMode = preferences.getString("author_notes", "footnotes") ?: "footnotes"
         val authorNotes = content.select(".author-feedback")
 
@@ -80,14 +78,12 @@ class MzNovels :
             }
 
             "none" -> {
-                // Remove author notes entirely
                 authorNotes.remove()
             }
         }
 
         return content.html()
     }
-
     // ======================== Popular/Browse ========================
 
     override fun popularMangaRequest(page: Int): Request {
@@ -102,12 +98,10 @@ class MzNovels :
     override fun latestUpdatesParse(response: Response): MangasPage {
         return parseNovelList(response, 1) // page is already in URL
     }
-
     // ======================== Search ========================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (query.isNotEmpty()) {
-            // Direct search with query term
             return GET("$baseUrl/search/?q=$query&page=$page", headers)
         }
 
@@ -167,11 +161,9 @@ class MzNovels :
             }
         }
 
-        // Check for next page link (disabled = no more pages)
         val hasNextPage = doc.selectFirst(".pagination .next:not(.disabled)") != null
         return MangasPage(novels, hasNextPage)
     }
-
     // ======================== Novel Details ========================
 
     override fun mangaDetailsParse(response: Response): SManga {
@@ -201,7 +193,6 @@ class MzNovels :
             // Author
             var authorText = doc.selectFirst("p.novel-author > a")?.text()?.trim() ?: "Unknown"
             if (category == "translated") {
-                // Try to extract original author
                 val origAuthorElement = doc.selectFirst("p:contains(Original Author)")
                 if (origAuthorElement != null) {
                     val origAuthor = origAuthorElement.nextElementSibling()?.text()?.trim() ?: "Unknown"
@@ -236,7 +227,6 @@ class MzNovels :
             }
         }
     }
-
     // ======================== Chapters ========================
 
     override fun chapterListParse(response: Response): List<SChapter> {
@@ -246,7 +236,6 @@ class MzNovels :
         val chapters = mutableListOf<SChapter>()
         var pageNo = 1
 
-        // Find max page from pagination
         val lastPageLink = doc.selectFirst("div#chapters .pagination")
             ?.children()
             ?.lastOrNull { it.tagName() == "a" }
@@ -283,14 +272,9 @@ class MzNovels :
             chapter.apply { chapter_number = index + 1f }
         }
     }
-
     // ======================== Chapter Content ========================
 
-    override fun pageListParse(response: Response): List<Page> {
-        // Return single page with the chapter URL
-        // fetchPageText will use this URL to fetch and parse the content
-        return listOf(Page(0, response.request.url.toString(), null))
-    }
+    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString(), null))
 
     // ======================== Captcha Detection ========================
 
@@ -301,7 +285,6 @@ class MzNovels :
             throw Exception("Captcha error, please open in webview")
         }
     }
-
     // ======================== Filters ========================
 
     override fun getFilterList(): FilterList = FilterList(
@@ -334,8 +317,6 @@ class MzNovels :
             else -> "daily"
         }
     }
-
-    // ======================== Preferences ========================
     // Note: Author notes setting stored in SharedPreferences
     // Access via: preferences.getString("author_notes", "footnotes")
     // Possible values: "inline", "footnotes", "none"

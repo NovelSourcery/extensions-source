@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.novelshub
+﻿package eu.kanade.tachiyomi.extension.en.novelshub
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
@@ -43,7 +43,6 @@ class NovelsHub :
         .add("rsc", "1")
         .add("Accept", "*/*")
         .build()
-
     // ======================== Popular ========================
 
     override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/?page=$page", rscHeaders())
@@ -62,7 +61,6 @@ class NovelsHub :
                 val titleElement = wrapper.selectFirst("h1")
                 val title = titleElement?.text()?.trim() ?: return@forEach
 
-                // Find the parent link to get URL
                 val link = wrapper.parent()?.closest("a[href*=/series/]")
                     ?: wrapper.selectFirst("a[href*=/series/]")
                 val url = link?.attr("href")?.replace(baseUrl, "") ?: return@forEach
@@ -75,7 +73,6 @@ class NovelsHub :
                     },
                 )
             } catch (e: Exception) {
-                // Skip
             }
         }
 
@@ -105,11 +102,9 @@ class NovelsHub :
                     },
                 )
             } catch (e: Exception) {
-                // Skip
             }
         }
 
-        // Additional: Try card-group elements
         doc.select(".card-group, div[class*=card]").forEach { card ->
             try {
                 val link = card.selectFirst("a[href*=/series/]") ?: return@forEach
@@ -131,27 +126,21 @@ class NovelsHub :
                     },
                 )
             } catch (e: Exception) {
-                // Skip
             }
         }
 
-        // Fallback: Parse RSC response for JSON objects with novel data
-        // The RSC response contains embedded JSON with "slug", "postTitle", "featuredImage" fields
         if (novels.isEmpty()) {
             // Pattern to extract novel data: "slug":"xxx","postTitle":"xxx"
             val slugTitlePattern = Regex(""""slug"\s*:\s*"([^"]+)"\s*,\s*"postTitle"\s*:\s*"([^"]+)"""")
             val imagePattern = Regex(""""featuredImage"\s*:\s*"([^"]+)"""")
 
-            // Find all slug/title pairs
             slugTitlePattern.findAll(body).forEach { match ->
                 try {
                     val slug = match.groupValues[1]
                     val title = match.groupValues[2]
 
-                    // Skip chapter slugs (like "chapter-1")
                     if (slug.startsWith("chapter-")) return@forEach
 
-                    // Try to find the corresponding image (search nearby in the text)
                     val startIdx = maxOf(0, match.range.first - 200)
                     val endIdx = minOf(body.length, match.range.last + 500)
                     val nearbyText = body.substring(startIdx, endIdx)
@@ -165,24 +154,20 @@ class NovelsHub :
                         },
                     )
                 } catch (e: Exception) {
-                    // Skip malformed entries
                 }
             }
         }
 
         return MangasPage(novels.distinctBy { it.url }, novels.size >= 10)
     }
-
     // ======================== Latest ========================
 
     override fun latestUpdatesRequest(page: Int): Request = popularMangaRequest(page)
 
     override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
-
     // ======================== Search ========================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        // Use API for search and filtering
         // https://api.novelshub.org/api/query?page=1&perPage=24&searchTerm=world&genreIds=2,21&seriesType=MANHWA&seriesStatus=ONGOING
         val params = mutableListOf<String>()
         params.add("page=$page")
@@ -237,7 +222,6 @@ class NovelsHub :
     override fun searchMangaParse(response: Response): MangasPage {
         val body = response.body.string()
 
-        // Check if response is from API
         if (response.request.url.host == "api.novelshub.org") {
             return parseApiResponse(body)
         }
@@ -261,9 +245,6 @@ class NovelsHub :
             val jsonElement = json.parseToJsonElement(body)
             val rootObj = jsonElement.jsonObject
 
-            // Handle multiple response formats:
-            // 1. { "posts": [...] } - direct posts array
-            // 2. { "data": { "series": [...] } } - nested series array
             val items = rootObj["posts"]?.jsonArray
                 ?: rootObj["data"]?.jsonObject?.get("series")?.jsonArray
 
@@ -285,19 +266,28 @@ class NovelsHub :
                         },
                     )
                 } catch (e: Exception) {
-                    // Skip
                 }
             }
 
-            // Check for pagination in different locations
-            val pagination = rootObj["pagination"]?.jsonObject
-                ?: rootObj["data"]?.jsonObject?.get("pagination")?.jsonObject
-            val currentPage = pagination?.get("currentPage")?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 1
-            val totalPages = pagination?.get("totalPages")?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 1
+            // Use totalCount from root for pagination (API returns { posts: [...], totalCount: N })
+            val totalCount = rootObj["totalCount"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+            val postsCount = items?.size ?: 0
 
-            return MangasPage(novels, currentPage < totalPages)
+            val hasNext = if (totalCount != null) {
+                // Extract current page from the original request URL
+                val perPage = 24
+                postsCount >= perPage && novels.size < totalCount
+            } else {
+                // Fallback: check nested pagination object
+                val pagination = rootObj["pagination"]?.jsonObject
+                    ?: rootObj["data"]?.jsonObject?.get("pagination")?.jsonObject
+                val currentPage = pagination?.get("currentPage")?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 1
+                val totalPages = pagination?.get("totalPages")?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 1
+                currentPage < totalPages
+            }
+
+            return MangasPage(novels, hasNext)
         } catch (e: Exception) {
-            // Fallback to regex parsing
             val slugTitlePattern = Regex(""""slug"\s*:\s*"([^"]+)"\s*,\s*"postTitle"\s*:\s*"([^"]+)"""")
             val imagePattern = Regex(""""featuredImage"\s*:\s*"([^"]+)"""")
 
@@ -320,14 +310,12 @@ class NovelsHub :
                         },
                     )
                 } catch (e: Exception) {
-                    // Skip
                 }
             }
         }
 
         return MangasPage(novels.distinctBy { it.url }, novels.size >= 10)
     }
-
     // ======================== Details ========================
 
     override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, rscHeaders())
@@ -336,11 +324,9 @@ class NovelsHub :
         val body = response.body.string()
 
         return SManga.create().apply {
-            // Extract postTitle
             title = Regex(""""postTitle"\s*:\s*"([^"]+)"""").find(body)
                 ?.groupValues?.get(1) ?: ""
 
-            // Extract postContent (description) - HTML content
             val postContent = Regex(""""postContent"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(body)
                 ?.groupValues?.get(1)
                 ?.replace("\\\"", "\"")
@@ -348,7 +334,6 @@ class NovelsHub :
                 ?.replace("\\/", "/")
             val descText = postContent?.let { Jsoup.parse(it).text() }
 
-            // Extract alternativeTitles
             val altTitles = Regex(""""alternativeTitles"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(body)
                 ?.groupValues?.get(1)
                 ?.replace("\\\"", "\"")
@@ -360,17 +345,14 @@ class NovelsHub :
                 descText?.let { append(it) }
             }.takeIf { it.isNotBlank() }
 
-            // Extract featuredImage for cover
             thumbnail_url = Regex(""""featuredImage"\s*:\s*"([^"]+)"""").find(body)
                 ?.groupValues?.get(1)
                 ?: Regex(""""ImageObject"[^}]*"url"\s*:\s*"([^"]+)"""").find(body)
                     ?.groupValues?.get(1)
 
-            // Extract author
             author = Regex(""""author"\s*:\s*"([^"]+)"""").find(body)
                 ?.groupValues?.get(1)
 
-            // Extract genres array
             val genresMatch = Regex(""""genres"\s*:\s*\[(.*?)\]""").find(body)
             genre = genresMatch?.groupValues?.get(1)?.let { genresStr ->
                 Regex(""""name"\s*:\s*"([^"]+)"""").findAll(genresStr)
@@ -378,7 +360,6 @@ class NovelsHub :
                     .joinToString(", ")
             }
 
-            // Extract status
             val statusStr = Regex(""""seriesStatus"\s*:\s*"([^"]+)"""").find(body)
                 ?.groupValues?.get(1)
             status = when (statusStr?.uppercase()) {
@@ -388,7 +369,6 @@ class NovelsHub :
             }
         }
     }
-
     // ======================== Chapters ========================
 
     override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, rscHeaders())
@@ -406,16 +386,12 @@ class NovelsHub :
                 ?.groupValues?.get(1)?.toIntOrNull()
             ?: 0
 
-        // Extract novel slug for URL construction
         val novelSlug = Regex(""""slug"\s*:\s*"([^"]+)"""").find(body)
             ?.groupValues?.get(1)
             ?: novelPath.split("/").lastOrNull { it.isNotEmpty() }
             ?: return emptyList()
 
-        // First, try to extract chapters directly from the RSC response
         // RSC format has: {"id":152012,"slug":"chapter-166","number":166,"title":"",..."mangaPost":{...},...}
-        // Use simpler regex that matches "slug":"chapter-X" and "number":X pairs directly
-        // Find all occurrences of "id":...,slug":"chapter-X","number":X pattern (before mangaPost)
         Regex(""""id":\d+,"slug":"(chapter-\d+)","number":(\d+)""")
             .findAll(body)
             .forEach { match ->
@@ -430,7 +406,6 @@ class NovelsHub :
                 )
             }
 
-        // Fallback: generate chapters from _count if parsing failed
         if (chapters.isEmpty() && totalChapters > 0) {
             for (chapterNum in 1..totalChapters) {
                 chapters.add(
@@ -445,7 +420,6 @@ class NovelsHub :
 
         return chapters.reversed()
     }
-
     // ======================== Pages ========================
 
     override fun pageListParse(response: Response): List<Page> {
@@ -454,7 +428,6 @@ class NovelsHub :
     }
 
     override fun imageUrlParse(response: Response): String = ""
-
     // ======================== Novel Content ========================
 
     override suspend fun fetchPageText(page: Page): String {
@@ -465,27 +438,22 @@ class NovelsHub :
 
         // RSC T-tag format: NUMBER:THEX,<p>content</p>
         // Example: 21:T4844,<p>-----------------------------------------------------------------</p><p>Translator...
-        // The pattern is: digits:T followed by hex digits, then comma, then HTML content
         val tTagPattern = Regex("""\d+:T[0-9a-f]+,(<p>.*)""", RegexOption.DOT_MATCHES_ALL)
         val tTagMatch = tTagPattern.find(body)
 
         if (tTagMatch != null) {
             var content = tTagMatch.groupValues[1]
 
-            // The content usually ends before the next JSON block (e.g., 4:["$","$Lc",...)
-            // We look for the last closing paragraph tag
             val lastP = content.lastIndexOf("</p>")
             if (lastP != -1) {
                 content = content.substring(0, lastP + 4)
             }
 
-            // Clean up the content - remove separator lines and metadata
             content = content.replace(Regex("""<p>-+</p>"""), "")
             content = content.replace(Regex("""<p>Translator:.*?</p>""", RegexOption.IGNORE_CASE), "")
             content = content.replace(Regex("""<p>Chapter:.*?</p>""", RegexOption.IGNORE_CASE), "")
             content = content.replace(Regex("""<p>Chapter Title:.*?</p>""", RegexOption.IGNORE_CASE), "")
 
-            // Remove any trailing JSON artifacts if they slipped through
             if (content.contains(":[") || content.contains("\":")) {
                 val jsonStart = content.indexOf("\":[")
                 if (jsonStart != -1) {
@@ -505,7 +473,6 @@ class NovelsHub :
         val contentMatch = contentPattern.find(body)
         if (contentMatch != null) {
             val contentRef = contentMatch.groupValues[1]
-            // Find the referenced content block
             val refPattern = Regex("""$contentRef:T[0-9a-f]+,(.+?)(?=\d+:\[|\d+:|$)""", RegexOption.DOT_MATCHES_ALL)
             val refMatch = refPattern.find(body)
             if (refMatch != null) {
@@ -513,7 +480,6 @@ class NovelsHub :
             }
         }
 
-        // Fallback: Extract all <p> tags that look like content (not metadata)
         val paragraphs = Regex("""<p>([^<]*(?:(?!</p>)<[^<]*)*)</p>""").findAll(body)
             .map { it.value }
             .filter { p ->
