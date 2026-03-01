@@ -1,6 +1,6 @@
 ext {
-    extName = 'NovelsHub'
-    extClass = '.NovelsHub'
+    extName = 'NovelDex'
+    extClass = '.NovelDex'
     extVersionCode = 1
     isNsfw = true
     isNovel = true
