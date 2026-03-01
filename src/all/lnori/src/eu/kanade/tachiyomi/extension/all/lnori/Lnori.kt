@@ -606,7 +606,7 @@ class Lnori :
             }
         }
 
-        return chapters.distinctBy { it.url }
+        return chapters.distinctBy { it.url }.reversed()
     }
 
     // ======================== Pages ========================

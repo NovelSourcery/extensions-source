@@ -1,6 +1,11 @@
 ﻿package eu.kanade.tachiyomi.extension.en.noveldex
 
+import android.app.Application
+import android.content.SharedPreferences
+import androidx.preference.PreferenceScreen
+import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -10,6 +15,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
@@ -21,6 +27,8 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
+import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -31,7 +39,8 @@ import java.util.Locale
  */
 class NovelDex :
     HttpSource(),
-    NovelSource {
+    NovelSource,
+    ConfigurableSource {
 
     override val name = "NovelDex"
     override val baseUrl = "https://noveldex.io"
@@ -41,18 +50,19 @@ class NovelDex :
     override val client = network.cloudflareClient
     private val json: Json by injectLazy()
 
+    private val preferences: SharedPreferences by lazy {
+        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+    }
+
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
 
     // RSC headers - required for React Server Component response
-    // Must include Next-Router-Prefetch, Next-Url and _rsc param to avoid 403
-    private fun rscHeaders(path: String = "/"): Headers = headers.newBuilder()
+    // Minimal approach (NovelsHub style): just rsc:1 + Accept: */*
+    // Avoid next-router-prefetch, next-url, _rsc param — they trigger 403
+    private fun rscHeaders(): Headers = headers.newBuilder()
         .add("rsc", "1")
-        .add("next-router-prefetch", "1")
-        .add("next-url", path)
         .add("Accept", "*/*")
         .build()
-
-    private fun rscUrl(path: String): String = "$baseUrl$path?_rsc=1"
 
     // ======================== Popular ========================
 
@@ -163,36 +173,60 @@ class NovelDex :
     override fun searchMangaParse(response: Response): MangasPage = parseApiResponse(response.body.string())
 
     private fun parseApiResponse(body: String): MangasPage {
-        val root = json.parseToJsonElement(body).jsonObject
-        val dataArray = root["data"]?.jsonArray ?: return MangasPage(emptyList(), false)
-        val meta = root["meta"]?.jsonObject
-
-        val novels = dataArray.mapNotNull { element ->
-            try {
-                val obj = element.jsonObject
-                val slug = obj["slug"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-                val title = obj["title"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-                val cover = obj["coverImage"]?.jsonPrimitive?.contentOrNull
-                    ?.let { if (it.startsWith("/")) baseUrl + it else it }
-
-                SManga.create().apply {
-                    this.title = title
-                    this.url = "/series/novel/$slug"
-                    this.thumbnail_url = cover
-                }
-            } catch (e: Exception) {
-                null
-            }
+        // Guard: if the response is HTML (e.g. Cloudflare challenge), bail out
+        val trimmed = body.trimStart()
+        if (trimmed.startsWith("<") || trimmed.startsWith("<!DOCTYPE")) {
+            return MangasPage(emptyList(), false)
         }
 
-        val hasMore = meta?.get("hasMore")?.jsonPrimitive?.booleanOrNull ?: false
+        return try {
+            val root = json.parseToJsonElement(body).jsonObject
+            val dataArray = root["data"]?.jsonArray ?: return MangasPage(emptyList(), false)
+            val meta = root["meta"]?.jsonObject
 
-        return MangasPage(novels, hasMore)
+            val novels = dataArray.mapNotNull { element ->
+                try {
+                    val obj = element.jsonObject
+                    val slug = obj["slug"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                    val title = obj["title"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                    val cover = obj["coverImage"]?.jsonPrimitive?.contentOrNull
+                        ?.let { if (it.startsWith("/")) baseUrl + it else it }
+                    val type = obj["type"]?.jsonPrimitive?.contentOrNull ?: "WEB_NOVEL"
+                    val urlType = typeToUrlSegment(type)
+
+                    SManga.create().apply {
+                        this.title = title
+                        this.url = "/series/$urlType/$slug"
+                        this.thumbnail_url = cover
+                    }
+                } catch (e: Exception) {
+                    null
+                }
+            }
+
+            val hasMore = meta?.get("hasMore")?.jsonPrimitive?.booleanOrNull ?: false
+
+            MangasPage(novels, hasMore)
+        } catch (_: Exception) {
+            MangasPage(emptyList(), false)
+        }
+    }
+
+    /**
+     * Map API type field to URL path segment.
+     */
+    private fun typeToUrlSegment(type: String): String = when (type) {
+        "WEB_NOVEL" -> "novel"
+        "MANHWA" -> "manhwa"
+        "MANGA" -> "manga"
+        "MANHUA" -> "manhua"
+        "WEBTOON" -> "webtoon"
+        else -> "novel"
     }
 
     // ======================== Details ========================
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET(rscUrl(manga.url), rscHeaders(manga.url))
+    override fun mangaDetailsRequest(manga: SManga): Request = GET("$baseUrl${manga.url}", rscHeaders())
 
     override fun mangaDetailsParse(response: Response): SManga {
         val body = response.body.string()
@@ -312,53 +346,72 @@ class NovelDex :
     // ======================== Chapters ========================
 
     override fun chapterListRequest(manga: SManga): Request {
-        // chapter/1 RSC contains full "allChapters" array with all titles + isLocked.
-        // Browser sends next-url = novel page path (not chapter path) as the Referer context.
-        val chapterOnePath = manga.url + "/chapter/1"
-        val novelPath = manga.url
-        return GET(rscUrl(chapterOnePath), rscHeaders(novelPath))
+        // Fetch the detail page RSC — contains allChapters/chapters/chapterCount
+        return GET("$baseUrl${manga.url}", rscHeaders())
     }
 
     override fun chapterListParse(response: Response): List<SChapter> {
         val body = response.body.string()
-        val requestUrl = response.request.url.encodedPath  // /series/novel/{slug}/chapter/1
+        val requestUrl = response.request.url.encodedPath
 
-        // Extract slug: /series/novel/{slug}/chapter/1 → {slug}
-        val slugMatch = Regex("""/series/novel/([^/]+)/chapter/""").find(requestUrl)
-            ?: Regex("""/series/novel/([^/?]+)""").find(requestUrl)
-        val novelSlug = slugMatch?.groupValues?.get(1) ?: ""
+        // Extract type and slug: /series/{type}/{slug} or /series/{type}/{slug}/chapter/1
+        val slugMatch = Regex("""/series/([^/]+)/([^/?]+)""").find(requestUrl)
+        val seriesType = slugMatch?.groupValues?.get(1) ?: "novel"
+        val novelSlug = slugMatch?.groupValues?.get(2) ?: ""
 
         val chapters = mutableListOf<SChapter>()
+        val showLocked = preferences.getBoolean(SHOW_LOCKED_PREF_KEY, true)
 
         // PRIMARY: "allChapters":[{...},...] — full list with titles + lock status
-        val allChaptersMatch = Regex(""""allChapters"\s*:\s*(\[.*?\])(?=\s*,"totalChapters")""", RegexOption.DOT_MATCHES_ALL)
+        val allChaptersMatch = Regex(""""allChapters"\s*:\s*(\[.*?\])(?=\s*[,}])""", RegexOption.DOT_MATCHES_ALL)
             .find(body)
 
         if (allChaptersMatch != null) {
             try {
                 val arr = json.parseToJsonElement(allChaptersMatch.groupValues[1]).jsonArray
-                arr.forEach { elem ->
-                    try {
-                        val obj = elem.jsonObject
-                        val number = obj["number"]?.jsonPrimitive?.intOrNull ?: return@forEach
-                        val chTitle = obj["title"]?.jsonPrimitive?.contentOrNull ?: "Chapter $number"
-                        val isLocked = obj["isLocked"]?.jsonPrimitive?.booleanOrNull ?: false
-                        chapters.add(
-                            SChapter.create().apply {
-                                url = "/series/novel/$novelSlug/chapter/$number"
-                                name = if (isLocked) "🔒 $chTitle" else chTitle
-                                chapter_number = number.toFloat()
-                            },
-                        )
-                    } catch (_: Exception) {}
-                }
+                parseChaptersFromArray(arr, seriesType, novelSlug, chapters, showLocked)
                 if (chapters.isNotEmpty()) {
                     return chapters.sortedByDescending { it.chapter_number }
                 }
             } catch (_: Exception) {}
         }
 
-        // SECONDARY: chapterCount from series{} — build sequential list
+        // SECONDARY: "chapters":[...] (paginated, ~100 per page) with pagination support
+        val chaptersArrayMatch = Regex(""""chapters"\s*:\s*(\[.*?\])(?=\s*[,}])""", RegexOption.DOT_MATCHES_ALL)
+            .find(body)
+        if (chaptersArrayMatch != null) {
+            try {
+                val arr = json.parseToJsonElement(chaptersArrayMatch.groupValues[1]).jsonArray
+                parseChaptersFromArray(arr, seriesType, novelSlug, chapters, showLocked)
+            } catch (_: Exception) {}
+        }
+
+        // Pagination: extract totalPages and fetch remaining pages
+        if (chapters.isNotEmpty()) {
+            val totalPages = Regex(""""totalPages"\s*:\s*(\d+)""").find(body)
+                ?.groupValues?.get(1)?.toIntOrNull() ?: 1
+
+            if (totalPages > 1) {
+                for (page in 2..totalPages) {
+                    try {
+                        val pageUrl = "$baseUrl/series/$seriesType/$novelSlug?page=$page"
+                        val pageResponse = client.newCall(GET(pageUrl, rscHeaders())).execute()
+                        val pageBody = pageResponse.body.string()
+
+                        val pageChaptersMatch = Regex(""""chapters"\s*:\s*(\[.*?\])(?=\s*[,}])""", RegexOption.DOT_MATCHES_ALL)
+                            .find(pageBody)
+                        if (pageChaptersMatch != null) {
+                            val arr = json.parseToJsonElement(pageChaptersMatch.groupValues[1]).jsonArray
+                            parseChaptersFromArray(arr, seriesType, novelSlug, chapters, showLocked)
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+
+            return chapters.distinctBy { it.chapter_number }.sortedByDescending { it.chapter_number }
+        }
+
+        // TERTIARY: chapterCount from series{} — build sequential list
         val chapterCount = Regex(""""chapterCount"\s*:\s*(\d+)""").find(body)
             ?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
@@ -366,43 +419,51 @@ class NovelDex :
             for (n in 1..chapterCount) {
                 chapters.add(
                     SChapter.create().apply {
-                        url = "/series/novel/$novelSlug/chapter/$n"
+                        url = "/series/$seriesType/$novelSlug/chapter/$n"
                         name = "Chapter $n"
                         chapter_number = n.toFloat()
                     },
                 )
             }
-            return chapters.sortedByDescending { it.chapter_number }
         }
 
-        // TERTIARY: "chapters":[...] (up to 100, with dates)
-        val chaptersArrayMatch = Regex(""""chapters"\s*:\s*(\[.*?\])(?=\s*,"characters")""", RegexOption.DOT_MATCHES_ALL)
-            .find(body)
-        if (chaptersArrayMatch != null) {
+        // FALLBACK: If detail page RSC returned no chapters, try chapter/1 page
+        if (chapters.isEmpty() && novelSlug.isNotEmpty() && !requestUrl.contains("/chapter/")) {
             try {
-                val arr = json.parseToJsonElement(chaptersArrayMatch.groupValues[1]).jsonArray
-                arr.forEach { elem ->
-                    try {
-                        val obj = elem.jsonObject
-                        val number = obj["number"]?.jsonPrimitive?.intOrNull ?: return@forEach
-                        val chTitle = obj["title"]?.jsonPrimitive?.contentOrNull ?: "Chapter $number"
-                        val publishedAt = obj["publishedAt"]?.jsonPrimitive?.contentOrNull
-                        val isLocked = obj["isLocked"]?.jsonPrimitive?.booleanOrNull ?: false
-                        chapters.add(
-                            SChapter.create().apply {
-                                url = "/series/novel/$novelSlug/chapter/$number"
-                                name = if (isLocked) "🔒 $chTitle" else chTitle
-                                chapter_number = number.toFloat()
-                                date_upload = publishedAt?.let {
-                                    try {
-                                        dateFormat.parse(it)?.time ?: 0L
-                                    } catch (_: Exception) {
-                                        0L
-                                    }
-                                } ?: 0L
-                            },
-                        )
-                    } catch (_: Exception) {}
+                val chapterOneRequest = GET("$baseUrl/series/$seriesType/$novelSlug/chapter/1", rscHeaders())
+                val chapterOneResponse = client.newCall(chapterOneRequest).execute()
+                val chapterOneBody = chapterOneResponse.body.string()
+
+                val ch1AllChapters = Regex(""""allChapters"\s*:\s*(\[.*?\])(?=\s*[,}])""", RegexOption.DOT_MATCHES_ALL)
+                    .find(chapterOneBody)
+                if (ch1AllChapters != null) {
+                    val arr = json.parseToJsonElement(ch1AllChapters.groupValues[1]).jsonArray
+                    parseChaptersFromArray(arr, seriesType, novelSlug, chapters, showLocked)
+                }
+            } catch (_: Exception) {}
+        }
+
+        // API FALLBACK: Use the listing API to get at least partial chapters
+        if (chapters.isEmpty() && novelSlug.isNotEmpty()) {
+            try {
+                val apiUrl = "$baseUrl/api/series".toHttpUrl().newBuilder()
+                    .addQueryParameter("page", "1")
+                    .addQueryParameter("limit", "1")
+                    .addQueryParameter("slug", novelSlug)
+                    .build()
+                val apiResponse = client.newCall(GET(apiUrl, headers)).execute()
+                val apiBody = apiResponse.body.string()
+                val apiRoot = json.parseToJsonElement(apiBody).jsonObject
+                val dataArray = apiRoot["data"]?.jsonArray
+
+                dataArray?.forEach { element ->
+                    val obj = element.jsonObject
+                    val apiSlug = obj["slug"]?.jsonPrimitive?.contentOrNull ?: return@forEach
+                    if (apiSlug != novelSlug) return@forEach
+
+                    obj["chapters"]?.jsonArray?.let { arr ->
+                        parseChaptersFromArray(arr, seriesType, novelSlug, chapters, showLocked)
+                    }
                 }
             } catch (_: Exception) {}
         }
@@ -410,14 +471,50 @@ class NovelDex :
         return chapters.distinctBy { it.chapter_number }.sortedByDescending { it.chapter_number }
     }
 
+    /**
+     * Parse chapter entries from a JSON array and add to the chapters list.
+     * Filters locked chapters based on the user preference.
+     */
+    private fun parseChaptersFromArray(
+        arr: JsonArray,
+        seriesType: String,
+        novelSlug: String,
+        chapters: MutableList<SChapter>,
+        showLocked: Boolean,
+    ) {
+        arr.forEach { elem ->
+            try {
+                val obj = elem.jsonObject
+                val number = obj["number"]?.jsonPrimitive?.intOrNull ?: return@forEach
+                val chTitle = obj["title"]?.jsonPrimitive?.contentOrNull ?: "Chapter $number"
+                val publishedAt = obj["publishedAt"]?.jsonPrimitive?.contentOrNull
+                val isLocked = obj["isLocked"]?.jsonPrimitive?.booleanOrNull ?: false
+
+                if (!showLocked && isLocked) return@forEach
+
+                chapters.add(
+                    SChapter.create().apply {
+                        url = "/series/$seriesType/$novelSlug/chapter/$number"
+                        name = if (isLocked) "\uD83D\uDD12 $chTitle" else chTitle
+                        chapter_number = number.toFloat()
+                        date_upload = publishedAt?.let {
+                            try {
+                                dateFormat.parse(it)?.time ?: 0L
+                            } catch (_: Exception) {
+                                0L
+                            }
+                        } ?: 0L
+                    },
+                )
+            } catch (_: Exception) {}
+        }
+    }
+
     // ======================== Pages ========================
 
     override fun pageListRequest(chapter: SChapter): Request {
-        // chapter.url = /series/novel/{slug}/chapter/{number}
-        // Browser sends next-url = novel page (without /chapter/N) as Referer context
         val chapterPath = if (chapter.url.startsWith("http")) chapter.url.removePrefix(baseUrl) else chapter.url
-        val novelPath = chapterPath.substringBefore("/chapter/")
-        return GET(rscUrl(chapterPath), rscHeaders(novelPath))
+        return GET("$baseUrl$chapterPath", rscHeaders())
     }
 
     override fun pageListParse(response: Response): List<Page> {
@@ -431,78 +528,188 @@ class NovelDex :
     // ======================== Novel Content ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        // page.url = /series/novel/{slug}/chapter/{number}
         val chapterPath = page.url
-        val novelPath = chapterPath.substringBefore("/chapter/")
-        val rscRequest = GET(rscUrl(chapterPath), rscHeaders(novelPath))
-        val response = client.newCall(rscRequest).execute()
-        val body = response.body.string()
 
-        // RSC T-tag wire format (confirmed from network inspection):
-        //   KEY:THEX,﻿[WATERMARK_ZW]<p><b>Translator:...</b></p>
-        //     <h1>Chapter N: Title</h1>
-        //     <p>paragraph...</p>
-        //     ...
-        //     <p>last paragraph</p>﻿[WATERMARK_ZW]2:[next RSC...]
-        //
-        // The content blob is between two \uFEFF-led watermark sequences.
-        // Find the T-tag, skip past the first watermark, extract until the second watermark.
+        // Approach 1: RSC headers (React Server Component wire format)
+        // NovelDex uses Next.js App Router — chapter content lives in RSC T-tags,
+        // NOT in the visible HTML DOM (which only has loading skeletons).
+        try {
+            val rscResponse = client.newCall(GET("$baseUrl$chapterPath", rscHeaders())).execute()
+            val rscBody = rscResponse.body.string()
+            val rscContent = extractFromRscBody(rscBody)
+            if (rscContent != null) return rscContent
+        } catch (_: Exception) {}
 
-        val tTagRegex = Regex("""[0-9a-f]+:T[0-9a-fA-F]+,""")
-        val tTagMatch = tTagRegex.find(body)
+        // Approach 2: Normal HTML fetch (fallback)
+        try {
+            val htmlResponse = client.newCall(GET("$baseUrl$chapterPath", headers)).execute()
+            val htmlBody = htmlResponse.body.string()
+            val doc = Jsoup.parse(htmlBody)
 
-        if (tTagMatch != null) {
-            val afterTTag = tTagMatch.range.last + 1
-            // Skip first watermark: starts with \uFEFF, ends with \u200D\uFEFF
-            // Content begins after the first \u200D\uFEFF pair
-            val watermarkEnd = body.indexOf('\uFEFF', afterTTag + 1) // second BOM after the T-tag BOM
-            val contentStart = if (watermarkEnd != -1) watermarkEnd + 1 else afterTTag
+            // Try common chapter content selectors
+            val content = doc.selectFirst(
+                "div.chapter-content, div.prose, article.chapter, " +
+                    "div[class*=chapter-text], div[class*=chapterContent], " +
+                    "div[class*=reading-content], div[class*=novelContent]",
+            )?.html()
+            if (!content.isNullOrBlank() && content.length > 50) return content
 
-            // Find opening HTML tag — should be <p> or <h1>
-            val firstTag = body.indexOf('<', contentStart)
-            if (firstTag != -1) {
-                // Content ends at the NEXT \uFEFF (start of the trailing watermark)
-                val contentEnd = body.indexOf('\uFEFF', firstTag + 10)
-                val rawContent = if (contentEnd != -1) {
-                    body.substring(firstTag, contentEnd)
-                } else {
-                    // Trim to last </p> as safety
-                    val lastP = body.indexOf("</p>", firstTag)
-                    if (lastP != -1) body.substring(firstTag, lastP + 4) else body.substring(firstTag)
-                }
+            // Try __NEXT_DATA__ JSON (Pages Router)
+            val nextDataScript = doc.selectFirst("script#__NEXT_DATA__")?.data()
+            if (nextDataScript != null) {
+                val extracted = extractContentFromNextData(nextDataScript)
+                if (extracted != null && extracted.length > 50) return extracted
+            }
 
-                // Trim trailing garbage (non-HTML after last block tag)
-                val lastClose = maxOf(
-                    rawContent.lastIndexOf("</p>"),
-                    rawContent.lastIndexOf("</div>"),
-                    rawContent.lastIndexOf("</h1>"),
-                    rawContent.lastIndexOf("</h2>"),
-                )
-                val content = if (lastClose != -1) {
-                    rawContent.substring(0, lastClose + rawContent.substring(lastClose).indexOf('>') + 1)
-                } else {
-                    rawContent
-                }.trim()
+            // Try RSC extraction on HTML body (content is inside self.__next_f.push scripts)
+            val rscContent = extractFromRscBody(htmlBody)
+            if (rscContent != null) return rscContent
+        } catch (_: Exception) {}
 
-                if (content.length > 30) return content
+        return ""
+    }
+
+    /**
+     * Extract chapter content from RSC wire format body.
+     *
+     * RSC T-tags have format: `KEY:TSIZE,<content>` where:
+     * - KEY is a hex identifier (e.g. "d", "4c", "1c")
+     * - SIZE is the hex byte-length of the content
+     * - Content follows immediately after the comma
+     *
+     * Strategy:
+     * 1. Targeted: find "content":"$KEY" reference and resolve the T-tag directly
+     * 2. Fallback: score all T-tags to find the one with actual chapter HTML
+     */
+    private fun extractFromRscBody(body: String): String? {
+        // --- Targeted extraction: find "content":"$KEY" and resolve T-tag ---
+        val contentMarker = "\"content\":\"\$"
+        val contentIdx = body.indexOf(contentMarker)
+        if (contentIdx >= 0) {
+            val keyStart = contentIdx + contentMarker.length
+            val keyEnd = body.indexOf('"', keyStart)
+            if (keyEnd > keyStart && keyEnd - keyStart <= 4) {
+                val key = body.substring(keyStart, keyEnd)
+                val tTagContent = resolveTTag(body, key)
+                if (tTagContent != null && tTagContent.length > 50) return tTagContent
             }
         }
 
-        // Fallback 1: find any run of <p> tags in the body
-        val firstP = body.indexOf("<p>").takeIf { it != -1 }
-            ?: body.indexOf("<p ").takeIf { it != -1 }
-        if (firstP != null) {
-            val endBom = body.indexOf('\uFEFF', firstP + 10)
-            val raw = if (endBom != -1) body.substring(firstP, endBom) else body.substring(firstP)
-            val lastP = raw.lastIndexOf("</p>")
-            val content = if (lastP != -1) raw.substring(0, lastP + 4) else raw
-            if (content.length > 30) return content.trim()
+        // --- Fallback: scan all T-tags with scoring ---
+        val tTagRegex = Regex("""[0-9a-fA-F]+:T([0-9a-fA-F]+),""")
+        val allTTags = tTagRegex.findAll(body).toList()
+
+        var bestContent: String? = null
+        var bestScore = 0
+
+        for (match in allTTags) {
+            val sizeBytes = match.groupValues[1].toIntOrNull(16) ?: continue
+            if (sizeBytes < 100) continue
+
+            val contentStart = match.range.last + 1
+            if (contentStart >= body.length) continue
+
+            val rawContent = extractTTagBytes(body, contentStart, sizeBytes)
+            val content = stripWatermark(rawContent)
+
+            if (content.isBlank() || content.length < 50) continue
+            if (content.trimStart().startsWith("<script") || content.trimStart().startsWith("{")) continue
+
+            var score = content.length / 10
+            score += Regex("<p[ >]").findAll(content).count() * 50
+            score += Regex("<br").findAll(content).count() * 5
+            if (content.contains("function ") || content.contains("var ") || content.contains("window.")) score -= 500
+            if (content.contains("<script")) score -= 1000
+
+            if (score > bestScore && content.length > 50) {
+                bestScore = score
+                bestContent = content
+            }
         }
 
-        // Fallback 2: parse with Jsoup
-        val doc = Jsoup.parse(body)
-        return doc.selectFirst("div.chapter-text, div.prose, article, main")?.html()
-            ?: doc.select("p").filter { it.text().length > 20 }.joinToString("\n") { "<p>${it.text()}</p>" }
+        return bestContent
+    }
+
+    /**
+     * Resolve a T-tag by its key (e.g. "d" → find "d:T2041," and extract content).
+     */
+    private fun resolveTTag(body: String, key: String): String? {
+        // T-tags appear at line start: "\nKEY:TSIZE,"
+        val prefix = "$key:T"
+        var idx = body.indexOf("\n$prefix")
+        if (idx >= 0) {
+            idx++ // skip newline
+        } else if (body.startsWith(prefix)) {
+            idx = 0
+        } else {
+            return null
+        }
+
+        val sizeStart = idx + prefix.length
+        val commaIdx = body.indexOf(',', sizeStart)
+        if (commaIdx <= sizeStart || commaIdx - sizeStart > 8) return null
+
+        val sizeBytes = body.substring(sizeStart, commaIdx).toIntOrNull(16) ?: return null
+        if (sizeBytes < 50) return null
+
+        val rawContent = extractTTagBytes(body, commaIdx + 1, sizeBytes)
+        return stripWatermark(rawContent)
+    }
+
+    /**
+     * Extract exactly [sizeBytes] UTF-8 bytes from [body] starting at [charStart].
+     */
+    private fun extractTTagBytes(body: String, charStart: Int, sizeBytes: Int): String {
+        if (charStart >= body.length) return ""
+        val remaining = body.substring(charStart)
+        val bytes = remaining.toByteArray(Charsets.UTF_8)
+        val len = sizeBytes.coerceAtMost(bytes.size)
+        return String(bytes, 0, len, Charsets.UTF_8)
+    }
+
+    /**
+     * Strip invisible Unicode watermark/fingerprinting characters from content.
+     * NovelDex wraps chapter text with zero-width characters for tracking.
+     */
+    private fun stripWatermark(text: String): String = text
+        .replace(Regex("[\uFEFF\u200B\u200C\u200D\u200E\u200F\u034F\u2060-\u2064\u2069\uFFFE]+"), "")
+        .trim()
+
+    /**
+     * Try to extract chapter content from __NEXT_DATA__ JSON (Pages Router).
+     */
+    private fun extractContentFromNextData(jsonStr: String): String? {
+        return try {
+            val root = json.parseToJsonElement(jsonStr).jsonObject
+            val props = root["props"]?.jsonObject?.get("pageProps")?.jsonObject ?: return null
+            for (key in listOf("content", "chapterContent", "body", "text", "html")) {
+                props[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.length > 50 }?.let { return it }
+            }
+            val chapter = props["chapter"]?.jsonObject
+            if (chapter != null) {
+                for (key in listOf("content", "body", "text", "html")) {
+                    chapter[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.length > 50 }?.let { return it }
+                }
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    // ======================== Preferences ========================
+
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        SwitchPreferenceCompat(screen.context).apply {
+            key = SHOW_LOCKED_PREF_KEY
+            title = "Show locked chapters"
+            summary = "When disabled, chapters that require coins to unlock will be hidden from the chapter list."
+            setDefaultValue(true)
+        }.also(screen::addPreference)
+    }
+
+    companion object {
+        private const val SHOW_LOCKED_PREF_KEY = "show_locked_chapters"
     }
 
     // ======================== Filters ========================
