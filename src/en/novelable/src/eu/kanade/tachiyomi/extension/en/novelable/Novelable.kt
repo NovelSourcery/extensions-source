@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.novelable
+﻿package eu.kanade.tachiyomi.extension.en.novelable
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
@@ -25,7 +25,6 @@ class Novelable :
     override val isNovelSource = true
 
     override val client = network.cloudflareClient
-
     // ======================== Popular ========================
 
     override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/top/popular?page=$page", headers)
@@ -33,17 +32,14 @@ class Novelable :
     override fun popularMangaParse(response: Response): MangasPage {
         val document = Jsoup.parse(response.body.string())
         val novels = parseSearchResults(document)
-        // Check for next page using paginator
         val hasNextPage = document.selectFirst("div.paginator a.link:not(.active)") != null
         return MangasPage(novels.mangas, hasNextPage)
     }
-
     // ======================== Latest ========================
 
     override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/latest?page=$page", headers)
 
     override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
-
     // ======================== Search ========================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
@@ -51,7 +47,6 @@ class Novelable :
             return GET("$baseUrl/search?query=${java.net.URLEncoder.encode(query, "UTF-8")}&page=$page", headers)
         }
 
-        // Build URL with filters
         val url = StringBuilder(baseUrl)
 
         filters.forEach { filter ->
@@ -78,7 +73,6 @@ class Novelable :
     }
 
     override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
-
     // ======================== Details ========================
 
     override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
@@ -93,14 +87,12 @@ class Novelable :
             title = document.selectFirst("h1.novel-title, .novel-header h1")?.text()
                 ?: document.selectFirst("meta[property=og:title]")?.attr("content")
                 ?: ""
-            // remove | Novelable suffix
             title = title.substringBefore(" | Novelable").trim()
 
             // Cover image
             thumbnail_url = document.selectFirst(".novel-cover img, .cover img")?.absUrl("src")
                 ?: document.selectFirst("meta[property=og:image]")?.attr("content")
 
-            // Parse from div.meta.box structure
             val metaBox = document.selectFirst("div.meta.box, div.meta")
 
             // Author from meta box
@@ -133,7 +125,6 @@ class Novelable :
             }
         }
     }
-
     // ======================== Chapters ========================
 
     override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
@@ -141,7 +132,6 @@ class Novelable :
     override fun chapterListParse(response: Response): List<SChapter> {
         val document = Jsoup.parse(response.body.string())
 
-        // Try to find book ID (UUID format) from various sources
         var bookId: String? = null
 
         // 1. From inline script: var bookId = "6b5d37da-798a-4d10-8917-c877529473d5"
@@ -176,7 +166,6 @@ class Novelable :
             bookId = extractBookIdFromScript(document)
         }
 
-        // If we have a valid UUID book ID, fetch chapters from API
         if (!bookId.isNullOrEmpty() && bookId!!.matches(Regex("[a-f0-9-]{36}"))) {
             try {
                 val chaptersRequest = GET("$baseUrl/api/book/$bookId/chapters", headers)
@@ -190,16 +179,13 @@ class Novelable :
                     }
                 }
             } catch (_: Exception) {
-                // Fall through to HTML parsing
             }
         }
 
-        // Fallback to parsing from page HTML
         return parseChapterList(document)
     }
 
     private fun parseChapterList(document: Document): List<SChapter> {
-        // Parse chapter list from ul.chapter-list or #chapter-list
         return document.select("ul.chapter-list li, #chapter-list li, .chapter-list li").mapNotNull { element ->
             val link = element.selectFirst("a") ?: return@mapNotNull null
 
@@ -211,25 +197,20 @@ class Novelable :
                     ?: link.attr("title").takeIf { it.isNotEmpty() }
                     ?: link.text()
 
-                // Parse date from time element
                 date_upload = element.selectFirst("time.chapter-update, time")?.text()?.let {
                     parseRelativeDate(it)
                 } ?: 0L
 
-                // Try to extract chapter number from li id
                 chapter_number = element.attr("id").toFloatOrNull()
                     ?: extractChapterNumber(name)
             }
         }
-        // No need to reverse - chapters are already in correct order (1, 2, 3...)
     }
-
     // ======================== Pages ========================
 
     override fun pageListRequest(chapter: SChapter): Request = GET(baseUrl + chapter.url, headers)
 
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
-
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
@@ -239,18 +220,15 @@ class Novelable :
 
         val content = StringBuilder()
 
-        // Parse chapter title - check specific selectors first
         document.selectFirst("h2.text-center, h3.text-center, .chapter__content h2, h2, .chapter-title")?.let { title ->
             content.append("<h2>${title.text()}</h2>\n")
         }
 
-        // Parse chapter content from div.chapter__content .content-inner (as shown in MD)
         val contentDiv = document.selectFirst(
             ".chapter__content .content-inner, .chapter__content, #chapter__content .content-inner, #chapter__content, .chapter-content, .reading-content",
         )
 
         contentDiv?.let { div ->
-            // First, try to parse all <p> elements directly
             val paragraphs = div.select("p")
             if (paragraphs.isNotEmpty()) {
                 paragraphs.forEach { p ->
@@ -260,7 +238,6 @@ class Novelable :
                     }
                 }
             } else {
-                // Fallback: parse child elements
                 div.children().forEach { element ->
                     when (element.tagName()) {
                         "p" -> {
@@ -282,7 +259,6 @@ class Novelable :
                         }
 
                         "div" -> {
-                            // Skip ad divs and script containers
                             if (!element.hasClass("adsbygoogle") && !element.attr("id").contains("ad", ignoreCase = true) &&
                                 !element.attr("id").startsWith("pf-")
                             ) {
@@ -304,7 +280,6 @@ class Novelable :
     }
 
     override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
-
     // ======================== Filters ========================
 
     override fun getFilterList(): FilterList = FilterList(
@@ -391,7 +366,6 @@ class Novelable :
         "yaoi",
         "yuri",
     )
-
     // ======================== Helpers ========================
 
     private fun parseSearchResults(document: Document): MangasPage {
@@ -425,11 +399,9 @@ class Novelable :
     }
 
     private fun extractBookIdFromScript(document: Document): String? {
-        // Try to extract book ID from inline scripts
         val scripts = document.select("script:not([src])")
         for (script in scripts) {
             val content = script.data()
-            // Look for patterns like book_id: "xxx" or bookId = "xxx"
             val idPattern = Regex("""(?:book_?id|novel_?id)[\s:=]+["']?([a-f0-9-]+)["']?""", RegexOption.IGNORE_CASE)
             idPattern.find(content)?.groupValues?.getOrNull(1)?.let {
                 return it
@@ -480,7 +452,6 @@ class Novelable :
     }
 
     private fun extractChapterNumber(name: String): Float {
-        // Try to extract chapter number from name
         val patterns = listOf(
             Regex("""chapter\s*(\d+(?:\.\d+)?)""", RegexOption.IGNORE_CASE),
             Regex("""ch\.?\s*(\d+(?:\.\d+)?)""", RegexOption.IGNORE_CASE),

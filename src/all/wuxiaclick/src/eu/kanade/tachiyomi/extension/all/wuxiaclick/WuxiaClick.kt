@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.all.wuxiaclick
+﻿package eu.kanade.tachiyomi.extension.all.wuxiaclick
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
@@ -194,7 +194,7 @@ class WuxiaClick :
                 chapter_number = chapter.index.toFloat()
                 date_upload = parseChapterDate(chapter.timeAdded)
             }
-        } // API returns ascending (ch1, ch2...), Mihon expects descending (newest first)
+        }.reversed()
     }
 
     // ======================== Pages ========================
@@ -215,10 +215,8 @@ class WuxiaClick :
 
         val content = StringBuilder()
 
-        // Add title
         content.append("<h2>${chapter.title}</h2>\n")
 
-        // Process text content
         val text = chapter.text
 
         // Split by lines and wrap in paragraphs
@@ -371,11 +369,9 @@ class WuxiaClick :
         @SerialName("other_names") val otherNames: JsonElement? = null, // Can be array or empty object
         @SerialName("numOfChaps") val numOfChaps: Int? = null,
     ) {
-        // Helper to get other names as list regardless of JSON type
         fun getOtherNamesList(): List<String> = try {
             otherNames?.jsonArray?.mapNotNull { it.jsonPrimitive.content } ?: emptyList()
         } catch (e: Exception) {
-            // If it's not an array (e.g., empty object {}), return empty list
             emptyList()
         }
     }

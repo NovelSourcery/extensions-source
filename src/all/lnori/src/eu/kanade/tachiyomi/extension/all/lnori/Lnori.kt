@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.all.lnori
+﻿package eu.kanade.tachiyomi.extension.all.lnori
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
@@ -11,10 +11,18 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
-import org.jsoup.nodes.Element
+import org.jsoup.nodes.Document
 import uy.kohesive.injekt.injectLazy
 
 class Lnori :
@@ -22,7 +30,7 @@ class Lnori :
     NovelSource {
 
     override val name = "Lnori"
-    override val baseUrl = "https://lnori.qzz.io"
+    override val baseUrl = "https://lnori.com"
     override val lang = "all"
     override val supportsLatest = true
     override val isNovelSource = true
@@ -31,7 +39,6 @@ class Lnori :
 
     private val json: Json by injectLazy()
 
-    // Cache for all novels loaded from homepage
     private var cachedNovels: List<NovelData>? = null
     private var cacheTimestamp: Long = 0
     private val cacheLifetime = 10 * 60 * 1000 // 10 minutes
@@ -42,7 +49,7 @@ class Lnori :
         val title: String,
         val author: String,
         val tags: List<String>,
-        val rel: Int, // Relevance/release order
+        val rel: Int,
         val date: String,
         val volumes: Int,
         val url: String,
@@ -50,11 +57,15 @@ class Lnori :
         val description: String,
     )
 
-    @Serializable
-    data class ChapterInfo(
-        val name: String,
-        val url: String,
-    )
+    // ======================== Helper: Resolve Image URL ========================
+
+    private fun resolveImageUrl(url: String): String = when {
+        url.isBlank() -> ""
+        url.startsWith("http") -> url
+        url.startsWith("//") -> "https:$url"
+        url.startsWith("/") -> "$baseUrl$url"
+        else -> "$baseUrl/$url"
+    }
 
     // ======================== Load All Data ========================
 
@@ -65,62 +76,247 @@ class Lnori :
         }
 
         val response = client.newCall(GET(baseUrl, headers)).execute()
-        val document = Jsoup.parse(response.body.string())
+        val html = response.body.string()
+        val document = Jsoup.parse(html)
 
-        val novels = document.select("article.card").mapNotNull { card ->
-            parseCardToNovelData(card)
-        }
+        // Strategy 1: __NEXT_DATA__ / embedded JSON script with book array
+        val novels = parseFromJsonScript(html, document)
+            .ifEmpty { parseFromArticleElements(document) }
+            .ifEmpty { parseFromLinksAndTitles(document) }
 
         cachedNovels = novels
         cacheTimestamp = currentTime
         return novels
     }
 
-    private fun parseCardToNovelData(card: Element): NovelData? {
-        val id = card.attr("data-id").ifEmpty { return null }
-        val title = card.attr("data-t").ifEmpty { return null }
-        val author = card.attr("data-a")
-        val tags = card.attr("data-tags").split(",").filter { it.isNotEmpty() }
-        val rel = card.attr("data-rel").toIntOrNull() ?: 0
-        val date = card.attr("data-d")
-        val volumes = card.attr("data-v").toIntOrNull() ?: 1
+    /** Try to extract novels from embedded JSON (__NEXT_DATA__ or similar window.* scripts) */
+    private fun parseFromJsonScript(html: String, document: Document): List<NovelData> {
+        val novels = mutableListOf<NovelData>()
 
-        val link = card.selectFirst("a")?.attr("href") ?: "/$id/"
-        // Cover URL: try data-src (lazy load), srcset, or src; also handle relative URLs
-        val imgElement = card.selectFirst("img")
-        val coverUrl = imgElement?.let { img ->
-            img.attr("data-src").ifEmpty { null }
-                ?: img.attr("srcset").split(",").firstOrNull()?.trim()?.split(" ")?.firstOrNull()
-                ?: img.attr("src").ifEmpty { null }
-        }?.let { url ->
-            when {
-                url.startsWith("http") -> url
-                url.startsWith("//") -> "https:$url"
-                url.startsWith("/") -> "https://img.lnori.qzz.io${url.removePrefix("/image")}"
-                else -> "https://img.lnori.qzz.io/$url"
+        // Try __NEXT_DATA__ (Next.js)
+        val nextDataScript = document.selectFirst("script#__NEXT_DATA__")
+        if (nextDataScript != null) {
+            try {
+                val root = json.parseToJsonElement(nextDataScript.html()).jsonObject
+                // Walk down props.pageProps to find an array of novels
+                val pageProps = root["props"]?.jsonObject?.get("pageProps")?.jsonObject
+                // Try common keys
+                for (key in listOf("novels", "books", "series", "items", "data", "posts")) {
+                    val arr = pageProps?.get(key)?.jsonArray
+                    if (arr != null && arr.isNotEmpty()) {
+                        arr.forEach { elem ->
+                            parseJsonNovelItem(elem.jsonObject)?.let { novels.add(it) }
+                        }
+                        if (novels.isNotEmpty()) return novels
+                    }
+                }
+                // Deep search for any array with slug/title fields
+                val found = findNovelArrayInJson(root)
+                if (found.isNotEmpty()) return found
+            } catch (_: Exception) {}
+        }
+
+        // Try window.__DATA__ = {...}  or  window.__NOVELS__ = [...]
+        val scriptBodies = document.select("script:not([src])").map { it.html() }
+        for (scriptBody in scriptBodies) {
+            val jsonMatch = Regex("""window\.__(?:DATA|NOVELS|BOOKS|SERIES|APP_DATA)__\s*=\s*(\{[\s\S]*?\});?\s*\n""")
+                .find(scriptBody)
+                ?: Regex("""window\.__(?:DATA|NOVELS|BOOKS|SERIES|APP_DATA)__\s*=\s*(\[[\s\S]*?\]);?\s*\n""")
+                    .find(scriptBody)
+            if (jsonMatch != null) {
+                try {
+                    val root = json.parseToJsonElement(jsonMatch.groupValues[1])
+                    val found = findNovelArrayInJson(root)
+                    if (found.isNotEmpty()) return found
+                } catch (_: Exception) {}
             }
-        } ?: ""
-        val description = card.selectFirst("p.card-description")?.text() ?: ""
 
+            // Try JSON-LD with @type Book/CreativeWorkSeries
+            if (scriptBody.contains("\"@type\"") && (scriptBody.contains("Book") || scriptBody.contains("Novel"))) {
+                try {
+                    val root = json.parseToJsonElement(scriptBody.trim())
+                    val arr = when {
+                        root.jsonObject.containsKey("@graph") -> root.jsonObject["@graph"]!!.jsonArray
+                        root is JsonArray -> root.jsonArray
+                        else -> null
+                    }
+                    arr?.forEach { elem ->
+                        parseJsonLdItem(elem.jsonObject)?.let { novels.add(it) }
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+
+        return novels
+    }
+
+    private fun findNovelArrayInJson(element: JsonElement): List<NovelData> {
+        val novels = mutableListOf<NovelData>()
+        try {
+            when {
+                element is JsonArray -> {
+                    if (element.size > 0) {
+                        val first = element[0].jsonObject
+                        if (first.containsKey("title") || first.containsKey("slug") || first.containsKey("name")) {
+                            element.forEach { parseJsonNovelItem(it.jsonObject)?.let { n -> novels.add(n) } }
+                            if (novels.isNotEmpty()) return novels
+                        }
+                    }
+                    // recurse
+                    for (e in element) {
+                        val found = findNovelArrayInJson(e)
+                        if (found.isNotEmpty()) return found
+                    }
+                }
+
+                element is JsonObject -> {
+                    for ((_, v) in element) {
+                        val found = findNovelArrayInJson(v)
+                        if (found.isNotEmpty()) return found
+                    }
+                }
+
+                else -> {}
+            }
+        } catch (_: Exception) {}
+        return novels
+    }
+
+    private fun parseJsonNovelItem(obj: JsonObject): NovelData? {
+        val id = obj["id"]?.jsonPrimitive?.contentOrNull
+            ?: obj["slug"]?.jsonPrimitive?.contentOrNull
+            ?: return null
+        val title = obj["title"]?.jsonPrimitive?.contentOrNull
+            ?: obj["name"]?.jsonPrimitive?.contentOrNull
+            ?: return null
+        val author = obj["author"]?.jsonPrimitive?.contentOrNull ?: ""
+        val tagsRaw = try {
+            obj["tags"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val slug = obj["slug"]?.jsonPrimitive?.contentOrNull ?: id
+        val cover = obj["coverImage"]?.jsonPrimitive?.contentOrNull
+            ?: obj["cover"]?.jsonPrimitive?.contentOrNull ?: ""
+        val volumes = obj["volumeCount"]?.jsonPrimitive?.intOrNull
+            ?: obj["volumes"]?.jsonPrimitive?.intOrNull ?: 1
+        val date = obj["updatedAt"]?.jsonPrimitive?.contentOrNull
+            ?: obj["publishedAt"]?.jsonPrimitive?.contentOrNull ?: ""
+        val desc = obj["description"]?.jsonPrimitive?.contentOrNull ?: ""
         return NovelData(
-            id = id,
-            title = title,
-            author = author,
-            tags = tags,
-            rel = rel,
-            date = date,
-            volumes = volumes,
-            url = link,
-            coverUrl = coverUrl,
-            description = description,
+            id = id, title = title, author = author, tags = tagsRaw,
+            rel = 0, date = date, volumes = volumes,
+            url = "/$slug/", coverUrl = resolveImageUrl(cover), description = desc,
         )
     }
 
-    private fun novelDataToSManga(novel: NovelData): SManga = SManga.create().apply {
-        url = novel.url.let { if (it.startsWith("/")) it else "/$it" }
-        title = novel.title.split(" ").joinToString(" ") {
-            it.replaceFirstChar { c -> c.uppercaseChar() }
+    private fun parseJsonLdItem(obj: JsonObject): NovelData? {
+        val type = obj["@type"]?.jsonPrimitive?.contentOrNull ?: return null
+        if (!type.contains("Book") && !type.contains("Novel") && !type.contains("Series")) return null
+        val title = obj["name"]?.jsonPrimitive?.contentOrNull ?: return null
+        val url = obj["url"]?.jsonPrimitive?.contentOrNull ?: return null
+        val author = try {
+            obj["author"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull ?: ""
+        } catch (_: Exception) {
+            ""
         }
+        val cover = try {
+            obj["image"]?.jsonPrimitive?.contentOrNull ?: ""
+        } catch (_: Exception) {
+            ""
+        }
+        val desc = obj["description"]?.jsonPrimitive?.contentOrNull ?: ""
+        val slug = url.trimEnd('/').substringAfterLast('/')
+        return NovelData(
+            id = slug, title = title, author = author, tags = emptyList(),
+            rel = 0, date = "", volumes = 1,
+            url = url.removePrefix(baseUrl).ifEmpty { "/$slug/" },
+            coverUrl = resolveImageUrl(cover), description = desc,
+        )
+    }
+
+    /** Try article elements with data-* attributes or generic article/card structure */
+    private fun parseFromArticleElements(document: Document): List<NovelData> {
+        // Prefer elements with data-id; fall back to any article
+        val cards = document.select("[data-id]").ifEmpty {
+            document.select("article, .card, .book-item, .novel-item, li.item")
+        }
+        return cards.mapNotNull { card ->
+            // ID: prefer data-id, otherwise derive from URL
+            val dataId = card.attr("data-id")
+            val link = card.selectFirst("a[href]")
+            val href = link?.attr("href") ?: ""
+
+            val id = dataId.ifEmpty {
+                // derive from href: /series/3336/slug → "3336-slug" or last path segment
+                href.trimEnd('/').split("/").filter { it.isNotEmpty() }.takeLast(2)
+                    .joinToString("-").ifEmpty { return@mapNotNull null }
+            }
+
+            val title = card.attr("data-t").ifEmpty {
+                card.selectFirst("h3, h2, h4, [class*=title], [class*=name]")?.text()?.trim()
+                    ?: link?.text()?.trim()?.takeIf { it.length > 2 }
+                    ?: return@mapNotNull null
+            }
+
+            val author = card.attr("data-a").ifEmpty {
+                card.selectFirst("[class*=author], .author")?.text()?.trim() ?: ""
+            }
+            val tagsRaw = card.attr("data-tags").ifEmpty { card.attr("data-tag") }
+            val tags = tagsRaw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            val rel = card.attr("data-rel").toIntOrNull() ?: 0
+            val date = card.attr("data-d").ifEmpty { card.attr("data-date") }
+            val volumes = card.attr("data-v").toIntOrNull() ?: 1
+            val cardUrl = href.ifEmpty { "/$id/" }
+            val imgEl = card.selectFirst("img")
+            val cover = imgEl?.let { img ->
+                img.attr("data-src").ifEmpty { null }
+                    ?: img.attr("srcset").split(",").firstOrNull()?.trim()?.split(" ")?.firstOrNull()?.takeIf { it.isNotEmpty() }
+                    ?: img.attr("src").ifEmpty { null }
+            }?.let { resolveImageUrl(it) } ?: ""
+            NovelData(
+                id = id, title = title, author = author, tags = tags,
+                rel = rel, date = date, volumes = volumes,
+                url = if (cardUrl.startsWith("/")) cardUrl else "/$cardUrl",
+                coverUrl = cover,
+                description = card.selectFirst("[class*=desc], [class*=synopsis]")?.text() ?: "",
+            )
+        }
+    }
+
+    /** Last resort: extract from any card-like links with titles */
+    private fun parseFromLinksAndTitles(document: Document): List<NovelData> {
+        return document.select("article a[href], .card a[href], .book-item a[href], a[href*='/series/']")
+            .distinctBy { it.attr("href") }
+            .mapNotNull { link ->
+                val href = link.attr("href").takeIf { it.contains("/") } ?: return@mapNotNull null
+                val title = link.selectFirst("h3, h2, h4, [class*=title]")?.text()?.trim()
+                    ?: link.attr("title").trim().takeIf { it.length > 2 }
+                    ?: link.text().trim().takeIf { it.length > 3 }
+                    ?: return@mapNotNull null
+                // Extract ID from href: /series/3336/slug → "3336-slug"
+                val pathParts = href.trimEnd('/').split("/").filter { it.isNotEmpty() }
+                val slug = pathParts.takeLast(2).joinToString("-").ifEmpty { href.trimEnd('/').substringAfterLast('/') }
+                val img = link.selectFirst("img")
+                val cover = img?.attr("src")?.ifEmpty { img.attr("data-src") }?.let { resolveImageUrl(it) } ?: ""
+                NovelData(
+                    id = slug, title = title, author = "", tags = emptyList(),
+                    rel = 0, date = "", volumes = 1,
+                    url = if (href.startsWith("/")) href else "/$href",
+                    coverUrl = cover, description = "",
+                )
+            }
+    }
+
+    private fun novelDataToSManga(novel: NovelData): SManga = SManga.create().apply {
+        url = novel.url.let {
+            when {
+                it.startsWith("http") -> it.removePrefix(baseUrl)
+                it.startsWith("/") -> it
+                else -> "/$it"
+            }
+        }
+        title = novel.title
         thumbnail_url = novel.coverUrl
         author = novel.author
         genre = novel.tags.joinToString(", ")
@@ -133,10 +329,9 @@ class Lnori :
 
     override fun popularMangaParse(response: Response): MangasPage {
         val novels = loadAllNovels()
-        // Sort by relevance (rel) - higher is more popular
         val sorted = novels.sortedByDescending { it.rel }
         val mangas = sorted.map { novelDataToSManga(it) }
-        return MangasPage(mangas, false) // All loaded at once, no pagination
+        return MangasPage(mangas, false)
     }
 
     // ======================== Latest ========================
@@ -145,7 +340,6 @@ class Lnori :
 
     override fun latestUpdatesParse(response: Response): MangasPage {
         val novels = loadAllNovels()
-        // Sort by date (newest first)
         val sorted = novels.sortedByDescending { it.date }
         val mangas = sorted.map { novelDataToSManga(it) }
         return MangasPage(mangas, false)
@@ -155,25 +349,20 @@ class Lnori :
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = GET(baseUrl, headers)
 
-    override fun searchMangaParse(response: Response): MangasPage {
-        // This will be overridden by fetchSearchManga
-        return MangasPage(emptyList(), false)
-    }
+    override fun searchMangaParse(response: Response): MangasPage = MangasPage(emptyList(), false)
 
     override fun fetchSearchManga(page: Int, query: String, filters: FilterList): rx.Observable<MangasPage> = rx.Observable.fromCallable {
         var novels = loadAllNovels()
 
-        // Apply search query
         if (query.isNotBlank()) {
             val queryLower = query.lowercase()
             novels = novels.filter { novel ->
-                novel.title.contains(queryLower) ||
+                novel.title.lowercase().contains(queryLower) ||
                     novel.author.lowercase().contains(queryLower) ||
                     novel.description.lowercase().contains(queryLower)
             }
         }
 
-        // Apply filters
         filters.forEach { filter ->
             when (filter) {
                 is TagFilter -> {
@@ -181,7 +370,6 @@ class Lnori :
                         val tags = filter.state.split(",")
                             .map { it.trim().lowercase() }
                             .filter { it.isNotEmpty() }
-
                         novels = novels.filter { novel ->
                             val novelTags = novel.tags.map { it.lowercase() }
                             tags.all { tag -> novelTags.any { it.contains(tag) } }
@@ -207,7 +395,7 @@ class Lnori :
                     novels = when (filter.state) {
                         0 -> novels.sortedByDescending { it.rel }
 
-                        // Popularity
+                        // Popular
                         1 -> novels.sortedByDescending { it.date }
 
                         // Newest
@@ -231,100 +419,194 @@ class Lnori :
             }
         }
 
-        val mangas = novels.map { novelDataToSManga(it) }
-        MangasPage(mangas, false)
+        MangasPage(novels.map { novelDataToSManga(it) }, false)
     }
 
     // ======================== Details ========================
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+    override fun mangaDetailsRequest(manga: SManga): Request {
+        val url = if (manga.url.startsWith("http")) manga.url else baseUrl + manga.url
+        return GET(url, headers)
+    }
 
     override fun mangaDetailsParse(response: Response): SManga {
         val document = Jsoup.parse(response.body.string())
 
         return SManga.create().apply {
-            // Title from h1.s-title
-            title = document.selectFirst("h1.s-title")?.text()?.trim() ?: ""
+            // Title: try multiple selectors
+            title = document.selectFirst(
+                "h1.s-title, h1.series-title, h1[class*=title], h1[class*=series], h1",
+            )?.text()?.trim() ?: ""
 
-            // Author from p.author
-            author = document.selectFirst("p.author")?.text()?.trim()
+            // Author — may be in a <p class="author"> or adjacent to an "Author:" label
+            author = document.selectFirst("p.author, .author, [itemprop='author'], [class*=author]")
+                ?.text()?.trim()
+                ?.removePrefix("Author:")?.trim()
 
-            // Cover from hero section - handle multiple image sources
-            val imgElement = document.selectFirst("figure.cover-wrap img, figure.cover-wrap picture source, picture source, img.cover")
-            thumbnail_url = imgElement?.let { img ->
-                img.attr("srcset").split(",").firstOrNull()?.trim()?.split(" ")?.firstOrNull()
+            // Cover image — Astro sites often use <picture> or <img> with srcset
+            val imgEl = document.selectFirst(
+                "figure.cover-wrap img, figure img, picture img, " +
+                    ".cover img, img[class*=cover], img[alt*=cover i], " +
+                    ".series-cover img, header img",
+            )
+            thumbnail_url = imgEl?.let { img ->
+                img.attr("srcset").split(",").firstOrNull()?.trim()?.split(" ")?.firstOrNull()?.takeIf { it.isNotEmpty() }
                     ?: img.attr("data-src").ifEmpty { null }
                     ?: img.attr("src").ifEmpty { null }
-            }?.let { url ->
-                when {
-                    url.startsWith("http") -> url
-                    url.startsWith("//") -> "https:$url"
-                    url.startsWith("/") -> "https://img.lnori.qzz.io${url.removePrefix("/image")}"
-                    else -> "https://img.lnori.qzz.io/$url"
-                }
+            }?.let { resolveImageUrl(it) }
+
+            // Description — look for synopsis, description, or longest paragraph
+            description = document.selectFirst(
+                "p.description, .series-description, .synopsis, [itemprop='description'], " +
+                    ".desc, .summary, [class*=description], [class*=synopsis]",
+            )?.text()?.trim() ?: run {
+                // Fallback: find paragraph with >80 chars that's likely the description
+                document.select("p").firstOrNull { it.text().length > 80 }?.text()?.trim()
             }
 
-            // Description
-            description = document.selectFirst("p.description")?.text()?.trim()
-
-            // Genres/tags from .tags-box a
-            genre = document.select("nav.tags-box a.tag")
-                .mapNotNull { it.text()?.trim() }
+            // Genres/Tags
+            genre = document.select(
+                "nav.tags-box a.tag, .tags a, .genre-tag, a[class*=tag], " +
+                    "[class*=genre] a, [class*=tag] a",
+            )
+                .map { it.text().trim() }
                 .filter { it.isNotEmpty() }
                 .joinToString(", ")
+                .ifEmpty { null }
 
-            // Status - check volume count or parse page info
-            val volumeCount = document.select("div.vol-grid article.card").size
-            status = if (volumeCount > 0) SManga.UNKNOWN else SManga.UNKNOWN
+            // Status
+            val statusText = document.selectFirst(".status, [data-status], [class*=status]")
+                ?.text()?.lowercase()
+            status = when {
+                statusText == null -> SManga.UNKNOWN
+                statusText.contains("complet") -> SManga.COMPLETED
+                statusText.contains("ongoing") || statusText.contains("publishing") -> SManga.ONGOING
+                statusText.contains("hiatus") -> SManga.ON_HIATUS
+                else -> SManga.UNKNOWN
+            }
         }
     }
 
     // ======================== Chapters (Volumes) ========================
 
-    override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+    override fun chapterListRequest(manga: SManga): Request {
+        val url = if (manga.url.startsWith("http")) manga.url else baseUrl + manga.url
+        return GET(url, headers)
+    }
 
     override fun chapterListParse(response: Response): List<SChapter> {
-        val document = Jsoup.parse(response.body.string())
+        val html = response.body.string()
+        val document = Jsoup.parse(html)
         val chapters = mutableListOf<SChapter>()
 
-        // Get the novel ID from the URL (e.g., /3336/ -> 3336)
-        val novelId = response.request.url.pathSegments.firstOrNull { it.isNotEmpty() } ?: ""
+        // URL format: /series/{novelId}/{slug}  e.g. /series/3336/mushoku-tensei-...
+        val pathSegments = response.request.url.pathSegments.filter { it.isNotEmpty() }
+        val novelId = pathSegments.getOrNull(1) ?: pathSegments.firstOrNull() ?: ""
+        val novelSlug = pathSegments.lastOrNull() ?: novelId
+        val basePath = response.request.url.encodedPath.trimEnd('/')
 
-        // Each volume is treated as a chapter
-        document.select("div.vol-grid article.card").forEachIndexed { index, card ->
-            val link = card.selectFirst("figure a, h3.c-title a") ?: return@forEachIndexed
-            val volumeNum = card.selectFirst("h3.c-title a")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull() ?: (index + 1)
-            val subtitle = card.selectFirst("p.card-sub")?.text()?.trim() ?: ""
+        // STRATEGY 1: Volume/chapter cards — broad selector
+        val cards = document.select(
+            "div.vol-grid article, " +
+                ".volumes-list article, " +
+                ".chapter-list li, " +
+                "article[class*=card], " +
+                "ul.volumes li, " +
+                ".vol-grid > *, " +
+                "[class*=vol-grid] article, " +
+                "[class*=volume] article, " +
+                "[class*=volume] li",
+        )
 
-            // Get the volume/book ID from the link
-            val href = link.attr("href")
-            val bookId = href.replace(Regex("[^0-9]"), "").ifEmpty { null }
+        if (cards.isNotEmpty()) {
+            cards.forEachIndexed { index, card ->
+                val link = card.selectFirst("figure a, h3.c-title a, h3 a, h2 a, a[href]") ?: return@forEachIndexed
+                val href = link.attr("href")
+                if (href.isBlank()) return@forEachIndexed
 
-            chapters.add(
-                SChapter.create().apply {
-                    // Construct proper URL: /novelId/bookId
-                    url = if (bookId != null && novelId.isNotEmpty()) {
-                        "/$novelId/$bookId"
-                    } else {
-                        href.let { h ->
-                            when {
-                                h.startsWith("http") -> h.removePrefix(baseUrl)
-                                h.startsWith("/") -> if (novelId.isNotEmpty() && !h.drop(1).contains("/")) "/$novelId$h" else h
-                                else -> if (novelId.isNotEmpty()) "/$novelId/$h" else "/$h"
-                            }
+                val titleText = card.selectFirst("h3.c-title a, h3 a, .c-title, h3, h2, .card-title")
+                    ?.text()?.trim() ?: link.text().trim()
+
+                val volumeNum = Regex("""(?:vol(?:ume)?\.?\s*|#|v)?\s*(\d+)""", RegexOption.IGNORE_CASE)
+                    .find(titleText)?.groupValues?.get(1)?.toIntOrNull() ?: (index + 1)
+                val subtitle = card.selectFirst("p.card-sub, .subtitle, p.card-description, p")
+                    ?.text()?.trim() ?: ""
+
+                val chapterUrl = when {
+                    href.startsWith("http") -> href.removePrefix(baseUrl)
+                    href.startsWith("/") -> href
+                    else -> "/$href".replace("//", "/")
+                }
+
+                chapters.add(
+                    SChapter.create().apply {
+                        url = chapterUrl
+                        name = if (subtitle.isNotEmpty() && subtitle != titleText) {
+                            "Volume $volumeNum: $subtitle"
+                        } else {
+                            titleText.ifEmpty { "Volume $volumeNum" }
                         }
-                    }
-                    name = if (subtitle.isNotEmpty()) {
-                        "Volume $volumeNum - $subtitle"
-                    } else {
-                        "Volume $volumeNum"
-                    }
-                    chapter_number = volumeNum.toFloat()
-                },
-            )
+                        chapter_number = volumeNum.toFloat()
+                    },
+                )
+            }
         }
 
-        return chapters
+        // STRATEGY 2: Try JSON-LD / embedded JSON with volume data
+        if (chapters.isEmpty()) {
+            val jsonLd = document.selectFirst("script[type='application/ld+json']")
+            if (jsonLd != null) {
+                try {
+                    val obj = json.parseToJsonElement(jsonLd.html().trim()).jsonObject
+                    val hasPart = obj["hasPart"]?.jsonArray ?: obj["bookEdition"]?.jsonArray
+                    hasPart?.forEachIndexed { index, elem ->
+                        try {
+                            val part = elem.jsonObject
+                            val partName = part["name"]?.jsonPrimitive?.contentOrNull ?: "Volume ${index + 1}"
+                            val partUrl = part["url"]?.jsonPrimitive?.contentOrNull
+                                ?.removePrefix(baseUrl) ?: return@forEachIndexed
+                            chapters.add(
+                                SChapter.create().apply {
+                                    url = partUrl
+                                    name = partName
+                                    chapter_number = (index + 1).toFloat()
+                                },
+                            )
+                        } catch (_: Exception) {}
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+
+        // STRATEGY 3: Any link inside the current page that goes deeper
+        if (chapters.isEmpty()) {
+            val seen = mutableSetOf<String>()
+            document.select("a[href]").forEach { link ->
+                val href = link.attr("href")
+                // Match links like /series/3336/mushoku-tensei/1/ or /series/3336/mushoku-tensei/volume-1/
+                if (href.startsWith(basePath + "/") || href.startsWith(basePath.trimEnd('/') + "/")) {
+                    val childPath = if (href.startsWith("/")) href else "/$href"
+                    if (seen.add(childPath)) {
+                        val title = link.text().trim().ifEmpty {
+                            link.attr("title").trim().ifEmpty {
+                                "Volume ${seen.size}"
+                            }
+                        }
+                        val numMatch = Regex("""(\d+)""").findAll(childPath).lastOrNull()
+                        val num = numMatch?.groupValues?.get(1)?.toFloatOrNull() ?: seen.size.toFloat()
+                        chapters.add(
+                            SChapter.create().apply {
+                                url = childPath
+                                name = title
+                                chapter_number = num
+                            },
+                        )
+                    }
+                }
+            }
+        }
+
+        return chapters.distinctBy { it.url }.reversed()
     }
 
     // ======================== Pages ========================
@@ -336,7 +618,7 @@ class Lnori :
 
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
 
-    // ======================== Page Text (Novel) ========================
+    // ======================== Novel Content ========================
 
     override suspend fun fetchPageText(page: Page): String {
         val request = GET(page.url, headers)
@@ -346,12 +628,11 @@ class Lnori :
 
         val content = StringBuilder()
 
-        // Try to get chapter structure from JSON-LD data
+        // Try structured JSON-LD data first
         val jsonLdScript = document.selectFirst("script#app-data[type='application/ld+json']")
         if (jsonLdScript != null) {
             try {
                 val jsonText = jsonLdScript.html()
-                // Parse chapters from hasPart array
                 val chapterMatches = Regex(""""name"\s*:\s*"([^"]+)"\s*,\s*"url"\s*:\s*"([^"]+)"""")
                     .findAll(jsonText)
 
@@ -359,74 +640,57 @@ class Lnori :
                     val chapterName = match.groupValues[1]
                     val pageId = match.groupValues[2].removePrefix("#")
 
-                    // Get corresponding section content
                     val section = document.selectFirst("section.chapter#$pageId") ?: continue
 
-                    // Check if it's an image section
                     val images = section.select("picture img")
                     if (images.isNotEmpty() && section.select("p").isEmpty()) {
-                        // Image-only section
                         images.forEach { img ->
-                            val imgUrl = img.attr("src").let { if (it.startsWith("http")) it else baseUrl + it }
+                            val imgUrl = resolveImageUrl(img.attr("src"))
                             content.append("<img src=\"$imgUrl\" alt=\"$chapterName\">\n")
                         }
                     } else {
-                        // Text content
                         content.append("<h2>$chapterName</h2>\n")
                         section.select("p").forEach { p ->
-                            val text = p.text()?.trim()
-                            if (!text.isNullOrEmpty()) {
-                                content.append("<p>$text</p>\n")
-                            }
+                            val text = p.text().trim()
+                            if (text.isNotEmpty()) content.append("<p>$text</p>\n")
                         }
-                        // Also include any inline images
                         section.select("picture img").forEach { img ->
-                            val imgUrl = img.attr("src").let { if (it.startsWith("http")) it else baseUrl + it }
+                            val imgUrl = resolveImageUrl(img.attr("src"))
                             content.append("<img src=\"$imgUrl\">\n")
                         }
                     }
                     content.append("\n<hr>\n\n")
                 }
-            } catch (e: Exception) {
-                // Fallback to simple parsing
-            }
+            } catch (_: Exception) { }
         }
 
-        // Fallback: parse all sections directly
+        // Fallback: iterate sections directly
         if (content.isEmpty()) {
-            document.select("section.chapter").forEach { section ->
-                val title = section.selectFirst("h2.chapter-title")?.text()?.trim()
-                if (title != null) {
-                    content.append("<h2>$title</h2>\n")
+            document.select("section.chapter, .chapter-section, article.chapter").forEach { section ->
+                val chTitle = section.selectFirst("h2.chapter-title, h2, h3")?.text()?.trim()
+                if (!chTitle.isNullOrEmpty()) content.append("<h2>$chTitle</h2>\n")
+
+                section.select("picture img, img.chapter-img").forEach { img ->
+                    val imgUrl = resolveImageUrl(img.attr("src").ifEmpty { img.attr("data-src") })
+                    if (imgUrl.isNotEmpty()) content.append("<img src=\"$imgUrl\">\n")
                 }
 
-                // Get images
-                section.select("picture img").forEach { img ->
-                    val imgUrl = img.attr("src").let { if (it.startsWith("http")) it else baseUrl + it }
-                    content.append("<img src=\"$imgUrl\">\n")
-                }
-
-                // Get text
                 section.select("p").forEach { p ->
-                    val text = p.text()?.trim()
-                    if (!text.isNullOrEmpty()) {
-                        content.append("<p>$text</p>\n")
-                    }
+                    val text = p.text().trim()
+                    if (text.isNotEmpty()) content.append("<p>$text</p>\n")
                 }
-
                 content.append("\n")
             }
         }
 
-        // Final fallback: get main content
+        // Final fallback: main content area
         if (content.isEmpty()) {
-            val mainContent = document.selectFirst("main#main-content, main")
-            mainContent?.select("p")?.forEach { p ->
-                val text = p.text()?.trim()
-                if (!text.isNullOrEmpty()) {
-                    content.append("<p>$text</p>\n")
+            document.selectFirst("main#main-content, main, .reader-content, .content")
+                ?.select("p")
+                ?.forEach { p ->
+                    val text = p.text().trim()
+                    if (text.isNotEmpty()) content.append("<p>$text</p>\n")
                 }
-            }
         }
 
         return content.toString()
@@ -437,7 +701,7 @@ class Lnori :
     // ======================== Filters ========================
 
     override fun getFilterList(): FilterList = FilterList(
-        Filter.Header("Local filters - data loaded from homepage"),
+        Filter.Header("Search is performed locally from homepage data"),
         Filter.Separator(),
         TagFilter("Tags (comma separated)"),
         AuthorFilter("Author"),

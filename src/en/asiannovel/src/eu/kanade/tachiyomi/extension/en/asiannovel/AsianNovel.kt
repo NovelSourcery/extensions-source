@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.asiannovel
+﻿package eu.kanade.tachiyomi.extension.en.asiannovel
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
@@ -31,7 +31,6 @@ class AsianNovel :
     private val json: Json by injectLazy()
 
     override val client = network.cloudflareClient
-
     // ======================== Popular ========================
 
     override fun popularMangaRequest(page: Int): Request {
@@ -43,7 +42,6 @@ class AsianNovel :
         val document = Jsoup.parse(response.body.string())
         return parseSearchResults(document)
     }
-
     // ======================== Latest ========================
 
     override fun latestUpdatesRequest(page: Int): Request {
@@ -52,7 +50,6 @@ class AsianNovel :
     }
 
     override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
-
     // ======================== Search ========================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
@@ -67,7 +64,6 @@ class AsianNovel :
         url.append("s=${java.net.URLEncoder.encode(query, "UTF-8")}")
         url.append("&post_type=fcn_story") // Search only stories
 
-        // Process filters
         var sortBy = "modified"
         var sortOrder = "desc"
         val genres = mutableListOf<Int>()
@@ -146,28 +142,24 @@ class AsianNovel :
 
         url.append("&orderby=$sortBy&order=$sortOrder")
 
-        // Add genres
         if (genres.isNotEmpty()) {
             url.append("&genres=${genres.joinToString(",")}")
         } else {
             url.append("&genres=")
         }
 
-        // Add tags
         if (tags.isNotEmpty()) {
             url.append("&tags=${tags.joinToString(",")}")
         } else {
             url.append("&tags=")
         }
 
-        // Add excluded genres
         if (excludeGenres.isNotEmpty()) {
             url.append("&ex_genres=${excludeGenres.joinToString(",")}")
         } else {
             url.append("&ex_genres=")
         }
 
-        // Add excluded tags
         if (excludeTags.isNotEmpty()) {
             url.append("&ex_tags=${excludeTags.joinToString(",")}")
         } else {
@@ -178,7 +170,6 @@ class AsianNovel :
     }
 
     override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
-
     // ======================== Details ========================
 
     override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
@@ -186,7 +177,6 @@ class AsianNovel :
     override fun mangaDetailsParse(response: Response): SManga {
         val document = Jsoup.parse(response.body.string())
 
-        // Try to parse from JSON-LD first
         val jsonLd = document.selectFirst("script[type=application/ld+json]:contains(Book)")?.data()
         if (jsonLd != null) {
             try {
@@ -203,7 +193,6 @@ class AsianNovel :
             } catch (_: Exception) {}
         }
 
-        // Fallback to HTML parsing
         return SManga.create().apply {
             url = response.request.url.encodedPath
 
@@ -229,7 +218,6 @@ class AsianNovel :
             }
         }
     }
-
     // ======================== Chapters ========================
 
     override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
@@ -237,13 +225,11 @@ class AsianNovel :
     override fun chapterListParse(response: Response): List<SChapter> {
         val document = Jsoup.parse(response.body.string())
 
-        // Try to parse from JSON-LD first for chapter URLs
         val jsonLd = document.selectFirst("script[type=application/ld+json]:contains(ItemList)")?.data()
         val chapterUrls = mutableListOf<String>()
 
         if (jsonLd != null) {
             try {
-                // Extract chapter URLs from ItemList
                 val urlPattern = Regex(""""url":\s*"([^"]+/chapter/[^"]+)"""")
                 urlPattern.findAll(jsonLd).forEach { match ->
                     match.groupValues.getOrNull(1)?.let { chapterUrls.add(it) }
@@ -251,7 +237,6 @@ class AsianNovel :
             } catch (_: Exception) {}
         }
 
-        // Parse chapters from HTML
         val chapters = document.select(".chapter-group__list-item a").mapNotNull { element ->
             val href = element.attr("href")
             if (href.isBlank() || !href.contains("/chapter/")) return@mapNotNull null
@@ -260,7 +245,6 @@ class AsianNovel :
                 url = java.net.URL(href).path
                 name = element.text().trim()
 
-                // Parse date
                 val dateText = element.parent()?.selectFirst("time")?.text() ?: ""
                 date_upload = parseDateString(dateText)
             }
@@ -268,13 +252,11 @@ class AsianNovel :
 
         return chapters
     }
-
     // ======================== Pages ========================
 
     override fun pageListRequest(chapter: SChapter): Request = GET(baseUrl + chapter.url, headers)
 
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
-
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
@@ -284,15 +266,12 @@ class AsianNovel :
 
         val content = StringBuilder()
 
-        // Parse chapter content
         val contentSection = document.selectFirst("#chapter-content, .chapter__content")
 
         contentSection?.let { section ->
-            // Get the content wrapper with actual text
             val wrapper = section.selectFirst(".resize-font, .chapter-formatting") ?: section
 
             wrapper.children().forEach { element ->
-                // Skip ad elements
                 if (element.hasClass("adsbygoogle") || element.attr("id").contains("ad", ignoreCase = true) ||
                     element.tagName() == "script" ||
                     element.tagName() == "ins"
@@ -326,7 +305,6 @@ class AsianNovel :
     }
 
     override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
-
     // ======================== Filters ========================
 
     override fun getFilterList(): FilterList = FilterList(
@@ -461,7 +439,6 @@ class AsianNovel :
         Pair("Yuri", 808),
     )
 
-    // Sample of commonly used tags - full list would be very long
     private val tagList = listOf(
         Pair("Academy", 41),
         Pair("Alchemy", 63),
@@ -484,7 +461,6 @@ class AsianNovel :
         Pair("Virtual Reality", 780),
         Pair("Weak to Strong", 788),
     )
-
     // ======================== Helpers ========================
 
     private fun parseSearchResults(document: Document): MangasPage {
@@ -513,26 +489,23 @@ class AsianNovel :
         return MangasPage(novels, hasNextPage)
     }
 
-    private fun parseDateString(dateStr: String): Long {
-        // Handle formats like "01/01/2026" or "Jan 1, '26"
-        return try {
-            val cleanDate = dateStr.trim()
-            when {
-                cleanDate.matches(Regex("\\d{2}/\\d{2}/\\d{4}")) -> {
-                    val parts = cleanDate.split("/")
-                    val month = parts[0].toInt()
-                    val day = parts[1].toInt()
-                    val year = parts[2].toInt()
-                    java.util.Calendar.getInstance().apply {
-                        set(year, month - 1, day)
-                    }.timeInMillis
-                }
-
-                else -> 0L
+    private fun parseDateString(dateStr: String): Long = try {
+        val cleanDate = dateStr.trim()
+        when {
+            cleanDate.matches(Regex("\\d{2}/\\d{2}/\\d{4}")) -> {
+                val parts = cleanDate.split("/")
+                val month = parts[0].toInt()
+                val day = parts[1].toInt()
+                val year = parts[2].toInt()
+                java.util.Calendar.getInstance().apply {
+                    set(year, month - 1, day)
+                }.timeInMillis
             }
-        } catch (_: Exception) {
-            0L
+
+            else -> 0L
         }
+    } catch (_: Exception) {
+        0L
     }
 
     // ======================== Data Classes ========================

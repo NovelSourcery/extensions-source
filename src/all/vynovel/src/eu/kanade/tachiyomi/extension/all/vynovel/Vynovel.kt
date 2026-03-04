@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.all.vynovel
+﻿package eu.kanade.tachiyomi.extension.all.vynovel
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
@@ -39,7 +39,6 @@ class Vynovel :
                 url = link.attr("href").removePrefix(baseUrl)
                 title = item.selectFirst("div.comic-title")?.text()?.trim() ?: ""
 
-                // Extract thumbnail from data-background-image or style
                 val coverDiv = item.selectFirst("div.comic-image")
                 thumbnail_url = coverDiv?.attr("data-background-image")
                     ?: coverDiv?.attr("style")?.let { extractBackgroundUrl(it) }
@@ -73,7 +72,6 @@ class Vynovel :
         val includeGenres = mutableListOf<String>()
         val excludeGenres = mutableListOf<String>()
 
-        // Process filters
         filters.forEach { filter ->
             when (filter) {
                 is SearchPositionFilter -> searchPosition = filter.pairValues[filter.state].second
@@ -104,7 +102,6 @@ class Vynovel :
             }
         }
 
-        // Build URL
         url.append("&search_po=$searchPosition")
         url.append("&q=${URLEncoder.encode(query, "UTF-8")}")
         if (searchInDesc) url.append("&check_search_desc=1")
@@ -114,7 +111,6 @@ class Vynovel :
         url.append("&sort=$sort")
         url.append("&sort_type=$sortType")
 
-        // Add genres
         includeGenres.forEach { genre ->
             url.append("&genre[]=${URLEncoder.encode(genre, "UTF-8")}")
         }
@@ -178,7 +174,6 @@ class Vynovel :
             val chapterText = link.selectFirst("span")?.text()?.trim() ?: return@forEach
             val dateText = link.selectFirst("p")?.text()?.trim() ?: ""
 
-            // Extract chapter number from text like "Chapter 1.1"
             val chapterNum = chapterText.replace(Regex("[^0-9.]"), "").toFloatOrNull() ?: chapters.size.toFloat() + 1
 
             chapters.add(
@@ -212,13 +207,11 @@ class Vynovel :
 
         val content = StringBuilder()
 
-        // Get chapter title
         val chapterTitle = document.selectFirst("div.content h3.text-center")?.text()?.trim()
         if (!chapterTitle.isNullOrEmpty()) {
             content.append("<h2>$chapterTitle</h2>\n")
         }
 
-        // Get content from div.content
         val contentDiv = document.selectFirst("div.content.bg-1")
         contentDiv?.select("p")?.forEach { p ->
             val text = p.text()?.trim()

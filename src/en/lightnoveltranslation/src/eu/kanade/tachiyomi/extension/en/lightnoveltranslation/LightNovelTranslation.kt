@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.lightnoveltranslation
+﻿package eu.kanade.tachiyomi.extension.en.lightnoveltranslation
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
@@ -24,7 +24,6 @@ class LightNovelTranslation :
     override val supportsLatest = true
     override val isNovelSource = true
     override val client = network.cloudflareClient
-
     // ======================== Popular ========================
 
     override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/read/page/$page?sortby=most-liked", headers)
@@ -47,22 +46,18 @@ class LightNovelTranslation :
                 null
             }
         }
-        // Check if there's a next page
         val hasNextPage = doc.selectFirst("a.next.page-numbers, a:contains(Next)") != null ||
             mangas.size >= 20
         return MangasPage(mangas, hasNextPage)
     }
-
     // ======================== Latest ========================
 
     override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/read/page/$page?sortby=most-recent", headers)
 
     override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
-
     // ======================== Search ========================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        // Search only works on first page per the site's behavior
         val body = FormBody.Builder()
             .add("field-search", query)
             .build()
@@ -71,10 +66,8 @@ class LightNovelTranslation :
 
     override fun searchMangaParse(response: Response): MangasPage {
         val mangas = popularMangaParse(response).mangas
-        // Search is single-page only (site doesn't support paginated search)
         return MangasPage(mangas, false)
     }
-
     // ======================== Details ========================
 
     override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
@@ -86,7 +79,6 @@ class LightNovelTranslation :
             thumbnail_url = doc.selectFirst("div.novel-image img")?.attr("src")
             title = doc.selectFirst("div.novel_title h3")?.text()?.trim() ?: ""
 
-            // Parse status
             val statusText = doc.selectFirst("div.novel_status")?.text()?.trim() ?: ""
             status = when {
                 statusText.contains("Ongoing", ignoreCase = true) -> SManga.ONGOING
@@ -95,12 +87,10 @@ class LightNovelTranslation :
                 else -> SManga.UNKNOWN
             }
 
-            // Parse author
             author = doc.selectFirst("div.novel_detail_info li")
                 ?.takeIf { it.text().contains("Author", ignoreCase = true) }
                 ?.text()?.substringAfter("Author")?.replace(":", "")?.trim()
 
-            // We need to fetch the description from the non-table-of-contents page
             val descUrl = response.request.url.toString().replace("?tab=table_contents", "")
             try {
                 val descDoc = client.newCall(GET(descUrl, headers)).execute().asJsoup()
@@ -110,7 +100,6 @@ class LightNovelTranslation :
             }
         }
     }
-
     // ======================== Chapters ========================
 
     override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
@@ -130,15 +119,13 @@ class LightNovelTranslation :
             } catch (e: Exception) {
                 null
             }
-        }
+        }.reversed()
     }
-
     // ======================== Pages ========================
 
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
 
     override fun imageUrlParse(response: Response): String = ""
-
     // ======================== Novel Content ========================
 
     override suspend fun fetchPageText(page: Page): String {

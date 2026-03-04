@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.novelhub
+﻿package eu.kanade.tachiyomi.extension.en.novelhub
 
 import android.app.Application
 import android.content.SharedPreferences
@@ -51,7 +51,6 @@ class NovelHub :
     private var genresList: List<Pair<String, String>> = emptyList()
     private var fetchGenresAttempts = 0
     private val scope = CoroutineScope(Dispatchers.IO)
-
     // ======================== Popular ========================
 
     override fun popularMangaRequest(page: Int): Request {
@@ -90,11 +89,9 @@ class NovelHub :
                     },
                 )
             } catch (e: Exception) {
-                // Skip
             }
         }
 
-        // Fallback: General novel links
         if (novels.isEmpty()) {
             doc.select("a[href*=/novel/]").forEach { element ->
                 try {
@@ -116,7 +113,6 @@ class NovelHub :
                         },
                     )
                 } catch (e: Exception) {
-                    // Skip
                 }
             }
         }
@@ -124,7 +120,6 @@ class NovelHub :
         val hasNextPage = doc.selectFirst("a[rel=next], a:contains(Next)") != null
         return MangasPage(novels.distinctBy { it.url }, hasNextPage)
     }
-
     // ======================== Latest ========================
 
     override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/latest?page=$page", headers)
@@ -156,7 +151,6 @@ class NovelHub :
             return GET("$baseUrl/api/search/autocomplete?q=$encodedQuery", headers)
         }
 
-        // Check for genre filter
         filters.forEach { filter ->
             when (filter) {
                 is GenreFilter -> {
@@ -177,7 +171,6 @@ class NovelHub :
     override fun searchMangaParse(response: Response): MangasPage {
         val responseBody = response.body.string()
 
-        // Check if it's JSON response (from API search) or HTML (from genre filter)
         return if (response.request.url.toString().contains("/api/")) {
             val searchResponse = json.decodeFromString<SearchResponse>(responseBody)
             val novels = searchResponse.results.map { result ->
@@ -216,7 +209,6 @@ class NovelHub :
                         },
                     )
                 } catch (e: Exception) {
-                    // Skip
                 }
             }
 
@@ -224,7 +216,6 @@ class NovelHub :
             MangasPage(novels.distinctBy { it.url }, hasNextPage)
         }
     }
-
     // ======================== Details ========================
 
     override fun mangaDetailsParse(response: Response): SManga {
@@ -252,14 +243,12 @@ class NovelHub :
             }
         }
     }
-
     // ======================== Chapters ========================
 
     override fun chapterListParse(response: Response): List<SChapter> {
         val doc = Jsoup.parse(response.body.string())
         val novelPath = response.request.url.encodedPath
 
-        // Get total chapter count from the statistics div
         val chaptersText = doc.selectFirst("div:contains(Chapters)")
             ?.selectFirst("div.font-bold, div.text-lg")?.text()
 
@@ -268,16 +257,14 @@ class NovelHub :
         if (totalChapters == 0) return emptyList()
 
         // Per instructions.html: flip chapter list (generate 1 to totalChapters, NOT reversed)
-        // This means chapter 1 should be first in the list (oldest first)
         return (1..totalChapters).map { chapterNum ->
             SChapter.create().apply {
                 url = "$novelPath/chapter-$chapterNum"
                 name = "Chapter $chapterNum"
                 chapter_number = chapterNum.toFloat()
             }
-        } // NOT reversed - per instructions.html "flip chapter list"
+        }.reversed()
     }
-
     // ======================== Pages ========================
 
     override fun pageListParse(response: Response): List<Page> {
@@ -286,7 +273,6 @@ class NovelHub :
     }
 
     override fun imageUrlParse(response: Response): String = ""
-
     // ======================== Novel Content ========================
 
     override suspend fun fetchPageText(page: Page): String {
@@ -297,7 +283,6 @@ class NovelHub :
             ?: doc.selectFirst("article")?.html()
             ?: ""
     }
-
     // ======================== Filters ========================
 
     override fun getFilterList(): FilterList {
@@ -331,8 +316,6 @@ class NovelHub :
             val response = client.newCall(GET("$baseUrl/genres", headers)).execute()
             val doc = Jsoup.parse(response.body.string())
 
-            // Parse genres from the /genres page
-            // <a href="https://novelhub.net/genre/action" class="block p-6">
             //   <h3 class="...">Action</h3>
             val genres = doc.select("a[href*=/genre/]").mapNotNull { element ->
                 val href = element.attr("href")
@@ -357,6 +340,5 @@ class NovelHub :
     }
 
     override fun setupPreferenceScreen(screen: androidx.preference.PreferenceScreen) {
-        // No preferences needed
     }
 }

@@ -1,0 +1,9 @@
+ext {
+    extName = 'NovelDex'
+    extClass = '.NovelDex'
+    extVersionCode = 1
+    isNsfw = true
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

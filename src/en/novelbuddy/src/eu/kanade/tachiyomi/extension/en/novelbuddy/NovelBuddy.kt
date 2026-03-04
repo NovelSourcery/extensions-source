@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.novelbuddy
+﻿package eu.kanade.tachiyomi.extension.en.novelbuddy
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
@@ -28,7 +28,6 @@ class NovelBuddy :
 
     override val client = network.cloudflareClient
 
-    // Novel source implementation
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET(page.url, headers)).execute()
         val document = response.asJsoup()
@@ -38,7 +37,6 @@ class NovelBuddy :
     private fun Response.asJsoup(): Document = Jsoup.parse(body.string(), request.url.toString())
 
     private fun novelContentParse(document: Document): String {
-        // Remove unwanted elements
         document.select("#listen-chapter").remove()
         document.select("#google_translate_element").remove()
 
@@ -46,7 +44,6 @@ class NovelBuddy :
         return contentElement.html()
     }
 
-    // Popular novels
     override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/search?sort=views&page=$page", headers)
 
     override fun popularMangaParse(response: Response): MangasPage {
@@ -60,12 +57,10 @@ class NovelBuddy :
         return MangasPage(mangas, hasNextPage)
     }
 
-    // Latest updates
     override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/search?sort=updated_at&page=$page", headers)
 
     override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
 
-    // Search with filters
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val url = "$baseUrl/search".toHttpUrl().newBuilder()
 
@@ -101,7 +96,6 @@ class NovelBuddy :
 
     override fun searchMangaParse(response: Response) = popularMangaParse(response)
 
-    // Filters
     override fun getFilterList() = FilterList(
         SortFilter(),
         StatusFilter(),
@@ -196,7 +190,6 @@ class NovelBuddy :
             ),
         )
 
-    // Parse novels from search/browse pages
     private fun parseNovels(document: Document): List<SManga> {
         return document.select(".book-item").mapNotNull { element ->
             val titleElement = element.selectFirst(".title a") ?: return@mapNotNull null
@@ -213,7 +206,6 @@ class NovelBuddy :
         }
     }
 
-    // Manga details
     override fun mangaDetailsRequest(manga: SManga): Request {
         val url = if (manga.url.startsWith("http")) manga.url else "$baseUrl/${manga.url}"
         return GET(url, headers)
@@ -229,7 +221,6 @@ class NovelBuddy :
         }
         manga.description = document.selectFirst(".section-body.summary .content")?.text()?.trim()
 
-        // Parse metadata from meta box
         document.select(".meta.box p").forEach { element ->
             val detailName = element.selectFirst("strong")?.text() ?: return@forEach
             when (detailName) {
@@ -254,18 +245,15 @@ class NovelBuddy :
         return manga
     }
 
-    // Chapter list
     override fun chapterListRequest(manga: SManga): Request = mangaDetailsRequest(manga)
 
     override fun chapterListParse(response: Response): List<SChapter> {
         val document = response.asJsoup()
 
-        // Extract novel ID from script
         val scriptText = document.select("script").joinToString { it.data() }
         val novelIdMatch = Regex("""bookId\s*=\s*(\d+);""").find(scriptText)
         val novelId = novelIdMatch?.groupValues?.get(1) ?: return emptyList()
 
-        // Fetch chapters from API
         val chapterListUrl = "$baseUrl/api/manga/$novelId/chapters?source=detail"
         val chapterResponse = client.newCall(GET(chapterListUrl, headers)).execute()
         val chapterDocument = Jsoup.parse(chapterResponse.body.string())
@@ -276,14 +264,12 @@ class NovelBuddy :
             val chapterName = element.selectFirst(".chapter-title")?.text()?.trim() ?: return@forEach
             val chapterUrl = element.selectFirst("a")?.attr("href")
 
-            // Skip if URL is empty or invalid
             if (chapterUrl.isNullOrBlank()) return@forEach
 
             val chapter = SChapter.create().apply {
                 name = chapterName
                 url = normalizeRelativeUrl(chapterUrl)
 
-                // Parse release date
                 val releaseDateText = element.selectFirst(".chapter-update")?.text()?.trim()
                 date_upload = parseDateOrZero(releaseDateText)
             }
@@ -319,7 +305,6 @@ class NovelBuddy :
         }
     }
 
-    // Page list - return single page with chapter URL
     override fun pageListRequest(chapter: SChapter): Request {
         val url = if (chapter.url.startsWith("http")) chapter.url else "$baseUrl/${chapter.url}"
         return GET(url, headers)

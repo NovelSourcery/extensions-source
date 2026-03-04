@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.readnovelmtl
+﻿package eu.kanade.tachiyomi.extension.en.readnovelmtl
 
 import android.app.Application
 import android.content.SharedPreferences
@@ -46,11 +46,9 @@ class ReadNovelMtl :
 
     override val client = network.cloudflareClient
 
-    // Cached categories
     private var categoryCache: List<Pair<String, String>>? = null
     private var categoriesLastFetched: Long = 0
     private val categoryCacheDuration = 24 * 60 * 60 * 1000L // 24 hours
-
     // ======================== Popular ========================
 
     override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/ranking/all-time${if (page > 1) "?page=$page" else ""}", headers)
@@ -59,13 +57,11 @@ class ReadNovelMtl :
         val document = Jsoup.parse(response.body.string())
         return parseNovelList(document)
     }
-
     // ======================== Latest ========================
 
     override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/novel${if (page > 1) "?page=$page" else ""}", headers)
 
     override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
-
     // ======================== Search ========================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
@@ -97,13 +93,11 @@ class ReadNovelMtl :
             }
         }
 
-        // If category is selected, use category URL (no search term allowed)
         if (!categorySlug.isNullOrEmpty()) {
             val url = "$baseUrl/category/$categorySlug${if (page > 1) "?page=$page" else ""}"
             return GET(url, headers)
         }
 
-        // If ranking type is selected
         if (!rankingType.isNullOrEmpty()) {
             var url = "$baseUrl/ranking/$rankingType"
             val params = mutableListOf<String>()
@@ -126,7 +120,6 @@ class ReadNovelMtl :
     }
 
     override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
-
     // ======================== Details ========================
 
     override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
@@ -134,7 +127,6 @@ class ReadNovelMtl :
     override fun mangaDetailsParse(response: Response): SManga {
         val document = Jsoup.parse(response.body.string())
 
-        // Try JSON-LD first
         val jsonLd = document.selectFirst("script[type=application/ld+json]:contains(Book)")?.data()
         if (jsonLd != null) {
             try {
@@ -151,7 +143,6 @@ class ReadNovelMtl :
             } catch (_: Exception) {}
         }
 
-        // Fallback to HTML parsing
         return SManga.create().apply {
             url = response.request.url.encodedPath
 
@@ -163,13 +154,10 @@ class ReadNovelMtl :
 
             author = document.selectFirst("a[href*=author=]")?.text()
 
-            // Get description from specific div
             description = document.selectFirst(".mb-4[style*=font-size]")?.text()
 
-            // Get genres/categories
             genre = document.select(".d-flex.flex-wrap.gap-2 a.badge").map { it.text() }.joinToString(", ")
 
-            // Parse status
             val statusText = document.select(".d-flex.align-items-center.gap-2").find { it.selectFirst("i.fa-info-circle") != null }?.selectFirst("span")?.text()?.lowercase() ?: ""
 
             status = when {
@@ -180,7 +168,6 @@ class ReadNovelMtl :
             }
         }
     }
-
     // ======================== Chapters ========================
 
     override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
@@ -190,7 +177,6 @@ class ReadNovelMtl :
 
         val chapters = mutableListOf<SChapter>()
 
-        // Parse chapters from accordion sections
         document.select("#chapter-chunk .accordion-item").forEach { accordionItem ->
             accordionItem.select("tbody tr").forEach { row ->
                 val link = row.selectFirst("a[href*=/chapter/]") ?: return@forEach
@@ -199,11 +185,9 @@ class ReadNovelMtl :
 
                 chapters.add(
                     SChapter.create().apply {
-                        // Handle both absolute and relative URLs safely
                         url = extractUrlPath(href)
                         name = link.text().trim()
 
-                        // Parse date from span
                         val dateText = row.selectFirst("span.text-muted")?.text()?.trim() ?: ""
                         date_upload = parseDateString(dateText)
                     },
@@ -211,15 +195,13 @@ class ReadNovelMtl :
             }
         }
 
-        return chapters
+        return chapters.reversed()
     }
-
     // ======================== Pages ========================
 
     override fun pageListRequest(chapter: SChapter): Request = GET(baseUrl + chapter.url, headers)
 
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
-
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
@@ -229,7 +211,6 @@ class ReadNovelMtl :
 
         val content = StringBuilder()
 
-        // Parse chapter content from #content div
         val contentSection = document.selectFirst("#content")
 
         contentSection?.let { section ->
@@ -255,7 +236,6 @@ class ReadNovelMtl :
                 }
             }
 
-            // If no paragraphs found, try direct text
             if (content.isEmpty()) {
                 val directText = section.text()
                 if (directText.isNotEmpty()) {
@@ -270,7 +250,6 @@ class ReadNovelMtl :
     }
 
     override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
-
     // ======================== Filters ========================
 
     override fun getFilterList(): FilterList {
@@ -304,7 +283,6 @@ class ReadNovelMtl :
         Pair("For Female", "for-female"),
         Pair("Yaoi", "yaoi"),
     )
-
     // ======================== Helpers ========================
 
     private fun parseNovelList(document: Document): MangasPage {
@@ -320,7 +298,6 @@ class ReadNovelMtl :
 
                 author = item.selectFirst("a[href*=author=]")?.text()
 
-                // Parse status
                 val statusText = item.selectFirst(".fa-info-circle")?.parent()?.text()?.lowercase() ?: ""
                 status = when {
                     statusText.contains("ongoing") -> SManga.ONGOING
@@ -339,13 +316,11 @@ class ReadNovelMtl :
     }
 
     private fun getCategoriesList(): List<Pair<String, String>> {
-        // Return cached categories to avoid blocking main thread
         // Categories will be populated by first actual request
         if (categoryCache != null) {
             return categoryCache!!
         }
 
-        // Return default list - actual categories will be fetched on background thread
         return defaultCategories
     }
 
@@ -354,12 +329,10 @@ class ReadNovelMtl :
         val alwaysFetch = preferences.getBoolean(PREF_ALWAYS_FETCH_CATEGORIES, false)
         val now = System.currentTimeMillis()
 
-        // Skip if cache is valid
         if (!alwaysFetch && categoryCache != null && (now - categoriesLastFetched) < categoryCacheDuration) {
             return
         }
 
-        // Try to fetch categories
         try {
             val response = client.newCall(GET("$baseUrl/category", headers)).execute()
             val document = Jsoup.parse(response.body.string())
@@ -437,7 +410,6 @@ class ReadNovelMtl :
         // Relative URL without leading /
         else -> "/$href"
     }
-
     // ======================== Preferences ========================
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {

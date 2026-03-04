@@ -15,19 +15,15 @@ class NovelBin :
     ) {
     override val latestPage = "sort/latest"
 
-    // NovelBin uses div.row[itemscope] for popular/latest lists
-    // Also handles the thumbnail grid format (col-xs-4 col-sm-3 col-md-2)
     override fun popularMangaSelector() = "div.col-xs-12.col-md-8 div.row[itemscope], div.list-thumb div.col-xs-4, div.list-novel div.row"
 
     override fun popularMangaFromElement(element: Element): SManga = SManga.create().apply {
-        // Handle row format (div.col-title h3 a)
         element.selectFirst("div.col-title h3 a")?.let { link ->
             title = link.attr("title").ifEmpty { link.text().trim() }
             setUrlWithoutDomain(link.attr("abs:href"))
             return@apply
         }
 
-        // Handle thumbnail grid format (col-xs-4 with image and caption)
         element.selectFirst("a[href]")?.let { link ->
             setUrlWithoutDomain(link.attr("abs:href"))
             title = link.attr("title").ifEmpty {
@@ -47,7 +43,6 @@ class NovelBin :
 
     override fun searchMangaFromElement(element: Element) = popularMangaFromElement(element)
 
-    // Novel detail page parsing
     override fun mangaDetailsParse(document: org.jsoup.nodes.Document): SManga = SManga.create().apply {
         document.selectFirst("div.books, div.book")?.let { info ->
             thumbnail_url = info.selectFirst("img")?.let {
@@ -56,7 +51,6 @@ class NovelBin :
             title = document.selectFirst("h3.title")?.text()?.trim() ?: ""
         }
 
-        // Parse info
         document.select("div.info div").forEach { element ->
             val text = element.text()
             when {
@@ -82,7 +76,6 @@ class NovelBin :
         description = document.selectFirst("div.desc-text")?.text()?.trim()
     }
 
-    // Chapter list parsing - NovelBin has chapters on the page or via AJAX
     override fun chapterListParse(response: Response): List<SChapter> {
         val document = response.asJsoup()
         val novelId = document.selectFirst("div#rating")?.attr("data-novel-id")
@@ -90,7 +83,6 @@ class NovelBin :
         if (novelId != null) {
             try {
                 val ajaxUrl = "$baseUrl/ajax/chapter-archive?novelId=$novelId"
-                // NovelBin requires Referer header for AJAX requests
                 val ajaxHeaders = headers.newBuilder().add("Referer", response.request.url.toString()).build()
                 val ajaxResponse = client.newCall(okhttp3.Request.Builder().url(ajaxUrl).headers(ajaxHeaders).build()).execute()
                 val ajaxDocument = ajaxResponse.asJsoup()
@@ -107,14 +99,12 @@ class NovelBin :
                 }
 
                 if (chapters.isNotEmpty()) {
-                    return chapters
+                    return chapters.reversed()
                 }
             } catch (_: Exception) {
-                // Fall back to page parsing
             }
         }
 
-        // Fallback: parse from page
         return document.select("ul.list-chapter li a").mapIndexedNotNull { index, element ->
             val chapterUrl = element.attr("abs:href")
             if (chapterUrl.isBlank()) return@mapIndexedNotNull null
@@ -124,7 +114,7 @@ class NovelBin :
                 name = element.attr("title").ifEmpty { element.text().trim() }
                 chapter_number = (index + 1).toFloat()
             }
-        }
+        }.reversed()
     }
 
     // Content parsing
@@ -134,7 +124,6 @@ class NovelBin :
 
         val content = document.selectFirst("div#chr-content, div#chapter-content, div.chapter-content")
         if (content != null) {
-            // Remove ads and unwanted elements
             content.select("div.ads, script, ins, .adsbygoogle").remove()
             return content.html()
         }

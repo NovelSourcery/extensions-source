@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.fenrirealm
+﻿package eu.kanade.tachiyomi.extension.en.fenrirealm
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
@@ -39,7 +39,6 @@ class Fenrirealm :
     // API base URL - from instructions.txt: /api/new/v2
     private val apiBaseUrl = "$baseUrl/api/new/v2"
 
-    // Popular novels - GET /api/new/v2/home/popular-series
     override fun popularMangaRequest(page: Int): Request = GET("$apiBaseUrl/home/popular-series", headers)
 
     override fun popularMangaParse(response: Response): MangasPage {
@@ -47,7 +46,6 @@ class Fenrirealm :
         return MangasPage(novels.map { it.toSManga(baseUrl) }, false)
     }
 
-    // Latest updates - GET /api/new/v2/series?page=1&per_page=12&status=any&sort=latest
     override fun latestUpdatesRequest(page: Int): Request = GET("$apiBaseUrl/series?page=$page&per_page=20&status=any&sort=latest", headers)
 
     override fun latestUpdatesParse(response: Response): MangasPage {
@@ -56,7 +54,6 @@ class Fenrirealm :
         return MangasPage(result.data.map { it.toSManga(baseUrl) }, hasNextPage)
     }
 
-    // Search - GET /api/new/v2/series?page=1&per_page=12&search=world&status=any&sort=latest
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val url = "$apiBaseUrl/series".toHttpUrl().newBuilder().apply {
             addQueryParameter("page", page.toString())
@@ -106,10 +103,8 @@ class Fenrirealm :
 
     override fun searchMangaParse(response: Response): MangasPage = latestUpdatesParse(response)
 
-    // Manga details - parse from API response using slug
     override fun mangaDetailsRequest(manga: SManga): Request {
         val slug = manga.url.removePrefix("/").removeSuffix("/")
-        // Use the series endpoint with search to get details
         return GET("$apiBaseUrl/series?search=$slug&per_page=1", headers)
     }
 
@@ -118,7 +113,6 @@ class Fenrirealm :
         return result.data.firstOrNull()?.toSManga(baseUrl) ?: SManga.create()
     }
 
-    // Chapter list - GET /api/new/v2/series/{slug}/chapters
     override fun chapterListRequest(manga: SManga): Request {
         val slug = manga.url.removePrefix("/").removeSuffix("/")
         return GET("$apiBaseUrl/series/$slug/chapters", headers)
@@ -132,9 +126,8 @@ class Fenrirealm :
             SChapter.create().apply {
                 url = "/series/$slug/chapter-${chapter.number}"
                 name = buildString {
-                    // Only show locked icon if price > 0 (free chapters have price = 0 or null)
                     val isLocked = chapter.locked?.price?.let { it > 0 } ?: false
-                    if (isLocked) append("🔒 ")
+                    if (isLocked) append("ðŸ”’ ")
                     append("Chapter ${chapter.number}")
                     if (!chapter.title.isNullOrBlank() && chapter.title != "Chapter ${chapter.number}") {
                         append(" - ${chapter.title}")
@@ -143,20 +136,17 @@ class Fenrirealm :
                 chapter_number = chapter.number.toFloat()
                 date_upload = parseDate(chapter.createdAt)
             }
-        }.sortedBy { it.chapter_number }
+        }.sortedByDescending { it.chapter_number }
     }
 
-    // Page list - return single page with chapter URL
     override fun pageListParse(response: Response): List<Page> {
         val chapterUrl = response.request.url.toString().removePrefix(baseUrl)
         return listOf(Page(0, chapterUrl))
     }
 
-    // Novel content - LN Reader uses #reader-area, but actual ID is dynamic like reader-area-110498
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
         val doc = Jsoup.parse(response.body.string())
-        // Try various selectors for content - ID starts with reader-area
         return doc.selectFirst("div[id^=reader-area]")?.html()
             ?: doc.selectFirst("#reader-area")?.html()
             ?: doc.selectFirst("div.content-area")?.html()
@@ -165,7 +155,6 @@ class Fenrirealm :
             ?: ""
     }
 
-    // Filters
     override fun getFilterList(): FilterList = FilterList(
         StatusFilter(),
         SortFilter(),
@@ -307,7 +296,6 @@ class Fenrirealm :
         val price: Int? = null,
     )
 
-    // Filter classes
     private class StatusFilter :
         Filter.Select<String>(
             "Status",

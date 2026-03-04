@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.fansmtl
+﻿package eu.kanade.tachiyomi.extension.en.fansmtl
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
@@ -35,40 +35,22 @@ class FansMTL :
 
     override fun headersBuilder() = super.headersBuilder()
         .add("Referer", "$baseUrl/")
-
     // ======================== Popular ========================
 
-    override fun popularMangaRequest(page: Int): Request {
-        // Page uses 0-based index
-        return GET("$baseUrl/list/all/all-newstime-${page - 1}.html", headers)
-    }
+    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/list/all/all-newstime-${page - 1}.html", headers)
 
     override fun popularMangaParse(response: Response): MangasPage {
         val doc = Jsoup.parse(response.body.string())
-        // Sample HTML:
-        // <ul class="novel-list grid col col2">
-        //   <li class="novel-item">
-        //     <a href="/novel/xxx.html" title="Title">
-        //       <div class="cover-wrap"><figure class="novel-cover">
-        //         <img class="lazy" src="placeholder" data-src="/actual/cover.jpg" />
-        //       </figure></div>
-        //       <h4 class="novel-title text2row">Title</h4>
-        //     </a>
-        //   </li>
-        // </ul>
         val novels = doc.select("li.novel-item").mapNotNull { element ->
-            // The <a> wraps the entire novel item
             val link = element.selectFirst("a[href*='/novel/']") ?: element.selectFirst("a[href]") ?: return@mapNotNull null
             val href = link.attr("href")
             if (href.isBlank() || !href.contains("/novel/")) return@mapNotNull null
 
-            // Get title from h4.novel-title or from link title attribute
             val title = element.selectFirst("h4.novel-title")?.text()?.trim()
                 ?: link.attr("title").ifEmpty { null }
                 ?: element.selectFirst("img")?.attr("alt")
                 ?: return@mapNotNull null
 
-            // Get image from figure.novel-cover img or .cover-wrap img
             val img = element.selectFirst("figure.novel-cover img, .cover-wrap img, img.lazy")
             val imgSrc = img?.let { imgEl ->
                 // data-src is the real image, src is often a placeholder
@@ -88,21 +70,17 @@ class FansMTL :
         }
 
         // Pagination - FansMTL uses 0-indexed pages in URL
-        // If we got results, there might be more pages
         val hasNext = novels.isNotEmpty() && novels.size >= 18 // FansMTL shows ~18 per page
         return MangasPage(novels, hasNext)
     }
-
     // ======================== Latest ========================
 
     override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/list/all/all-lastdotime-${page - 1}.html", headers)
 
     override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
-
     // ======================== Search ========================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        // Check if genre/status/sort filters are selected
         var selectedGenre = "all"
         var selectedStatus = "all"
         var sortBy = "newstime"
@@ -140,7 +118,6 @@ class FansMTL :
     }
 
     override fun searchMangaParse(response: Response) = popularMangaParse(response)
-
     // ======================== Details ========================
 
     override fun mangaDetailsParse(response: Response): SManga {
@@ -166,8 +143,95 @@ class FansMTL :
             }
         }
     }
+    override fun fetchChapterList(manga: SManga): rx.Observable<List<SChapter>> {
+        return rx.Observable.fromCallable {
+            val novelSlug = manga.url
+                .substringAfterLast("/novel/")
+                .substringBefore(".html")
 
-    // ======================== Chapters ========================
+            val allChapters = mutableListOf<SChapter>()
+            val seenUrls = mutableSetOf<String>()
+            var page = 0
+
+            // Paginate through AJAX endpoint which returns chapters in ascending order (0-indexed)
+            while (true) {
+                try {
+                    val ajaxUrl = "$baseUrl/e/extend/fy.php?page=$page&wjm=$novelSlug"
+                    val ajaxRequest = GET(
+                        ajaxUrl,
+                        headers.newBuilder()
+                            .add("X-Requested-With", "XMLHttpRequest")
+                            .build(),
+                    )
+                    val ajaxResponse = client.newCall(ajaxRequest).execute()
+                    val ajaxDoc = Jsoup.parse(ajaxResponse.body.string())
+
+                    val items = ajaxDoc.select("a[href*='.html']")
+                    if (items.isEmpty()) break
+
+                    var addedAny = false
+                    items.forEach { link ->
+                        val href = link.attr("href")
+                        if (href.isBlank() || !href.contains(".html")) return@forEach
+
+                        val chapterUrl = if (href.startsWith("http")) href.substringAfter(baseUrl) else href
+                        if (!seenUrls.add(chapterUrl)) return@forEach
+
+                        // Extract chapter number from data attribute or URL
+                        val orderNo = link.attr("data-orderno").toIntOrNull()
+                            ?: link.attr("data-chapterno").toIntOrNull()
+                            ?: chapterUrl.substringAfterLast("_").substringBefore(".html").toIntOrNull()
+
+                        val chapterNum = orderNo ?: (allChapters.size + 1)
+
+                        allChapters.add(
+                            SChapter.create().apply {
+                                setUrlWithoutDomain(chapterUrl)
+                                name = link.selectFirst(".chapter-title")?.text()?.trim()
+                                    ?: link.text().trim().ifEmpty { "Chapter $chapterNum" }
+                                chapter_number = chapterNum.toFloat()
+                            },
+                        )
+                        addedAny = true
+                    }
+
+                    // ======================== Chapters ========================
+
+                    if (!addedAny) break
+                    page++
+                } catch (e: Exception) {
+                    break
+                }
+            }
+
+            // If AJAX returned nothing, fall back to detail page chapter list
+            if (allChapters.isEmpty()) {
+                val novelUrl = "$baseUrl${manga.url}"
+                val detailResponse = client.newCall(GET(novelUrl, headers)).execute()
+                val doc = Jsoup.parse(detailResponse.body.string())
+
+                doc.select(".chapter-list li").forEachIndexed { index, element ->
+                    val link = element.selectFirst("a") ?: return@forEachIndexed
+                    val href = link.attr("href")
+                    if (href.isBlank()) return@forEachIndexed
+
+                    val chapterNum = index + 1
+                    allChapters.add(
+                        SChapter.create().apply {
+                            setUrlWithoutDomain(if (href.startsWith("http")) href.substringAfter(baseUrl) else href)
+                            name = link.selectFirst(".chapter-title")?.text()?.trim() ?: "Chapter $chapterNum"
+                            chapter_number = chapterNum.toFloat()
+                            val releaseTime = link.selectFirst(".chapter-update")?.text()?.trim()
+                            date_upload = releaseTime?.let { parseRelativeDate(it) } ?: 0L
+                        },
+                    )
+                }
+            }
+
+            // AJAX returns ascending order; reverse for newest-first
+            allChapters.reversed()
+        }
+    }
 
     override fun chapterListParse(response: Response): List<SChapter> {
         val doc = Jsoup.parse(response.body.string())
@@ -188,7 +252,6 @@ class FansMTL :
             }
         }.toMutableList()
 
-        // Generate missing chapters
         if (latestChapterNo > chapters.size && chapters.isNotEmpty()) {
             val lastChapterPath = chapters.lastOrNull()?.url ?: novelPath
             val lastChapterNo = lastChapterPath
@@ -207,7 +270,7 @@ class FansMTL :
             }
         }
 
-        return chapters
+        return chapters.reversed()
     }
 
     private fun parseRelativeDate(dateStr: String): Long {
@@ -222,7 +285,6 @@ class FansMTL :
         }
         return calendar.timeInMillis
     }
-
     // ======================== Pages ========================
 
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
@@ -234,7 +296,6 @@ class FansMTL :
         val doc = Jsoup.parse(response.body.string())
         return doc.selectFirst(".chapter-content")?.html() ?: ""
     }
-
     // ======================== Filters ========================
 
     override fun getFilterList() = FilterList(

@@ -3,6 +3,7 @@ ext {
     extClass = '.RequiemTranslations'
     overrideVersionCode = 1
     themePkg = 'lightnovelwpnovel'
+    isNovel = true
 }
 
 apply from: "$rootDir/common.gradle"

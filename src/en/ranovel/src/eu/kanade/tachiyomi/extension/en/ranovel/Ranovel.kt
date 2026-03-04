@@ -13,7 +13,6 @@ class Ranovel :
         lang = "en",
     ) {
     override val useNewChapterEndpointDefault = true
-
     // ======================== Filters ========================
 
     override fun getFilterList(): FilterList = FilterList(

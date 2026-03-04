@@ -1,10 +1,6 @@
-package eu.kanade.tachiyomi.extension.en.mvlempyr
+﻿package eu.kanade.tachiyomi.extension.en.mvlempyr
 
-import android.app.Application
-import android.content.SharedPreferences
-import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
-import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
@@ -27,12 +23,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import okhttp3.Headers
-import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
-import uy.kohesive.injekt.Injekt
-import uy.kohesive.injekt.api.get
 import java.math.BigInteger
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -51,22 +44,14 @@ class MVLEMPYR :
 
     override val client = network.cloudflareClient
 
-    private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
-    }
+    private val perPage = 20
 
-    private val perPage: String
-        get() = preferences.getString(PER_PAGE_PREF, "50") ?: "50"
-
-    private val useLocalLoading: Boolean
-        get() = preferences.getBoolean(LOCAL_LOADING_PREF, false)
-
-    // Cache for local loading mode
     @Volatile
     private var cachedNovels: List<CachedNovel>? = null
 
     private data class CachedNovel(
         val manga: SManga,
+        val name: String,
         val novelCode: Long?,
         val avgReview: Float?,
         val reviewCount: Int?,
@@ -124,165 +109,74 @@ class MVLEMPYR :
     )
 
     override fun popularMangaRequest(page: Int): Request {
-        if (useLocalLoading && page == 1) {
-            // Load all novels for local filtering mode
-            return GET("$chapSite/wp-json/wp/v2/mvl-novels?per_page=10000", headers)
+        // Always load all novels for local filtering (matching TS approach)
+        return GET("$chapSite/wp-json/wp/v2/mvl-novels?per_page=10000", headers)
+    }
+
+    override fun popularMangaParse(response: Response): MangasPage {
+        ensureCache(response)
+        return getFilteredPage(1, "", FilterList())
+    }
+
+    override fun latestUpdatesRequest(page: Int): Request = GET("$chapSite/wp-json/wp/v2/mvl-novels?per_page=10000", headers)
+
+    override fun latestUpdatesParse(response: Response): MangasPage {
+        ensureCache(response)
+        return getFilteredPage(1, "", FilterList(), sortBy = "created")
+    }
+
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = GET("$chapSite/wp-json/wp/v2/mvl-novels?per_page=10000", headers)
+
+    override fun searchMangaParse(response: Response): MangasPage {
+        ensureCache(response)
+        return MangasPage(emptyList(), false)
+    }
+
+    override fun fetchPopularManga(page: Int): rx.Observable<MangasPage> = rx.Observable.fromCallable {
+        if (cachedNovels == null) {
+            val response = client.newCall(popularMangaRequest(1)).execute()
+            ensureCache(response)
         }
-        // API mode - use pagination
-        return GET("$chapSite/wp-json/wp/v2/mvl-novels?per_page=$perPage&page=$page&orderby=id&order=desc", headers)
+        getFilteredPage(page, "", FilterList())
     }
 
-    override fun popularMangaParse(response: Response): MangasPage = if (useLocalLoading) {
-        parseAndCacheAllNovels(response)
-    } else {
-        parseNovelsResponse(response)
-    }
-
-    override fun latestUpdatesRequest(page: Int): Request {
-        if (useLocalLoading && page == 1) {
-            return GET("$chapSite/wp-json/wp/v2/mvl-novels?per_page=10000", headers)
+    override fun fetchLatestUpdates(page: Int): rx.Observable<MangasPage> = rx.Observable.fromCallable {
+        if (cachedNovels == null) {
+            val response = client.newCall(latestUpdatesRequest(1)).execute()
+            ensureCache(response)
         }
-        return GET("$chapSite/wp-json/wp/v2/mvl-novels?per_page=$perPage&page=$page&orderby=date&order=desc", headers)
+        getFilteredPage(page, "", FilterList(), sortBy = "created")
     }
 
-    override fun latestUpdatesParse(response: Response): MangasPage = if (useLocalLoading) {
-        parseAndCacheAllNovels(response, sortBy = "created")
-    } else {
-        parseNovelsResponse(response)
-    }
-
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        if (useLocalLoading && page == 1) {
-            // Load all for local filtering
-            return GET("$chapSite/wp-json/wp/v2/mvl-novels?per_page=10000", headers)
+    override fun fetchSearchManga(page: Int, query: String, filters: FilterList): rx.Observable<MangasPage> = rx.Observable.fromCallable {
+        if (cachedNovels == null) {
+            val response = client.newCall(searchMangaRequest(1, query, filters)).execute()
+            ensureCache(response)
         }
-
-        val url = "$chapSite/wp-json/wp/v2/mvl-novels".toHttpUrl().newBuilder()
-            .addQueryParameter("per_page", perPage)
-            .addQueryParameter("page", page.toString())
-
-        if (query.isNotEmpty()) {
-            val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
-            url.addQueryParameter("search", encodedQuery)
-        }
-
-        // Apply filters
-        // WordPress REST API valid orderby: author, date, id, include, modified, parent, relevance, slug, include_slugs, title
-        filters.forEach { filter ->
-            when (filter) {
-                is SortFilter -> {
-                    when (filter.state) {
-                        0 -> {}
-
-                        // None - no orderby parameter
-                        1 -> url.addQueryParameter("orderby", "date")
-
-                        // Latest Added
-                        2 -> url.addQueryParameter("orderby", "title")
-
-                        // A-Z
-                        3 -> url.addQueryParameter("orderby", "modified")
-
-                        // Last Modified
-                        4 -> url.addQueryParameter("orderby", "relevance") // Relevance
-                    }
-                    if (filter.state > 0) url.addQueryParameter("order", "desc")
-                }
-
-                is GenreFilter -> {
-                    val includedGenres = filter.state.filter { it.isIncluded() }.map { it.id }
-                    val excludedGenres = filter.state.filter { it.isExcluded() }.map { it.id }
-
-                    if (includedGenres.isNotEmpty()) {
-                        includedGenres.forEach { id ->
-                            url.addQueryParameter("genres[]", id.toString())
-                        }
-                    }
-                    if (excludedGenres.isNotEmpty()) {
-                        excludedGenres.forEach { id ->
-                            url.addQueryParameter("genres_exclude[]", id.toString())
-                        }
-                    }
-                }
-
-                is TagFilter -> {
-                    val includedTags = filter.state.filter { it.isIncluded() }.map { it.id }
-                    val excludedTags = filter.state.filter { it.isExcluded() }.map { it.id }
-
-                    if (includedTags.isNotEmpty()) {
-                        includedTags.forEach { id ->
-                            url.addQueryParameter("tags[]", id.toString())
-                        }
-                    }
-                    if (excludedTags.isNotEmpty()) {
-                        excludedTags.forEach { id ->
-                            url.addQueryParameter("tags_exclude[]", id.toString())
-                        }
-                    }
-                }
-
-                else -> {}
-            }
-        }
-
-        return GET(url.build(), headers)
+        getFilteredPage(page, query, filters)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage = if (useLocalLoading) {
-        parseAndCacheAllNovels(response)
-    } else {
-        parseNovelsResponse(response)
-    }
-
-    private fun parseNovelsResponse(response: Response): MangasPage {
+    private fun ensureCache(response: Response) {
+        if (cachedNovels != null) return
         val responseBody = response.body.string()
-
-        // Check pagination headers
-        val totalPages = response.header("X-WP-TotalPages")?.toIntOrNull() ?: 1
-        val currentPage = response.request.url.queryParameter("page")?.toIntOrNull() ?: 1
-        val hasNextPage = currentPage < totalPages
-
-        return try {
-            // Parse as JSON array manually to handle the WordPress format
+        try {
             val jsonArray = json.parseToJsonElement(responseBody).jsonArray
-
-            val novels = jsonArray.mapNotNull { element ->
-                try {
-                    val obj = element.jsonObject
-                    createSMangaFromJson(obj)
-                } catch (e: Exception) {
-                    null
-                }
-            }
-
-            MangasPage(novels, hasNextPage)
-        } catch (e: Exception) {
-            MangasPage(emptyList(), false)
-        }
-    }
-
-    /**
-     * Parse and cache all novels for local loading mode.
-     * In this mode, all novels are loaded at once and filtered/sorted in memory.
-     */
-    private fun parseAndCacheAllNovels(response: Response, sortBy: String = "reviewCount"): MangasPage {
-        val responseBody = response.body.string()
-
-        return try {
-            val jsonArray = json.parseToJsonElement(responseBody).jsonArray
-
-            val novels = jsonArray.mapNotNull { element ->
+            cachedNovels = jsonArray.mapNotNull { element ->
                 try {
                     val obj = element.jsonObject
                     val manga = createSMangaFromJson(obj)
+                    val name = obj["name"]?.jsonPrimitive?.contentOrNull
+                        ?: obj["title"]?.jsonObject?.get("rendered")?.jsonPrimitive?.contentOrNull
+                        ?: ""
 
                     CachedNovel(
                         manga = manga,
+                        name = name,
                         novelCode = obj["novel-code"]?.jsonPrimitive?.longOrNull,
                         avgReview = obj["average-review"]?.jsonPrimitive?.contentOrNull?.toFloatOrNull(),
                         reviewCount = obj["total-reviews"]?.jsonPrimitive?.intOrNull,
                         chapterCount = obj["total-chapters"]?.jsonPrimitive?.intOrNull,
-                        created = obj["createdOn"]?.jsonPrimitive?.contentOrNull?.let { parseDate(it) },
+                        created = obj["createdOn"]?.jsonPrimitive?.contentOrNull?.let { parseCreatedDate(it) },
                         genres = obj["genre"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(),
                         tags = obj["tags"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(),
                     )
@@ -290,33 +184,78 @@ class MVLEMPYR :
                     null
                 }
             }
-
-            // Cache for future use
-            cachedNovels = novels
-
-            // Sort based on the sort criteria
-            val sorted = when (sortBy) {
-                "created" -> novels.sortedByDescending { it.created ?: 0L }
-                "avgReview" -> novels.sortedByDescending { it.avgReview ?: 0f }
-                "chapterCount" -> novels.sortedByDescending { it.chapterCount ?: 0 }
-                else -> novels.sortedByDescending { it.reviewCount ?: 0 }
-            }
-
-            // Return first page
-            val pageSize = perPage.toIntOrNull() ?: 50
-            val firstPage = sorted.take(pageSize).map { it.manga }
-            val hasNextPage = sorted.size > pageSize
-
-            MangasPage(firstPage, hasNextPage)
         } catch (e: Exception) {
-            MangasPage(emptyList(), false)
+            cachedNovels = emptyList()
         }
+    }
+
+    private fun getFilteredPage(page: Int, query: String, filters: FilterList, sortBy: String? = null): MangasPage {
+        var novels = cachedNovels ?: return MangasPage(emptyList(), false)
+
+        // Local search by name
+        if (query.isNotBlank()) {
+            novels = novels.filter { it.name.contains(query, ignoreCase = true) }
+        }
+
+        // Local genre filtering (include/exclude)
+        var selectedSort = sortBy
+        filters.forEach { filter ->
+            when (filter) {
+                is GenreFilter -> {
+                    val included = filter.state.filter { it.isIncluded() }.map { it.value.lowercase() }
+                    val excluded = filter.state.filter { it.isExcluded() }.map { it.value.lowercase() }
+                    if (included.isNotEmpty()) {
+                        novels = novels.filter { novel -> included.all { genre -> novel.genres.any { it.equals(genre, ignoreCase = true) } } }
+                    }
+                    if (excluded.isNotEmpty()) {
+                        novels = novels.filter { novel -> excluded.none { genre -> novel.genres.any { it.equals(genre, ignoreCase = true) } } }
+                    }
+                }
+
+                is TagFilter -> {
+                    val included = filter.state.filter { it.isIncluded() }.map { it.value.lowercase() }
+                    val excluded = filter.state.filter { it.isExcluded() }.map { it.value.lowercase() }
+                    if (included.isNotEmpty()) {
+                        novels = novels.filter { novel -> included.all { tag -> novel.tags.any { it.equals(tag, ignoreCase = true) } } }
+                    }
+                    if (excluded.isNotEmpty()) {
+                        novels = novels.filter { novel -> excluded.none { tag -> novel.tags.any { it.equals(tag, ignoreCase = true) } } }
+                    }
+                }
+
+                is SortFilter -> if (selectedSort == null) {
+                    selectedSort = when (filter.state) {
+                        0 -> "reviewCount"
+                        1 -> "created"
+                        2 -> "avgReview"
+                        3 -> "chapterCount"
+                        else -> "reviewCount"
+                    }
+                }
+
+                else -> {}
+            }
+        }
+
+        val sorted = when (selectedSort ?: "reviewCount") {
+            "created" -> novels.sortedByDescending { it.created ?: 0L }
+            "avgReview" -> novels.sortedByDescending { it.avgReview ?: 0f }
+            "chapterCount" -> novels.sortedByDescending { it.chapterCount ?: 0 }
+            else -> novels.sortedByDescending { it.reviewCount ?: 0 }
+        }
+
+        // Paginate
+        val startIndex = (page - 1) * perPage
+        val endIndex = minOf(startIndex + perPage, sorted.size)
+        val pageNovels = if (startIndex < sorted.size) sorted.subList(startIndex, endIndex).map { it.manga } else emptyList()
+        val hasNext = endIndex < sorted.size
+
+        return MangasPage(pageNovels, hasNext)
     }
 
     private fun createSMangaFromJson(obj: JsonObject): SManga = SManga.create().apply {
         val slug = obj["slug"]?.jsonPrimitive?.content ?: ""
 
-        // Try multiple title fields: "name" (API), "title.rendered" (WP), "title" (fallback)
         val titleRendered = obj["name"]?.jsonPrimitive?.content
             ?: obj["title"]?.jsonObject?.get("rendered")?.jsonPrimitive?.content
             ?: obj["title"]?.jsonPrimitive?.contentOrNull
@@ -333,7 +272,6 @@ class MVLEMPYR :
         title = cleanHtml(titleRendered)
         author = authorNameValue
 
-        // Use novelCode for thumbnail if available, otherwise bookid
         thumbnail_url = if (novelCode != null) {
             "$assetsSite/$novelCode.webp"
         } else if (!bookId.isNullOrBlank()) {
@@ -342,7 +280,6 @@ class MVLEMPYR :
             null
         }
 
-        // Use synopsis-text, synopsis, excerpt or content for description
         description = synopsisText?.let { cleanHtml(it) }
             ?: cleanHtml(excerptRendered.ifBlank { contentRendered })
     }
@@ -353,7 +290,6 @@ class MVLEMPYR :
         return SManga.create().apply {
             title = doc.selectFirst("h1.novel-title")?.text() ?: "Untitled"
 
-            // Parse associated names/alternative titles and include in description
             val associatedNamesText = doc.select("div.additionalinfo.tm10 > div.textwrapper")
                 .find { it.selectFirst("span")?.text()?.contains("Associated Names", ignoreCase = true) == true }
                 ?.selectFirst("span:last-child, a")?.text()?.trim()
@@ -438,17 +374,14 @@ class MVLEMPYR :
     }
 
     override fun pageListParse(response: Response): List<Page> {
-        // The chapter URL format is /chapter/{novelCode}-{chapterNumber}
         val chapterUrl = response.request.url.toString()
         return listOf(Page(0, chapterUrl))
     }
 
     override suspend fun fetchPageText(page: Page): String {
-        // Chapter content is on chap.heliosarchive.online
         val url = if (page.url.startsWith("http")) {
             page.url
         } else {
-            // page.url is like /chapter/{novelCode}-{chapterNumber}
             "$chapSite${page.url}"
         }
         val response = client.newCall(GET(url, headers)).execute()
@@ -463,7 +396,7 @@ class MVLEMPYR :
     override fun imageUrlParse(response: Response): String = ""
 
     override fun getFilterList(): FilterList = FilterList(
-        Filter.Header("Filters"),
+        Filter.Header("Filters (all local)"),
         SortFilter(),
         Filter.Header("Include/Exclude Genres (Tap to toggle)"),
         GenreFilter(),
@@ -471,38 +404,56 @@ class MVLEMPYR :
         TagFilter(),
     )
 
-    // WordPress REST API valid orderby values: author, date, id, include, modified, parent, relevance, slug, include_slugs, title
     private class SortFilter :
         Filter.Select<String>(
             "Sort by",
-            arrayOf("None", "Latest Added", "A-Z", "Last Modified", "Relevance"),
+            arrayOf("Most Reviewed", "Latest Added", "Best Rated", "Chapter Count"),
         )
 
     private class GenreFilter :
         Filter.Group<GenreTriState>(
             "Genres",
             listOf(
-                GenreTriState("Action", 1), GenreTriState("Adult", 2), GenreTriState("Adventure", 3), GenreTriState("Comedy", 4), GenreTriState("Drama", 5), GenreTriState("Ecchi", 6), GenreTriState("Fan-Fiction", 7), GenreTriState("Fantasy", 8), GenreTriState("Gender Bender", 9), GenreTriState("Harem", 10), GenreTriState("Historical", 11), GenreTriState("Horror", 12),
-                GenreTriState("Josei", 13), GenreTriState("Martial Arts", 14), GenreTriState("Mature", 15), GenreTriState("Mecha", 16), GenreTriState("Mystery", 17), GenreTriState("Psychological", 18), GenreTriState("Romance", 19), GenreTriState("School Life", 20), GenreTriState("Sci-fi", 21), GenreTriState("Seinen", 22), GenreTriState("Shoujo", 23), GenreTriState("Shoujo Ai", 24),
-                GenreTriState("Shounen", 25), GenreTriState("Shounen Ai", 26), GenreTriState("Slice of Life", 27), GenreTriState("Smut", 28), GenreTriState("Sports", 29), GenreTriState("Supernatural", 30), GenreTriState("Tragedy", 31), GenreTriState("Wuxia", 32), GenreTriState("Xianxia", 33), GenreTriState("Xuanhuan", 34), GenreTriState("Yaoi", 35), GenreTriState("Yuri", 36),
+                GenreTriState("Action"), GenreTriState("Adult"), GenreTriState("Adventure"),
+                GenreTriState("Comedy"), GenreTriState("Drama"), GenreTriState("Ecchi"),
+                GenreTriState("Fan-Fiction"), GenreTriState("Fantasy"), GenreTriState("Gender Bender"),
+                GenreTriState("Harem"), GenreTriState("Historical"), GenreTriState("Horror"),
+                GenreTriState("Josei"), GenreTriState("Martial Arts"), GenreTriState("Mature"),
+                GenreTriState("Mecha"), GenreTriState("Mystery"), GenreTriState("Psychological"),
+                GenreTriState("Romance"), GenreTriState("School Life"), GenreTriState("Sci-fi"),
+                GenreTriState("Seinen"), GenreTriState("Shoujo"), GenreTriState("Shoujo Ai"),
+                GenreTriState("Shounen"), GenreTriState("Shounen Ai"), GenreTriState("Slice of Life"),
+                GenreTriState("Smut"), GenreTriState("Sports"), GenreTriState("Supernatural"),
+                GenreTriState("Tragedy"), GenreTriState("Wuxia"), GenreTriState("Xianxia"),
+                GenreTriState("Xuanhuan"), GenreTriState("Yaoi"), GenreTriState("Yuri"),
             ),
         )
 
-    private class GenreTriState(name: String, val id: Int) : Filter.TriState(name)
+    private class GenreTriState(val value: String) : Filter.TriState(value)
 
     private class TagFilter :
         Filter.Group<TagTriState>(
             "Tags",
             listOf(
-                TagTriState("Academy", 100), TagTriState("Antihero Protagonist", 101), TagTriState("Beast Companions", 102), TagTriState("Calm Protagonist", 103), TagTriState("Cheats", 104), TagTriState("Clever Protagonist", 105),
-                TagTriState("Cold Protagonist", 106), TagTriState("Cultivation", 107), TagTriState("Cunning Protagonist", 108), TagTriState("Dark", 109), TagTriState("Demons", 110), TagTriState("Dragons", 111), TagTriState("Dungeons", 112),
-                TagTriState("Fantasy World", 113), TagTriState("Female Protagonist", 114), TagTriState("Game Elements", 115), TagTriState("Gods", 116), TagTriState("Hidden Abilities", 117), TagTriState("Level System", 118),
-                TagTriState("Magic", 119), TagTriState("Male Protagonist", 120), TagTriState("Monsters", 121), TagTriState("Nobles", 122), TagTriState("Overpowered Protagonist", 123), TagTriState("Reincarnation", 124),
-                TagTriState("Revenge", 125), TagTriState("Royalty", 126), TagTriState("Second Chance", 127), TagTriState("System", 128), TagTriState("Transmigration", 129), TagTriState("Weak to Strong", 130),
+                TagTriState("Academy"), TagTriState("Antihero Protagonist"),
+                TagTriState("Beast Companions"), TagTriState("Calm Protagonist"),
+                TagTriState("Cheats"), TagTriState("Clever Protagonist"),
+                TagTriState("Cold Protagonist"), TagTriState("Cultivation"),
+                TagTriState("Cunning Protagonist"), TagTriState("Dark"),
+                TagTriState("Demons"), TagTriState("Dragons"), TagTriState("Dungeons"),
+                TagTriState("Fantasy World"), TagTriState("Female Protagonist"),
+                TagTriState("Game Elements"), TagTriState("Gods"),
+                TagTriState("Hidden Abilities"), TagTriState("Level System"),
+                TagTriState("Magic"), TagTriState("Male Protagonist"),
+                TagTriState("Monsters"), TagTriState("Nobles"),
+                TagTriState("Overpowered Protagonist"), TagTriState("Reincarnation"),
+                TagTriState("Revenge"), TagTriState("Royalty"),
+                TagTriState("Second Chance"), TagTriState("System"),
+                TagTriState("Transmigration"), TagTriState("Weak to Strong"),
             ),
         )
 
-    private class TagTriState(name: String, val id: Int) : Filter.TriState(name)
+    private class TagTriState(val value: String) : Filter.TriState(value)
 
     private fun convertNovelId(code: BigInteger): BigInteger {
         val t = BigInteger("1999999997")
@@ -544,25 +495,7 @@ class MVLEMPYR :
     private fun cleanHtml(html: String): String = Jsoup.parse(html).text()
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        SwitchPreferenceCompat(screen.context).apply {
-            key = LOCAL_LOADING_PREF
-            title = "Local loading mode"
-            summary = "Load all novels at once for faster filtering (uses more memory)"
-            setDefaultValue(false)
-        }.let { screen.addPreference(it) }
-
-        ListPreference(screen.context).apply {
-            key = PER_PAGE_PREF
-            title = "Results per page"
-            entries = arrayOf("20", "50", "100")
-            entryValues = arrayOf("20", "50", "100")
-            setDefaultValue("50")
-            summary = "%s"
-        }.let { screen.addPreference(it) }
     }
 
-    companion object {
-        private const val PER_PAGE_PREF = "per_page"
-        private const val LOCAL_LOADING_PREF = "local_loading"
-    }
+    companion object
 }

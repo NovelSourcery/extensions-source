@@ -330,7 +330,7 @@ class RoyalRoad :
                         else -> "$baseUrl/$src"
                     }
                 } ?: ""
-                url = fictionPath
+                url = if (fictionPath.startsWith("/")) fictionPath else "/$fictionPath"
             }
         }
 
@@ -442,8 +442,7 @@ class RoyalRoad :
             val volume = volumeMap[chapter.volumeId]
             // Use the full URL path - RoyalRoad needs the complete URL format
             // URL format: fiction/{id}/{slug}/chapter/{chapterId}/{chapterSlug}
-            val chapterUrl = chapter.url.removePrefix("/")
-
+            val chapterUrl = if (chapter.url.startsWith("/")) chapter.url else "/${chapter.url}"
             SChapter.create().apply {
                 name = chapter.title
                 url = chapterUrl
@@ -466,11 +465,11 @@ class RoyalRoad :
     // Page list - return single page with the chapter URL
     override fun pageListRequest(chapter: SChapter): Request {
         // chapter.url already contains 'fiction/' prefix, e.g., 'fiction/137985/chapter/12345678'
-        return GET("$baseUrl/${chapter.url}", headers)
+        return GET(baseUrl + chapter.url, headers)
     }
 
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString(), null))
-
+    override fun getMangaUrl(manga: SManga): String = baseUrl + manga.url
     override fun imageUrlParse(response: Response) = ""
 
     // Filters

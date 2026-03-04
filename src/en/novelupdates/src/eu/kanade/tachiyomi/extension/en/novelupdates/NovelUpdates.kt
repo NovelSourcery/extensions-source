@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.novelupdates
+﻿package eu.kanade.tachiyomi.extension.en.novelupdates
 
 import android.app.Application
 import android.content.SharedPreferences
@@ -65,7 +65,6 @@ class NovelUpdates :
             return body
         }
 
-        // Try to extract chapter content based on the domain
         return getChapterBody(doc, domainParts, url)
     }
 
@@ -218,7 +217,6 @@ class NovelUpdates :
                     }
                 }
 
-                // Try to find title
                 val titleSelectors = listOf(
                     ".chapter-title",
                     ".entry-title",
@@ -236,7 +234,6 @@ class NovelUpdates :
             }
         }
 
-        // Fallback to body content
         if (chapterContent.isEmpty()) {
             doc.select("nav, header, footer, .hidden, script, style").remove()
             chapterContent = doc.select("body").html()
@@ -256,7 +253,6 @@ class NovelUpdates :
         return parseNovelsFromSearch(doc)
     }
 
-    // Latest updates
     override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/series-finder/?sf=1&sort=sdate&order=desc&pg=$page", headers)
 
     override fun latestUpdatesParse(response: Response): MangasPage {
@@ -318,7 +314,6 @@ class NovelUpdates :
             val type = doc.select("#showtype").text().trim()
             val summary = doc.select("#editdescription").text().trim()
 
-            // Extract tags from a.genre elements (tags section)
             val tags = doc.select("#showtags a.genre").joinToString(", ") { it.text() }
 
             // Append tags to genre
@@ -343,11 +338,9 @@ class NovelUpdates :
     override fun chapterListParse(response: Response): List<SChapter> {
         val doc = Jsoup.parse(response.body.string())
 
-        // Get the novel ID for fetching chapters
         val novelId = doc.select("input#mypostid").attr("value")
         if (novelId.isEmpty()) return emptyList()
 
-        // Fetch chapters via AJAX
         val formBody = FormBody.Builder()
             .add("action", "nd_getchapters")
             .add("mygrr", "0")
@@ -388,10 +381,7 @@ class NovelUpdates :
 
     override fun pageListRequest(chapter: SChapter): Request = GET(chapter.url, headers)
 
-    override fun pageListParse(response: Response): List<Page> {
-        // Return single page with the chapter URL for fetchPageText
-        return listOf(Page(0, response.request.url.toString(), null))
-    }
+    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString(), null))
 
     override fun imageUrlParse(response: Response) = ""
 
@@ -510,11 +500,9 @@ class NovelUpdates :
                         append("&ss=").append(statusFilter.toUriPart())
                     }
 
-                    // Add tags (not for Latest Added)
                     val includedTags = tagFilter.state.filter { it.isIncluded() }.map { it.value }
                     val excludedTags = tagFilter.state.filter { it.isExcluded() }.map { it.value }
 
-                    // Add tags from text inputs (comma-separated, case-insensitive matching)
                     val tagMap = tagFilter.state.associate { it.name.lowercase() to it.value }
                     val includeTextTags = tagIncludeTextFilter.state.split(",")
                         .map { it.trim().lowercase() }
@@ -536,7 +524,6 @@ class NovelUpdates :
                         append("&tge=").append(allExcludedTags.joinToString(","))
                     }
 
-                    // Add reading list (not for Latest Added)
                     val readingListIds = readingListTextFilter.state.split(",")
                         .map { it.trim() }
                         .filter { it.isNotEmpty() }

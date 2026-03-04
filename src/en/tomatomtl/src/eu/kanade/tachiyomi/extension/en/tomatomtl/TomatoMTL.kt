@@ -137,7 +137,6 @@ class TomatoMTL :
         val items = jsonResult["items"]?.jsonArray ?: return MangasPage(emptyList(), false)
         val hasMore = jsonResult["has_more"]?.jsonPrimitive?.contentOrNull?.toBoolean() ?: false
 
-        // Collect titles for batch translation
         val titlesToTranslate = mutableListOf<String>()
 
         val mangaData = items.mapNotNull { element ->
@@ -197,13 +196,11 @@ class TomatoMTL :
     private fun translateTitles(titles: List<String>): List<String> {
         if (titles.isEmpty()) return emptyList()
 
-        // Check if titles need translation (contain Chinese characters)
         val chineseRegex = Regex("[\\u4e00-\\u9fff]")
         val needsTranslation = titles.any { chineseRegex.containsMatchIn(it) }
         if (!needsTranslation) return titles
 
         return try {
-            // Use Google Translate HTML API for batch translation
             val bodyArray = buildJsonArray {
                 add(
                     buildJsonArray {
@@ -247,7 +244,6 @@ class TomatoMTL :
     // ======================== Latest ========================
 
     override fun latestUpdatesRequest(page: Int): Request {
-        // Use search API with sort_order=new_update for latest
         val bodyJson = buildJsonObject {
             put("query", "")
             put("offset", (page - 1) * 20)
@@ -264,15 +260,12 @@ class TomatoMTL :
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val offset = (page - 1) * 20
 
-        // Check for garden source filter first
         val sourceFilter = filters.find { it is SourceFilter } as? SourceFilter
         val selectedSource = sourceFilter?.toUriPart()
 
-        // If a garden source is selected, use garden API
         if (!selectedSource.isNullOrEmpty()) {
             // Garden source search or browse
             if (query.isNotEmpty()) {
-                // Search within garden source
                 val searchUrl = "$gardenApiBase/source/$selectedSource/search?keyword=${URLEncoder.encode(query, "UTF-8")}&page=$page"
                 return GET(searchUrl, headers)
             } else {
@@ -282,10 +275,8 @@ class TomatoMTL :
             }
         }
 
-        // Check for category filter for browse mode
         val categoryFilter = filters.find { it is CategoryFilter } as? CategoryFilter
 
-        // If category filter is used (for non-garden/fanqie novels), use categories_v1 API
         if (categoryFilter != null && categoryFilter.state > 0 && query.isEmpty()) {
             val genderFilter = filters.find { it is GenderFilter } as? GenderFilter
             val creationStatusFilter =
@@ -296,13 +287,14 @@ class TomatoMTL :
 
             val categoryId = categoryFilter.toUriPart()
             val gender = genderFilter?.toUriPart() ?: "1"
-            val creationStatus = creationStatusFilter?.toUriPart() ?: "creation_status_default"
-            val wordCount = wordCountFilterCat?.toUriPart() ?: "word_num_default"
-            val sort = sortFilterCat?.toUriPart() ?: "sort_default"
+            val creationStatus = creationStatusFilter?.toUriPart() ?: "0"
+            val wordCount = wordCountFilterCat?.toUriPart() ?: "0"
+            val sort = sortFilterCat?.toUriPart() ?: "0"
+            val page = (offset / 20) + 1
 
-            val url = "$apiBase/categories_v1?category_id=$categoryId&gender=$gender" +
-                "&creation_status=$creationStatus&word_count=$wordCount&sort=$sort" +
-                "&sub_category_id=&offset=$offset&limit=20"
+            val url = "$baseUrl/categories_v2?category_id=$categoryId&sub_category_id=" +
+                "&word_count=$wordCount&creation_status=$creationStatus" +
+                "&gender=$gender&sort=$sort&page=$page"
 
             return GET(url, headers)
         }
@@ -345,19 +337,21 @@ class TomatoMTL :
         val responseBody = response.body.string()
         val requestUrl = response.request.url.toString()
 
-        // Check if this is a garden API response
         val isGardenApi = requestUrl.contains("tomato-garden-api")
+        val isCategoriesV2 = requestUrl.contains("categories_v2")
+
+        if (isCategoriesV2) {
+            return parseCategoriesV2Html(responseBody)
+        }
 
         return try {
             val jsonResult = json.parseToJsonElement(responseBody).jsonObject
 
-            // Check for encrypted response (iv/enc)
             val iv = jsonResult["iv"]?.jsonPrimitive?.contentOrNull
             val enc = jsonResult["enc"]?.jsonPrimitive?.contentOrNull
 
             if (iv != null && enc != null) {
                 if (isGardenApi) {
-                    // Parse garden API response
                     parseGardenApiResponse(iv, enc, requestUrl)
                 } else {
                     // Decrypt and parse categories response
@@ -381,7 +375,6 @@ class TomatoMTL :
         val decrypted = decryptContent(iv, enc)
         Log.d("TomatoMTL", "Garden API decrypted: ${decrypted.take(500)}...")
 
-        // Extract page number from request URL
         val page = try {
             requestUrl.substringAfter("page=").substringBefore("&").toIntOrNull() ?: 1
         } catch (e: Exception) {
@@ -402,16 +395,11 @@ class TomatoMTL :
             // Pagination logic - garden API uses "has_more" or check array size
             val hasMore = when {
                 jsonResult["has_more"]?.jsonPrimitive?.booleanOrNull != null -> jsonResult["has_more"]?.jsonPrimitive?.booleanOrNull ?: false
-
                 jsonResult["hasMore"]?.jsonPrimitive?.booleanOrNull != null -> jsonResult["hasMore"]?.jsonPrimitive?.booleanOrNull ?: false
-
                 books.size >= 20 -> true
-
-                // If we got 20 items, assume more pages
                 else -> false
             }
 
-            // Collect titles for translation
             val titlesToTranslate = mutableListOf<String>()
             val mangaData = books.mapNotNull { element ->
                 try {
@@ -424,7 +412,6 @@ class TomatoMTL :
                     val rawTitle = book["name"]?.jsonPrimitive?.contentOrNull ?: "Unknown"
                     titlesToTranslate.add(rawTitle)
 
-                    // Convert to garden URL format
                     val hexUrl = stringToHex(bookUrl)
                     val source = book["host"]?.jsonPrimitive?.contentOrNull
                         ?.replace(Regex("https?://"), "")
@@ -474,7 +461,6 @@ class TomatoMTL :
         val data = firstTab["data"]?.jsonArray ?: return MangasPage(emptyList(), false)
         val hasMore = firstTab["has_more"]?.jsonPrimitive?.contentOrNull?.toBoolean() ?: false
 
-        // Collect titles for batch translation
         val titlesToTranslate = mutableListOf<String>()
         val mangaData = data.mapNotNull { element ->
             try {
@@ -535,7 +521,6 @@ class TomatoMTL :
             val books = jsonResult["books"]?.jsonArray ?: return MangasPage(emptyList(), false)
             val hasMore = jsonResult["has_more"]?.jsonPrimitive?.contentOrNull?.toBoolean() ?: false
 
-            // Collect titles for batch translation
             val titlesToTranslate = mutableListOf<String>()
             val mangaData = books.mapNotNull { element ->
                 try {
@@ -575,6 +560,89 @@ class TomatoMTL :
     }
 
     /**
+     * Parse categories_v2 HTML response.
+     * The page contains embedded JSON in a <script> tag: const books = [{book_id, book_name, thumb_url, author, score}, ...]
+     */
+    private fun parseCategoriesV2Html(html: String): MangasPage {
+        return try {
+            val doc = Jsoup.parse(html)
+            val scripts = doc.select("script")
+
+            var booksJsonStr: String? = null
+            for (script in scripts) {
+                val scriptContent = script.data()
+                val booksMatch = Regex("""const\s+books\s*=\s*(\[.*?]);""", RegexOption.DOT_MATCHES_ALL).find(scriptContent)
+                if (booksMatch != null) {
+                    booksJsonStr = booksMatch.groupValues[1]
+                    break
+                }
+            }
+
+            if (booksJsonStr == null) {
+                return MangasPage(emptyList(), false)
+            }
+
+            val booksArray = json.parseToJsonElement(booksJsonStr).jsonArray
+
+            val titlesToTranslate = mutableListOf<String>()
+            val mangaData = booksArray.mapNotNull { element ->
+                try {
+                    val book = element.jsonObject
+                    val bookId = book["book_id"]?.jsonPrimitive?.contentOrNull
+                        ?: return@mapNotNull null
+                    val rawTitle = (book["book_name"]?.jsonPrimitive?.contentOrNull ?: "Unknown")
+                        .let { Parser.unescapeEntities(it, false) }
+                    titlesToTranslate.add(rawTitle)
+
+                    Triple(
+                        "/book/$bookId",
+                        book["thumb_url"]?.jsonPrimitive?.contentOrNull?.let { linkCover(it) },
+                        book["author"]?.jsonPrimitive?.contentOrNull,
+                    )
+                } catch (e: Exception) {
+                    null
+                }
+            }
+
+            val translatedTitles = translateTitles(titlesToTranslate)
+
+            val mangas = mangaData.mapIndexed { index, (url, cover, author) ->
+                SManga.create().apply {
+                    this.url = url
+                    title = translatedTitles.getOrNull(index) ?: titlesToTranslate.getOrNull(index) ?: "Unknown"
+                    thumbnail_url = cover
+                    this.author = author
+                }
+            }
+
+            // Determine hasMore from the actual pagination element.
+            // <ul class="pagination"> contains <li class="page-item active"> (current) and
+            //   <li class="page-item"><a class="page-link" href="...&page=N">N</a></li>.
+            // A page link with a number greater than the active page means there IS a next page.
+            // If pagination is missing entirely, assume there IS a next page (safer default).
+            val hasMore = run {
+                val pagination = doc.selectFirst("ul.pagination")
+                if (pagination == null) {
+                    // No pagination element – assume more pages exist unless we got 0 books
+                    mangas.isNotEmpty()
+                } else {
+                    val activePage = pagination.selectFirst("li.page-item.active")
+                        ?.text()?.trim()?.toIntOrNull() ?: 1
+                    val pageLinks = pagination.select("li.page-item a.page-link")
+                    pageLinks.any { link ->
+                        val pageNum = link.text().trim().toIntOrNull()
+                        pageNum != null && pageNum > activePage
+                    }
+                }
+            }
+            MangasPage(mangas, hasMore)
+        } catch (e: Exception) {
+            Log.e("TomatoMTL", "Error parsing categories_v2 HTML: ${e.message}")
+            MangasPage(emptyList(), false)
+        }
+    }
+
+    /**
      * Optimize cover image URL using wsrv.nl proxy (matching JS link_cover function)
      * Handles different URL formats:
      * 1. Already optimized wsrv.nl URLs - return as-is
@@ -587,20 +655,16 @@ class TomatoMTL :
             return "$baseUrl/assets/images/noimg_1.jpg"
         }
 
-        // If already a wsrv.nl URL, check if it's properly formed
         if (url.contains("wsrv.nl") || url.contains("cover-img.raudo.eu.org")) {
             // Fix malformed URLs like "https://wsrv.nl//novel-pic/..."
             return url.replace("wsrv.nl//", "wsrv.nl/?url=https://p6-novel.byteimg.com/origin/")
         }
 
-        // If it's a tomato-proxy URL, it's already good
         if (url.contains("tomato-proxy.cachefly.net")) {
             return url
         }
 
-        // Handle Fanqie-style URLs (p*-reading-sign.fqnovelpic.com or p*-novel.byteimg.com)
         if (url.contains("fqnovelpic.com") || url.contains("byteimg.com")) {
-            // Extract the path after /novel-pic/
             val novelPicIndex = url.indexOf("/novel-pic/")
             if (novelPicIndex != -1) {
                 val path = url.substring(novelPicIndex)
@@ -633,7 +697,6 @@ class TomatoMTL :
     private fun fetchGardenMangaDetails(manga: SManga): rx.Observable<SManga> {
         return rx.Observable.fromCallable {
             try {
-                // Parse garden URL: /garden/{source}/{hexId}
                 val pathParts = manga.url.removePrefix("/garden/").split("/")
                 if (pathParts.size < 2) return@fromCallable manga
 
@@ -643,7 +706,6 @@ class TomatoMTL :
 
                 Log.d("TomatoMTL", "Fetching garden details for: source=$source, url=$novelUrl")
 
-                // Use the garden detail API: /api/source/{source}/detail?url={encoded_url}
                 val detailUrl = "$gardenApiBase/source/$source/detail?url=${URLEncoder.encode(novelUrl, "UTF-8")}"
 
                 val response = client.newCall(GET(detailUrl, headers)).execute()
@@ -728,7 +790,6 @@ class TomatoMTL :
                     Log.e("TomatoMTL", "Error parsing garden details: ${e.message}", e)
                 }
 
-                // Fallback if API fails - use minimal info
                 manga.apply {
                     if (description.isNullOrBlank()) {
                         description = buildString {
@@ -784,7 +845,6 @@ class TomatoMTL :
         val document = Jsoup.parse(html)
 
         return SManga.create().apply {
-            // Try to extract from JavaScript variables first (more reliable)
             val bookName = extractJsVariable(html, "book_name")
             val bookCover = extractJsVariable(html, "book_cover")
             val descriptionJs = extractJsVariable(html, "description")
@@ -889,7 +949,6 @@ class TomatoMTL :
     private fun fetchGardenChapterList(manga: SManga): rx.Observable<List<SChapter>> {
         return rx.Observable.fromCallable {
             try {
-                // Parse garden URL: /garden/{source}/{hexId}
                 val pathParts = manga.url.removePrefix("/garden/").split("/")
                 if (pathParts.size < 2) return@fromCallable emptyList<SChapter>()
 
@@ -897,7 +956,6 @@ class TomatoMTL :
                 val hexId = pathParts[1]
                 val novelUrl = hexToString(hexId)
 
-                // Try to fetch chapters from garden API
                 val chaptersUrl = "$gardenApiBase/source/$source/chapters?url=${URLEncoder.encode(novelUrl, "UTF-8")}"
                 Log.d("TomatoMTL", "Fetching garden chapters from: $chaptersUrl")
 
@@ -918,7 +976,6 @@ class TomatoMTL :
 
                         val decryptedJson = json.parseToJsonElement(decrypted).jsonObject
 
-                        // Check for success flag
                         if (decryptedJson["success"]?.jsonPrimitive?.booleanOrNull != true) {
                             val error = decryptedJson["error"]?.jsonPrimitive?.contentOrNull ?: "Unknown error"
                             Log.e("TomatoMTL", "Garden API returned error: $error")
@@ -949,7 +1006,6 @@ class TomatoMTL :
 
                                 chapters.add(
                                     SChapter.create().apply {
-                                        // Store the actual chapter URL encoded, with index for ordering
                                         url = "/garden/$source/$hexId/${URLEncoder.encode(chapterUrl, "UTF-8")}-$index"
                                         name = chapterName
                                         chapter_number = (index + 1).toFloat()
@@ -978,8 +1034,6 @@ class TomatoMTL :
                 } catch (e: Exception) {
                     Log.e("TomatoMTL", "Garden API error: ${e.message}", e)
 
-                    // If API fails, create placeholder chapters
-                    // This at least shows the user something
                     chapters.add(
                         SChapter.create().apply {
                             url = manga.url + "/0"
@@ -990,7 +1044,6 @@ class TomatoMTL :
                 }
 
                 chapters.ifEmpty {
-                    // If no chapters found, add a placeholder explaining the limitation
                     listOf(
                         SChapter.create().apply {
                             url = manga.url + "/info"
@@ -1013,18 +1066,15 @@ class TomatoMTL :
     }
 
     override fun chapterListParse(response: Response): List<SChapter> {
-        // This is a fallback - we prefer fetchChapterList which uses the catalog API
         val document = Jsoup.parse(response.body.string())
         val chapters = mutableListOf<SChapter>()
 
-        // Parse chapter links from accordion structure
         val chapterLinks =
             document.select(".chapter-link, a[href*='/book/'][href*='/'], a[href*='/garden/']")
 
         chapterLinks.forEach { link ->
             try {
                 val href = link.attr("href")
-                // Filter out non-chapter links
                 if (href.isBlank() || href == "#" || !isChapterUrl(href)) return@forEach
 
                 val chapter = SChapter.create().apply {
@@ -1037,7 +1087,6 @@ class TomatoMTL :
                         link.attr("title").ifBlank { "Chapter" }
                     }
 
-                    // Extract chapter number
                     val chapterNumMatch = Regex("""#?(\d+)""").find(
                         link.selectFirst(".chapter-number")?.text() ?: name,
                     )
@@ -1053,7 +1102,7 @@ class TomatoMTL :
             }
         }
 
-        return chapters.reversed() // Newest first
+        return chapters.reversed()
     }
 
     /**
@@ -1071,7 +1120,6 @@ class TomatoMTL :
     private fun fetchRegularChapterList(manga: SManga): rx.Observable<List<SChapter>> {
         return rx.Observable.fromCallable {
             try {
-                // Extract book ID from URL: /book/{bookId}
                 val bookId = manga.url.removePrefix("/book/").split("/").firstOrNull()
                 if (bookId.isNullOrBlank()) {
                     return@fromCallable this.chapterListParse(
@@ -1079,7 +1127,6 @@ class TomatoMTL :
                     )
                 }
 
-                // Fetch from catalog API
                 val catalogUrl = "$baseUrl/catalog/$bookId"
                 Log.d("TomatoMTL", "Fetching catalog: $catalogUrl")
 
@@ -1103,7 +1150,6 @@ class TomatoMTL :
                         chapterArray.forEachIndexed { index, element ->
                             try {
                                 val chapterObj = element.jsonObject
-                                // Chapter format: {"title": "...", "id": "..."}
                                 val rawTitle = chapterObj["title"]?.jsonPrimitive?.contentOrNull
                                     ?: chapterObj["name"]?.jsonPrimitive?.contentOrNull
                                     ?: "Chapter ${index + 1}"
@@ -1144,7 +1190,6 @@ class TomatoMTL :
                     Log.e("TomatoMTL", "Error parsing catalog: ${e.message}")
                 }
 
-                // If catalog API failed, fallback to HTML parsing
                 if (chapters.isEmpty()) {
                     return@fromCallable this.chapterListParse(
                         client.newCall(GET("$baseUrl${manga.url}", headers)).execute(),
@@ -1194,8 +1239,6 @@ class TomatoMTL :
     }
 
     private fun fetchGardenChapter(chapterUrl: String): String {
-        // Parse garden URL: /garden/{source}/{hex_novel_url}/{encoded_chapter_url}-{index}
-        // Handle both relative and absolute URLs
         val pathString = if (chapterUrl.startsWith("http")) {
             chapterUrl.substringAfter("/garden/", "")
         } else {
@@ -1210,7 +1253,6 @@ class TomatoMTL :
         // pathParts[2] contains {encoded_chapter_url}-{index}
         val chapterPart = pathParts[2]
 
-        // Extract the chapter URL (everything before the last dash and index number)
         val lastDashIdx = chapterPart.lastIndexOf("-")
         val encodedChapterUrl = if (lastDashIdx > 0) {
             chapterPart.substring(0, lastDashIdx)
@@ -1227,10 +1269,8 @@ class TomatoMTL :
 
         Log.d("TomatoMTL", "Garden chapter fetch - source: $source, chapterUrl: $chapterApiUrl")
 
-        // Ensure source is not empty
         if (source.isEmpty()) return "Invalid source in garden URL"
 
-        // Build the API request
         // API endpoint: GET /api/source/{source}/chapter?url={encoded_chapter_url}
         val apiUrl = "$gardenApiBase/source/$source/chapter?url=${URLEncoder.encode(chapterApiUrl, "UTF-8")}"
 
@@ -1250,7 +1290,6 @@ class TomatoMTL :
                 val decrypted = decryptContent(iv, enc)
                 Log.d("TomatoMTL", "Decrypted garden chapter: ${decrypted.take(200)}...")
 
-                // Parse the decrypted JSON to get the chapter content
                 val decryptedJson = json.parseToJsonElement(decrypted).jsonObject
 
                 if (decryptedJson["success"]?.jsonPrimitive?.booleanOrNull != true) {
@@ -1270,7 +1309,6 @@ class TomatoMTL :
                 val sanitizedContent = sanitizeChapterContent(content)
                 processAndTranslate(sanitizedContent)
             } else {
-                // Check if it's a plain error message
                 val error = jsonResult["error"]?.jsonPrimitive?.contentOrNull
                 if (error != null) return error
 
@@ -1282,10 +1320,6 @@ class TomatoMTL :
             "Error loading chapter: ${e.message}"
         }
     }
-
-    /**
-     * Sanitize chapter content - clean up HTML, extra whitespace, etc.
-     */
     private fun sanitizeChapterContent(raw: String): String {
         if (raw.isBlank()) return ""
 
@@ -1293,20 +1327,16 @@ class TomatoMTL :
             .replace(Regex("</img\\s*>", RegexOption.IGNORE_CASE), "")
             .replace("\r\n", "\n")
             .replace("\u00a0", " ")
-            // Remove TomatoMTL audio markers - use raw string for cleaner regex
             .replace(Regex("""\{!-- PGC_VOICE:[\s\S]*? --\}\n本节目由番茄畅听出品[，。]*.*?\n""", RegexOption.IGNORE_CASE), "")
 
-        // If content has HTML tags, extract text
         if (Regex("<[a-z][\\s\\S]*>", RegexOption.IGNORE_CASE).containsMatchIn(content)) {
             val doc = Jsoup.parse(content)
             content = doc.body().text()
         }
 
         // Always decode HTML entities (&#39; → ', &amp; → &, etc.)
-        // This handles cases where decrypted content has entities but no HTML tags
         content = Parser.unescapeEntities(content, false)
 
-        // Clean up whitespace and split into paragraphs
         return content.split("\n")
             .map { it.replace(Regex("\\s+"), " ").trim() }
             .filter { it.isNotBlank() }
@@ -1314,16 +1344,13 @@ class TomatoMTL :
     }
 
     private fun fetchRegularChapter(chapterUrl: String): String {
-        // Handle relative URL
         val fullUrl = if (chapterUrl.startsWith("http")) chapterUrl else "$baseUrl$chapterUrl"
 
-        // Parse regular URL: /book/{book_id}/{chapter_id}
         val pathParts = fullUrl.removePrefix("$baseUrl/book/").split("/")
         if (pathParts.size < 2) return "Invalid chapter URL"
 
         val bookId = pathParts[0]
 
-        // Fetch catalog first to get chapter info
         val catalogUrl = "$baseUrl/catalog/$bookId"
         return try {
             val catalogResponse = client.newCall(GET(catalogUrl, headers)).execute()
@@ -1352,8 +1379,6 @@ class TomatoMTL :
         val pageHtml = pageResponse.body.string()
         val document = Jsoup.parse(pageHtml)
 
-        // First, try to extract encryptedData from JavaScript variable
-        // Format: let encryptedData = {"iv":"...", "enc":"..."}
         val encryptedDataMatch = Regex("""let\s+encryptedData\s*=\s*\{[^}]*"iv"\s*:\s*"([^"]+)"[^}]*"enc"\s*:\s*"([^"]+)"[^}]*\}""").find(pageHtml)
             ?: Regex("""encryptedData\s*=\s*\{[^}]*"iv"\s*:\s*"([^"]+)"[^}]*"enc"\s*:\s*"([^"]+)"[^}]*\}""").find(pageHtml)
 
@@ -1369,14 +1394,12 @@ class TomatoMTL :
             }
         }
 
-        // Look for content in various possible containers
         val contentElement =
             document.selectFirst("#chapter-content, .chapter-content, #content, .content")
         if (contentElement != null) {
             return processAndTranslate(contentElement.html())
         }
 
-        // Check for encrypted content in script (older format)
         val scripts = document.select("script")
         for (script in scripts) {
             val data = script.data()
@@ -1401,7 +1424,6 @@ class TomatoMTL :
     private fun processAndTranslate(content: String): String {
         val translationMode = getTranslationMode()
 
-        // Check if content needs translation
         if (translationMode != "none" && needsTranslation(content)) {
             return translateContent(content, translationMode)
         }
@@ -1477,7 +1499,6 @@ class TomatoMTL :
 
             if (paragraphs.isEmpty()) return formatContent(content)
 
-            // Use Google Translate HTML API
             val bodyArray = buildJsonArray {
                 add(
                     buildJsonArray {
@@ -1559,7 +1580,6 @@ class TomatoMTL :
 
     private fun translateWithGemini(content: String): String {
         // Gemini AI translation (currently under maintenance per website)
-        // Fall back to Google translate
         return translateWithGoogle(content)
     }
 
@@ -1573,7 +1593,6 @@ class TomatoMTL :
                 content
             }
 
-            // Fallback to Google if content is empty
             if (text.isBlank()) return formatContent(content)
 
             val requestBody = buildJsonArray {
@@ -1601,7 +1620,6 @@ class TomatoMTL :
                 return translateWithGoogle(content)
             }
 
-            // Handle potential errors (non-array response)
             val jsonElement = json.parseToJsonElement(responseBody)
 
             if (jsonElement !is JsonArray) {
@@ -1777,75 +1795,72 @@ class TomatoMTL :
         }
     }
 
-    private fun getCategories(): List<Pair<String, String>> {
-        // Full category list from the website
-        return listOf(
-            Pair("", "Any"),
-            Pair("1", "Urban"),
-            Pair("7", "Fantasy"),
-            Pair("23", "Farming"),
-            Pair("12", "History"),
-            Pair("538", "Doujin"),
-            Pair("8", "Post-apocalyptic Sci-Fi"),
-            Pair("259", "Fantasy Xianxia"),
-            Pair("746", "Gaming And Sports"),
-            Pair("100", "Supernatural"),
-            Pair("27", "Warlord As A Live-In Son-in-Law"),
-            Pair("26", "Divine Doctor"),
-            Pair("10", "Suspense"),
-            Pair("751", "Suspense And Supernatural"),
-            Pair("37", "Transmigration"),
-            Pair("36", "Rebirth"),
-            Pair("262", "Urban Brainstorming"),
-            Pair("124", "Urban Cultivation"),
-            Pair("19", "System"),
-            Pair("25", "Live-in Son-in-law"),
-            Pair("20", "Divine Tycoon"),
-            Pair("261", "Urban Daily Life"),
-            Pair("522", "Face-Slapping Moments"),
-            Pair("2", "Urban Life"),
-            Pair("273", "Ancient History"),
-            Pair("373", "Journey To The West Derivative"),
-            Pair("90", "Genius"),
-            Pair("71", "Myriad Worlds And Realms"),
-            Pair("17", "Antique Appraisal"),
-            Pair("263", "Urban Farming"),
-            Pair("61", "Mystery And Deduction"),
-            Pair("452", "Alternate History"),
-            Pair("511", "Eastern Fantasy"),
-            Pair("16", "Martial Arts"),
-            Pair("375", "Special Forces"),
-            Pair("81", "Tomb Raiding"),
-            Pair("80", "Way Of The Sword"),
-            Pair("44", "Space/Dimension"),
-            Pair("384", "Invincible"),
-            Pair("67", "Three Kingdoms"),
-            Pair("75", "Food Delivery"),
-            Pair("42", "Stay-at-Home Dad"),
-            Pair("11", "Countryside"),
-            Pair("68", "Apocalypse"),
-            Pair("516", "Urban Superpowers"),
-            Pair("40", "Islands"),
-            Pair("39", "Anime/2D Culture"),
-            Pair("66", "Prehistoric/Mythical Era"),
-            Pair("379", "Survival"),
-            Pair("15", "Sports"),
-            Pair("91", "Multiple Heroines"),
-            Pair("92", "Cunning And Manipulative"),
-            Pair("389", "Single Female Heroine"),
-            Pair("369", "Villain"),
-            Pair("381", "Chat Groups"),
-            Pair("382", "Transmigration Into A Book"),
-            Pair("374", "Marvel"),
-            Pair("368", "Naruto"),
-            Pair("376", "Dragon Ball"),
-            Pair("371", "Pokémon"),
-            Pair("370", "Pirates"),
-            Pair("367", "Ultraman Doujin"),
-            Pair("465", "Comprehensive Anime"),
-            Pair("718", "Anime Derivatives"),
-        )
-    }
+    private fun getCategories(): List<Pair<String, String>> = listOf(
+        Pair("", "Any"),
+        Pair("1", "Urban"),
+        Pair("7", "Fantasy"),
+        Pair("23", "Farming"),
+        Pair("12", "History"),
+        Pair("538", "Doujin"),
+        Pair("8", "Post-apocalyptic Sci-Fi"),
+        Pair("259", "Fantasy Xianxia"),
+        Pair("746", "Gaming And Sports"),
+        Pair("100", "Supernatural"),
+        Pair("27", "Warlord As A Live-In Son-in-Law"),
+        Pair("26", "Divine Doctor"),
+        Pair("10", "Suspense"),
+        Pair("751", "Suspense And Supernatural"),
+        Pair("37", "Transmigration"),
+        Pair("36", "Rebirth"),
+        Pair("262", "Urban Brainstorming"),
+        Pair("124", "Urban Cultivation"),
+        Pair("19", "System"),
+        Pair("25", "Live-in Son-in-law"),
+        Pair("20", "Divine Tycoon"),
+        Pair("261", "Urban Daily Life"),
+        Pair("522", "Face-Slapping Moments"),
+        Pair("2", "Urban Life"),
+        Pair("273", "Ancient History"),
+        Pair("373", "Journey To The West Derivative"),
+        Pair("90", "Genius"),
+        Pair("71", "Myriad Worlds And Realms"),
+        Pair("17", "Antique Appraisal"),
+        Pair("263", "Urban Farming"),
+        Pair("61", "Mystery And Deduction"),
+        Pair("452", "Alternate History"),
+        Pair("511", "Eastern Fantasy"),
+        Pair("16", "Martial Arts"),
+        Pair("375", "Special Forces"),
+        Pair("81", "Tomb Raiding"),
+        Pair("80", "Way Of The Sword"),
+        Pair("44", "Space/Dimension"),
+        Pair("384", "Invincible"),
+        Pair("67", "Three Kingdoms"),
+        Pair("75", "Food Delivery"),
+        Pair("42", "Stay-at-Home Dad"),
+        Pair("11", "Countryside"),
+        Pair("68", "Apocalypse"),
+        Pair("516", "Urban Superpowers"),
+        Pair("40", "Islands"),
+        Pair("39", "Anime/2D Culture"),
+        Pair("66", "Prehistoric/Mythical Era"),
+        Pair("379", "Survival"),
+        Pair("15", "Sports"),
+        Pair("91", "Multiple Heroines"),
+        Pair("92", "Cunning And Manipulative"),
+        Pair("389", "Single Female Heroine"),
+        Pair("369", "Villain"),
+        Pair("381", "Chat Groups"),
+        Pair("382", "Transmigration Into A Book"),
+        Pair("374", "Marvel"),
+        Pair("368", "Naruto"),
+        Pair("376", "Dragon Ball"),
+        Pair("371", "Pokémon"),
+        Pair("370", "Pirates"),
+        Pair("367", "Ultraman Doujin"),
+        Pair("465", "Comprehensive Anime"),
+        Pair("718", "Anime Derivatives"),
+    )
 
     companion object {
         private const val TRANSLATION_MODE_KEY = "translationMode"
@@ -1854,9 +1869,6 @@ class TomatoMTL :
     }
 }
 
-// ======================== Filter Classes ========================
-
-// Search Filters
 private class SearchStatusFilter :
     SelectFilter(
         "Update Status",
@@ -1920,13 +1932,9 @@ private class CreationStatusFilter :
     SelectFilter(
         "Creation Status",
         arrayOf(
-            Pair("All", "creation_status_default"),
-            Pair("Completed", "creation_status_end"),
-            Pair("Completed within 6 months", "creation_status_half_year_end"),
-            Pair("Ongoing", "creation_status_loading"),
-            Pair("Updated within 3 days", "creation_status_3day_update"),
-            Pair("Updated within 7 days", "creation_status_7day_update"),
-            Pair("Updated within 1 month", "creation_status_1month_update"),
+            Pair("All", "0"),
+            Pair("Completed", "2"),
+            Pair("Ongoing", "1"),
         ),
     )
 
@@ -1934,16 +1942,7 @@ private class WordCountFilterCategory :
     SelectFilter(
         "Word Count",
         arrayOf(
-            Pair("All", "word_num_default"),
-            Pair("Under 100k", "word_num_lte10"),
-            Pair("Under 300k", "word_num_lte30"),
-            Pair("Under 500k", "word_num_lte50"),
-            Pair("Over 300k", "word_num_gte30"),
-            Pair("Over 500k", "word_num_gte50"),
-            Pair("Over 1M", "word_num_gte100"),
-            Pair("Over 2M", "word_num_gte200"),
-            Pair("Over 3M", "word_num_gte300"),
-            Pair("Over 5M", "word_num_gte500"),
+            Pair("All", "0"),
         ),
     )
 
@@ -1951,21 +1950,19 @@ private class SortFilterCategory :
     SelectFilter(
         "Sort By",
         arrayOf(
-            Pair("Default", "sort_default"),
-            Pair("New Books", "sort_new_book"),
-            Pair("High Rating", "sort_score"),
-            Pair("Word Count", "sort_word_number"),
+            Pair("Default", "0"),
+            Pair("New Books", "1"),
+            Pair("High Rating", "2"),
+            Pair("Word Count", "3"),
         ),
     )
 
-// Source Filter
 private class SourceFilter(sources: List<Pair<String, String>>) :
     SelectFilter(
         "Garden Source",
         (listOf(Pair("All Sources", "")) + sources.map { Pair(it.second, it.first) }).toTypedArray(),
     )
 
-// Base select filter
 private open class SelectFilter(
     displayName: String,
     val options: Array<Pair<String, String>>,
