@@ -139,8 +139,7 @@ class ReadFromNet :
     override fun chapterListParse(response: Response): List<SChapter> {
         val doc = response.asJsoup()
         val chapters = mutableListOf<SChapter>()
-        val novelPath = response.request.url.encodedPath.trimStart('/')
-
+        val novelPath = response.request.url.encodedPath
         // LN Reader: First chapter is the page itself (page 1)
         chapters.add(
             SChapter.create().apply {
