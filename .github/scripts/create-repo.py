@@ -9,7 +9,6 @@ PACKAGE_NAME_REGEX = re.compile(r"package: name='([^']+)'")
 VERSION_CODE_REGEX = re.compile(r"versionCode='([^']+)'")
 VERSION_NAME_REGEX = re.compile(r"versionName='([^']+)'")
 IS_NSFW_REGEX = re.compile(r"'tachiyomi.extension.nsfw' value='([^']+)'")
-IS_NOVEL_REGEX = re.compile(r"'tachiyomi.extension.novel' value='([^']+)'")
 APPLICATION_LABEL_REGEX = re.compile(r"^application-label:'([^']+)'", re.MULTILINE)
 APPLICATION_ICON_320_REGEX = re.compile(r"^application-icon-320:'([^']+)'", re.MULTILINE)
 LANGUAGE_REGEX = re.compile(r"tsundoku-([^.]+)")
@@ -67,7 +66,6 @@ for apk in REPO_APK_DIR.iterdir():
         "code": int(VERSION_CODE_REGEX.search(package_info).group(1)),
         "version": VERSION_NAME_REGEX.search(package_info).group(1),
         "nsfw": int(IS_NSFW_REGEX.search(badging).group(1)),
-        "isNovel": bool(int(m.group(1))) if (m := IS_NOVEL_REGEX.search(badging)) else False,
     }
     min_data = {
         **common_data,

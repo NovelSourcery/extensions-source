@@ -1,9 +1,0 @@
-ext {
-    extName = 'AliceSW'
-    extClass = '.AliceSW'
-    extVersionCode = 1
-    isNsfw = true
-    isNovel = true
-}
-
-apply from: "$rootDir/common.gradle"
