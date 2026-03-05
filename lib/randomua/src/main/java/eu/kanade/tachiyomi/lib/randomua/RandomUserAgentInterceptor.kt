@@ -42,7 +42,7 @@ private class RandomUserAgentInterceptor(
             return chain.proceed(
                 originalRequest.newBuilder()
                     .headers(modifiedHeaders)
-                    .build()
+                    .build(),
             )
         } catch (e: Exception) {
             throw IOException(e.message)
@@ -111,11 +111,11 @@ fun OkHttpClient.Builder.setRandomUserAgent(
 enum class UserAgentType {
     MOBILE,
     DESKTOP,
-    OFF
+    OFF,
 }
 
 @Serializable
 private data class UserAgentList(
     val desktop: List<String>,
-    val mobile: List<String>
+    val mobile: List<String>,
 )

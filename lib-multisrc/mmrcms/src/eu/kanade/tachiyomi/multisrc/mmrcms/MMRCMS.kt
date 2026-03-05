@@ -132,18 +132,16 @@ constructor(
         page: Int,
         query: String,
         filters: FilterList,
-    ): Observable<MangasPage> {
-        return if (query.isNotEmpty()) {
-            if (page == 1) {
-                client.newCall(searchMangaRequest(page, query, filters))
-                    .asObservableSuccess()
-                    .map { searchMangaParse(it) }
-            } else {
-                Observable.just(parseSearchDirectory(page))
-            }
+    ): Observable<MangasPage> = if (query.isNotEmpty()) {
+        if (page == 1) {
+            client.newCall(searchMangaRequest(page, query, filters))
+                .asObservableSuccess()
+                .map { searchMangaParse(it) }
         } else {
-            super.fetchSearchManga(page, query, filters)
+            Observable.just(parseSearchDirectory(page))
         }
+    } else {
+        super.fetchSearchManga(page, query, filters)
     }
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
@@ -305,10 +303,9 @@ constructor(
         }
     }
 
-    override fun pageListParse(document: Document) =
-        document.select("#all > img.img-responsive").mapIndexed { i, it ->
-            Page(i, imageUrl = it.imgAttr())
-        }
+    override fun pageListParse(document: Document) = document.select("#all > img.img-responsive").mapIndexed { i, it ->
+        Page(i, imageUrl = it.imgAttr())
+    }
 
     override fun imageUrlParse(document: Document) = throw UnsupportedOperationException()
 
@@ -461,12 +458,10 @@ constructor(
         }
     }
 
-    protected fun guessCover(mangaUrl: String, url: String?): String {
-        return if (url == null || url.endsWith("no-image.png")) {
-            "$baseUrl/uploads/manga/${mangaUrl.substringAfterLast('/')}/cover/cover_250x350.jpg"
-        } else {
-            url
-        }
+    protected fun guessCover(mangaUrl: String, url: String?): String = if (url == null || url.endsWith("no-image.png")) {
+        "$baseUrl/uploads/manga/${mangaUrl.substringAfterLast('/')}/cover/cover_250x350.jpg"
+    } else {
+        url
     }
 
     protected fun Element.imgAttr(): String = when {

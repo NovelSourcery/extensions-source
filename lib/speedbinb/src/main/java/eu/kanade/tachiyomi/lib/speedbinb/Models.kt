@@ -27,23 +27,22 @@ class BibContentItem(
     @SerialName("ContentDate") val contentDate: String? = null,
     @SerialName("ShopURL") val shopUrl: String? = null,
 ) {
-    fun getSbcUrl(readerUrl: HttpUrl, cid: String) =
-        contentServer.toHttpUrl().newBuilder().apply {
-            when (serverType) {
-                ServerType.DIRECT -> addPathSegment("content.js")
-                ServerType.REST -> addPathSegment("content")
-                ServerType.SBC -> {
-                    addPathSegment("sbcGetCntnt.php")
-                    setQueryParameter("cid", cid)
-                    requestToken?.let { setQueryParameter("p", it) }
-                    setQueryParameter("q", "1")
-                    setQueryParameter("vm", viewMode.toString())
-                    setQueryParameter("dmytime", contentDate ?: System.currentTimeMillis().toString())
-                    copyKeyParametersFrom(readerUrl)
-                }
-                else -> throw UnsupportedOperationException("Unsupported ServerType value $serverType")
+    fun getSbcUrl(readerUrl: HttpUrl, cid: String) = contentServer.toHttpUrl().newBuilder().apply {
+        when (serverType) {
+            ServerType.DIRECT -> addPathSegment("content.js")
+            ServerType.REST -> addPathSegment("content")
+            ServerType.SBC -> {
+                addPathSegment("sbcGetCntnt.php")
+                setQueryParameter("cid", cid)
+                requestToken?.let { setQueryParameter("p", it) }
+                setQueryParameter("q", "1")
+                setQueryParameter("vm", viewMode.toString())
+                setQueryParameter("dmytime", contentDate ?: System.currentTimeMillis().toString())
+                copyKeyParametersFrom(readerUrl)
             }
-        }.toString()
+            else -> throw UnsupportedOperationException("Unsupported ServerType value $serverType")
+        }
+    }.toString()
 }
 
 object ServerType {

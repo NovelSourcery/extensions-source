@@ -24,7 +24,8 @@ object Deobfuscator {
             engine.evaluate(synchronyScript)
 
             engine.set(
-                "source", TestInterface::class.java,
+                "source",
+                TestInterface::class.java,
                 object : TestInterface {
                     override fun getValue() = source
                 },

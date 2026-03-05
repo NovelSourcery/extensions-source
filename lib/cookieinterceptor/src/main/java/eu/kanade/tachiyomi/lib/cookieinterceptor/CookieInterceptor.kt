@@ -6,7 +6,7 @@ import okhttp3.Response
 
 class CookieInterceptor(
     private val domain: String,
-    private val cookies: List<Pair<String, String>>
+    private val cookies: List<Pair<String, String>>,
 ) : Interceptor {
     constructor(domain: String, cookie: Pair<String, String>) : this(domain, listOf(cookie))
 
@@ -24,8 +24,9 @@ class CookieInterceptor(
 
         val cookieList = request.header("Cookie")?.split("; ") ?: emptyList()
 
-        if (cookies.all { (key, value) -> "$key=$value" in cookieList })
+        if (cookies.all { (key, value) -> "$key=$value" in cookieList }) {
             return chain.proceed(request)
+        }
 
         cookies.forEach { (key, value) ->
             setCookie("https://$domain/", "$key=$value; Domain=$domain; Path=/")

@@ -64,7 +64,13 @@ class SeedRandom(seed: String) {
             key[mask and j] = mixed
             j++
         }
-        val actualLen = if (stringseed.isEmpty()) 0 else if (stringseed.length < width) stringseed.length else width
+        val actualLen = if (stringseed.isEmpty()) {
+            0
+        } else if (stringseed.length < width) {
+            stringseed.length
+        } else {
+            width
+        }
         return key.copyOfRange(0, actualLen)
     }
 

@@ -5,7 +5,6 @@ import android.util.Base64
 import java.security.MessageDigest
 import java.util.Arrays
 import javax.crypto.Cipher
-import javax.crypto.SecretKey
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
@@ -28,19 +27,19 @@ object CryptoAES {
      * @param cipherText base64 encoded ciphertext
      * @param password passphrase
      */
-    fun decrypt(cipherText: String, password: String): String {
-        return try {
-            val ctBytes = Base64.decode(cipherText, Base64.DEFAULT)
-            val saltBytes = Arrays.copyOfRange(ctBytes, 8, 16)
-            val cipherTextBytes = Arrays.copyOfRange(ctBytes, 16, ctBytes.size)
-            val md5: MessageDigest = MessageDigest.getInstance("MD5")
-            val keyAndIV = generateKeyAndIV(32, 16, 1, saltBytes, password.toByteArray(Charsets.UTF_8), md5)
-            decryptAES(cipherTextBytes,
-                keyAndIV?.get(0) ?: ByteArray(32),
-                keyAndIV?.get(1) ?: ByteArray(16))
-        } catch (e: Exception) {
-            ""
-        }
+    fun decrypt(cipherText: String, password: String): String = try {
+        val ctBytes = Base64.decode(cipherText, Base64.DEFAULT)
+        val saltBytes = Arrays.copyOfRange(ctBytes, 8, 16)
+        val cipherTextBytes = Arrays.copyOfRange(ctBytes, 16, ctBytes.size)
+        val md5: MessageDigest = MessageDigest.getInstance("MD5")
+        val keyAndIV = generateKeyAndIV(32, 16, 1, saltBytes, password.toByteArray(Charsets.UTF_8), md5)
+        decryptAES(
+            cipherTextBytes,
+            keyAndIV?.get(0) ?: ByteArray(32),
+            keyAndIV?.get(1) ?: ByteArray(16),
+        )
+    } catch (e: Exception) {
+        ""
     }
 
     /**
@@ -50,13 +49,11 @@ object CryptoAES {
      * @param keyBytes key as a bytearray
      * @param ivBytes iv as a bytearray
      */
-    fun decrypt(cipherText: String, keyBytes: ByteArray, ivBytes: ByteArray): String {
-        return try {
-            val cipherTextBytes = Base64.decode(cipherText, Base64.DEFAULT)
-            decryptAES(cipherTextBytes, keyBytes, ivBytes)
-        } catch (e: Exception) {
-            ""
-        }
+    fun decrypt(cipherText: String, keyBytes: ByteArray, ivBytes: ByteArray): String = try {
+        val cipherTextBytes = Base64.decode(cipherText, Base64.DEFAULT)
+        decryptAES(cipherTextBytes, keyBytes, ivBytes)
+    } catch (e: Exception) {
+        ""
     }
 
     /**
@@ -66,15 +63,13 @@ object CryptoAES {
      * @param keyBytes key as a bytearray
      * @param ivBytes iv as a bytearray
      */
-    private fun decryptAES(cipherTextBytes: ByteArray, keyBytes: ByteArray, ivBytes: ByteArray): String {
-        return try {
-            val cipher = Cipher.getInstance(HASH_CIPHER)
-            val keyS = SecretKeySpec(keyBytes, AES)
-            cipher.init(Cipher.DECRYPT_MODE, keyS, IvParameterSpec(ivBytes))
-            cipher.doFinal(cipherTextBytes).toString(Charsets.UTF_8)
-        } catch (e: Exception) {
-            ""
-        }
+    private fun decryptAES(cipherTextBytes: ByteArray, keyBytes: ByteArray, ivBytes: ByteArray): String = try {
+        val cipher = Cipher.getInstance(HASH_CIPHER)
+        val keyS = SecretKeySpec(keyBytes, AES)
+        cipher.init(Cipher.DECRYPT_MODE, keyS, IvParameterSpec(ivBytes))
+        cipher.doFinal(cipherTextBytes).toString(Charsets.UTF_8)
+    } catch (e: Exception) {
+        ""
     }
 
     /**
@@ -104,7 +99,6 @@ object CryptoAES {
 
             // Repeat process until sufficient data has been generated
             while (generatedLength < keyLength + ivLength) {
-
                 // Digest data (last digest if available, password data, salt if available)
                 if (generatedLength > 0) md.update(generatedData, generatedLength - digestLength, digestLength)
                 md.update(password)

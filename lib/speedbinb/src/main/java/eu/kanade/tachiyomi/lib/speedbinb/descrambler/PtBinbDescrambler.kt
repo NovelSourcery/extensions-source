@@ -73,8 +73,7 @@ class PtBinbDescramblerF(s: String, u: String, width: Int, height: Int) : PtBinb
         }
     }
 
-    override fun isScrambled() =
-        pieceDest != null
+    override fun isScrambled() = pieceDest != null
 
     override fun canDescramble(): Boolean {
         val i = 2 * widthPieces * piecePadding
@@ -83,15 +82,13 @@ class PtBinbDescramblerF(s: String, u: String, width: Int, height: Int) : PtBinb
         return width >= 64 + i && height >= 64 + n && width * height >= (320 + i) * (320 + n)
     }
 
-    override fun getCanvasDimensions(): Pair<Int, Int> {
-        return if (canDescramble()) {
-            Pair(
-                width - 2 * widthPieces * piecePadding,
-                height - 2 * heightPieces * piecePadding,
-            )
-        } else {
-            Pair(width, height)
-        }
+    override fun getCanvasDimensions(): Pair<Int, Int> = if (canDescramble()) {
+        Pair(
+            width - 2 * widthPieces * piecePadding,
+            height - 2 * heightPieces * piecePadding,
+        )
+    } else {
+        Pair(width, height)
     }
 
     override fun getDescrambleCoords(): List<PtImgTranslation> {
@@ -179,14 +176,11 @@ class PtBinbDescramblerA(s: String, u: String, width: Int, height: Int) : PtBinb
         }
     }
 
-    override fun isScrambled() =
-        srcPieces != null && dstPieces != null
+    override fun isScrambled() = srcPieces != null && dstPieces != null
 
-    override fun canDescramble(): Boolean =
-        width >= 64 && height >= 64 && width * height >= 102400
+    override fun canDescramble(): Boolean = width >= 64 && height >= 64 && width * height >= 102400
 
-    override fun getCanvasDimensions(): Pair<Int, Int> =
-        Pair(width, height)
+    override fun getCanvasDimensions(): Pair<Int, Int> = Pair(width, height)
 
     override fun getDescrambleCoords(): List<PtImgTranslation> {
         if (!isScrambled()) {

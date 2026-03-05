@@ -39,8 +39,7 @@ abstract class FuzzyDoodle(
         .add("Referer", "$baseUrl/")
 
     // Popular
-    override fun popularMangaRequest(page: Int) =
-        GET("$baseUrl/manga?page=$page", headers)
+    override fun popularMangaRequest(page: Int) = GET("$baseUrl/manga?page=$page", headers)
 
     override fun popularMangaSelector() = "div#card-real"
     override fun popularMangaNextPageSelector() = "ul.pagination > li:last-child:not(.pagination-disabled)"
@@ -66,26 +65,22 @@ abstract class FuzzyDoodle(
     // latest
     protected open val latestFromHomePage = false
 
-    override fun latestUpdatesRequest(page: Int) =
-        if (latestFromHomePage) {
-            latestHomePageRequest(page)
-        } else {
-            latestPageRequest(page)
-        }
+    override fun latestUpdatesRequest(page: Int) = if (latestFromHomePage) {
+        latestHomePageRequest(page)
+    } else {
+        latestPageRequest(page)
+    }
 
-    protected open fun latestHomePageRequest(page: Int) =
-        GET("$baseUrl/?page=$page", headers)
+    protected open fun latestHomePageRequest(page: Int) = GET("$baseUrl/?page=$page", headers)
 
-    protected open fun latestPageRequest(page: Int) =
-        GET("$baseUrl/latest?page=$page", headers)
+    protected open fun latestPageRequest(page: Int) = GET("$baseUrl/latest?page=$page", headers)
 
-    override fun latestUpdatesSelector() =
-        if (latestFromHomePage) {
-            "section:has(h2:containsOwn(Recent Chapters)) div#card-real," +
-                " section:has(h2:containsOwn(Chapitres récents)) div#card-real"
-        } else {
-            popularMangaSelector()
-        }
+    override fun latestUpdatesSelector() = if (latestFromHomePage) {
+        "section:has(h2:containsOwn(Recent Chapters)) div#card-real," +
+            " section:has(h2:containsOwn(Chapitres récents)) div#card-real"
+    } else {
+        popularMangaSelector()
+    }
 
     override fun latestUpdatesNextPageSelector() = popularMangaNextPageSelector()
     override fun latestUpdatesFromElement(element: Element) = popularMangaFromElement(element)
@@ -222,13 +217,11 @@ abstract class FuzzyDoodle(
         }
     }
 
-    protected fun Element.getInfo(text: String): String? =
-        selectFirst("p:has(span:containsOwn($text)) span.capitalize")
-            ?.ownText()
-            ?.trim()
+    protected fun Element.getInfo(text: String): String? = selectFirst("p:has(span:containsOwn($text)) span.capitalize")
+        ?.ownText()
+        ?.trim()
 
-    protected fun String?.removePlaceHolder(): String? =
-        takeUnless { it == "-" }
+    protected fun String?.removePlaceHolder(): String? = takeUnless { it == "-" }
 
     // chapters
     override fun chapterListParse(response: Response): List<SChapter> {
@@ -295,23 +288,17 @@ abstract class FuzzyDoodle(
     }
 
     // pages
-    override fun pageListParse(document: Document): List<Page> {
-        return document.select("div#chapter-container > img").mapIndexed { idx, img ->
-            Page(idx, imageUrl = img.imgAttr())
-        }
+    override fun pageListParse(document: Document): List<Page> = document.select("div#chapter-container > img").mapIndexed { idx, img ->
+        Page(idx, imageUrl = img.imgAttr())
     }
 
-    private fun Element.imgAttr(): String {
-        return when {
-            hasAttr("srcset") -> attr("srcset").substringBefore(" ")
-            hasAttr("data-cfsrc") -> absUrl("data-cfsrc")
-            hasAttr("data-src") -> absUrl("data-src")
-            hasAttr("data-lazy-src") -> absUrl("data-lazy-src")
-            else -> absUrl("src")
-        }
+    private fun Element.imgAttr(): String = when {
+        hasAttr("srcset") -> attr("srcset").substringBefore(" ")
+        hasAttr("data-cfsrc") -> absUrl("data-cfsrc")
+        hasAttr("data-src") -> absUrl("data-src")
+        hasAttr("data-lazy-src") -> absUrl("data-lazy-src")
+        else -> absUrl("src")
     }
 
-    override fun imageUrlParse(document: Document): String {
-        throw UnsupportedOperationException()
-    }
+    override fun imageUrlParse(document: Document): String = throw UnsupportedOperationException()
 }

@@ -27,7 +27,8 @@ abstract class ComiciViewer(
     override val name: String,
     override val baseUrl: String,
     override val lang: String,
-) : ConfigurableSource, HttpSource() {
+) : HttpSource(),
+    ConfigurableSource {
     private val preferences: SharedPreferences by getPreferencesLazy()
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.JAPAN)
 
@@ -123,9 +124,7 @@ abstract class ComiciViewer(
         }
     }
 
-    override fun chapterListRequest(manga: SManga): Request {
-        return GET(baseUrl + manga.url + "/list?s=1", headers)
-    }
+    override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url + "/list?s=1", headers)
 
     override fun chapterListParse(response: Response): List<SChapter> {
         val showLocked = preferences.getBoolean(SHOW_LOCKED_PREF_KEY, true)

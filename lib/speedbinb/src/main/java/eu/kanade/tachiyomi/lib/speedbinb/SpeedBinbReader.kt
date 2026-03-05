@@ -34,8 +34,7 @@ class SpeedBinbReader(
         client.interceptors.filterIsInstance<SpeedBinbInterceptor>().isNotEmpty()
     }
 
-    fun pageListParse(response: Response): List<Page> =
-        pageListParse(response.asJsoup())
+    fun pageListParse(response: Response): List<Page> = pageListParse(response.asJsoup())
 
     fun pageListParse(document: Document): List<Page> {
         // We throw here instead of in the `init {}` block because extensions that fail
@@ -137,8 +136,7 @@ class SpeedBinbReader(
         return pages
     }
 
-    private inline fun <reified T> Response.parseAs(): T =
-        json.decodeFromString(body.string())
+    private inline fun <reified T> Response.parseAs(): T = json.decodeFromString(body.string())
 }
 
 private fun HttpUrl.Builder.buildImageUrl(

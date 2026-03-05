@@ -52,8 +52,13 @@ class TextInterceptor : Interceptor {
 
             @Suppress("DEPRECATION")
             StaticLayout(
-                title, paintHeading, (WIDTH - 2 * X_PADDING).toInt(),
-                Layout.Alignment.ALIGN_NORMAL, SPACING_MULT, SPACING_ADD, true
+                title,
+                paintHeading,
+                (WIDTH - 2 * X_PADDING).toInt(),
+                Layout.Alignment.ALIGN_NORMAL,
+                SPACING_MULT,
+                SPACING_ADD,
+                true,
             )
         }
 
@@ -70,8 +75,13 @@ class TextInterceptor : Interceptor {
 
             @Suppress("DEPRECATION")
             StaticLayout(
-                story, paintBody, (WIDTH - 2 * X_PADDING).toInt(),
-                Layout.Alignment.ALIGN_NORMAL, SPACING_MULT, SPACING_ADD, true
+                story,
+                paintBody,
+                (WIDTH - 2 * X_PADDING).toInt(),
+                Layout.Alignment.ALIGN_NORMAL,
+                SPACING_MULT,
+                SPACING_ADD,
+                true,
             )
         }
 
@@ -101,13 +111,11 @@ class TextInterceptor : Interceptor {
     }
 
     @SuppressLint("ObsoleteSdkInt")
-    private fun textFixer(htmlString: String): String {
-        return if (Build.VERSION.SDK_INT >= 24) {
-            Html.fromHtml(htmlString , Html.FROM_HTML_MODE_LEGACY).toString()
-        } else {
-            @Suppress("DEPRECATION")
-            Html.fromHtml(htmlString).toString()
-        }
+    private fun textFixer(htmlString: String): String = if (Build.VERSION.SDK_INT >= 24) {
+        Html.fromHtml(htmlString, Html.FROM_HTML_MODE_LEGACY).toString()
+    } else {
+        @Suppress("DEPRECATION")
+        Html.fromHtml(htmlString).toString()
     }
 
     @Suppress("SameParameterValue")
@@ -123,7 +131,5 @@ object TextInterceptorHelper {
 
     const val HOST = "tachiyomi-lib-textinterceptor"
 
-    fun createUrl(title: String, text: String): String {
-        return "http://$HOST/" + Uri.encode(title) + "/" + Uri.encode(text)
-    }
+    fun createUrl(title: String, text: String): String = "http://$HOST/" + Uri.encode(title) + "/" + Uri.encode(text)
 }

@@ -8,31 +8,25 @@ import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.jsoup.nodes.Element
 
-/**
- * If a source provides images via a data:image string instead of a URL, use these functions and interceptor
- */
+// If a source provides images via a data:image string instead of a URL, use these functions and interceptor
 
 /**
  * Use if the attribute tag could have a data:image string or URL
  * Transforms data:image in to a fake URL that OkHttp won't die on
  */
-fun Element.dataImageAsUrl(attr: String): String {
-    return if (this.attr(attr).startsWith("data")) {
-        "https://127.0.0.1/?" + this.attr(attr).substringAfter(":")
-    } else {
-        this.attr("abs:$attr")
-    }
+fun Element.dataImageAsUrl(attr: String): String = if (this.attr(attr).startsWith("data")) {
+    "https://127.0.0.1/?" + this.attr(attr).substringAfter(":")
+} else {
+    this.attr("abs:$attr")
 }
 
 /**
  * Use if the attribute tag has a data:image string but real URLs are on a different attribute
  */
-fun Element.dataImageAsUrlOrNull(attr: String): String? {
-    return if (this.attr(attr).startsWith("data")) {
-        "https://127.0.0.1/?" + this.attr(attr).substringAfter(":")
-    } else {
-        null
-    }
+fun Element.dataImageAsUrlOrNull(attr: String): String? = if (this.attr(attr).startsWith("data")) {
+    "https://127.0.0.1/?" + this.attr(attr).substringAfter(":")
+} else {
+    null
 }
 
 /**
