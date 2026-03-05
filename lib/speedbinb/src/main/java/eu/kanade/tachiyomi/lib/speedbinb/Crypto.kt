@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.lib.speedbinb
+package keiyoushi.lib.speedbinb
 
 private const val URLSAFE_BASE64_LOOKUP = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 

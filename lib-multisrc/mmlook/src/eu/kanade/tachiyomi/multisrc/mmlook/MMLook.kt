@@ -1,6 +1,6 @@
 package eu.kanade.tachiyomi.multisrc.mmlook
 
-import eu.kanade.tachiyomi.lib.unpacker.Unpacker
+import keiyoushi.lib.unpacker.Unpacker
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.model.Filter

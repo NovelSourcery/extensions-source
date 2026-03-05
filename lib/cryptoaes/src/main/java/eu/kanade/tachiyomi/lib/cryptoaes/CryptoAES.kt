@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.lib.cryptoaes
+package keiyoushi.lib.cryptoaes
 // Thanks to Vlad on Stackoverflow: https://stackoverflow.com/a/63701411
 
 import android.util.Base64

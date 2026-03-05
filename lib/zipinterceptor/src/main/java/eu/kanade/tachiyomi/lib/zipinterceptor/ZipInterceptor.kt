@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.lib.zipinterceptor
+package keiyoushi.lib.zipinterceptor
 
 import android.app.ActivityManager
 import android.app.Application

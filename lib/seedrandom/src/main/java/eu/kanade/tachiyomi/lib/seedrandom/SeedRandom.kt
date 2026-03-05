@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.lib.seedrandom
+package keiyoushi.lib.seedrandom
 
 import kotlin.math.floor
 import kotlin.math.pow

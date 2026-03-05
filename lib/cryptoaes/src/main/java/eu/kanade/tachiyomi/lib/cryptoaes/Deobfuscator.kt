@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.lib.cryptoaes
+package keiyoushi.lib.cryptoaes
 /**
  * Helper class to deobfuscate JavaScript strings encoded in JSFuck style.
  *

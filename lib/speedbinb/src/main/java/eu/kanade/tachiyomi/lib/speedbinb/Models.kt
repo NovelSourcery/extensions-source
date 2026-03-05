@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.lib.speedbinb
+package keiyoushi.lib.speedbinb
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable

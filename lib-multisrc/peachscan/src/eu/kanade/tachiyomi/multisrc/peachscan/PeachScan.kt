@@ -1,7 +1,7 @@
 package eu.kanade.tachiyomi.multisrc.peachscan
 
 import android.annotation.SuppressLint
-import eu.kanade.tachiyomi.lib.zipinterceptor.ZipInterceptor
+import keiyoushi.lib.zipinterceptor.ZipInterceptor
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.asObservableSuccess
 import eu.kanade.tachiyomi.source.model.FilterList

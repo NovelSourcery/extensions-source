@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.lib.textinterceptor
+package keiyoushi.lib.textinterceptor
 
 import android.annotation.SuppressLint
 import android.graphics.Bitmap

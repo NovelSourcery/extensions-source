@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.lib.randomua
+package keiyoushi.lib.randomua
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.NetworkHelper

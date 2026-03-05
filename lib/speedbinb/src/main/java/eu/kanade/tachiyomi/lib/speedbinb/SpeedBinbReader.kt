@@ -1,6 +1,6 @@
-package eu.kanade.tachiyomi.lib.speedbinb
+package keiyoushi.lib.speedbinb
 
-import eu.kanade.tachiyomi.lib.textinterceptor.TextInterceptorHelper
+import keiyoushi.lib.textinterceptor.TextInterceptorHelper
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.util.asJsoup

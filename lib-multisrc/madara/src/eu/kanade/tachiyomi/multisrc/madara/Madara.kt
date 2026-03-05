@@ -1,8 +1,8 @@
 package eu.kanade.tachiyomi.multisrc.madara
 
 import android.util.Base64
-import eu.kanade.tachiyomi.lib.cryptoaes.CryptoAES
-import eu.kanade.tachiyomi.lib.i18n.Intl
+import keiyoushi.lib.cryptoaes.CryptoAES
+import keiyoushi.lib.i18n.Intl
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.network.asObservableSuccess

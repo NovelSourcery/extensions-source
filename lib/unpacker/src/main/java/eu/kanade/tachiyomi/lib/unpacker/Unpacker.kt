@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.lib.unpacker
+package keiyoushi.lib.unpacker
 
 /**
  * Helper class to unpack JavaScript code compressed by [packer](http://dean.edwards.name/packer/).

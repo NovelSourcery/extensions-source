@@ -11,7 +11,7 @@ android {
         minSdk = AndroidConfig.minSdk
     }
 
-    namespace = "novelsourcery.lib.${project.name}"
+    namespace = "keiyoushi.lib.${project.name}"
 
     sourceSets {
         named("main") {

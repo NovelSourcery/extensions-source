@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.lib.lzstring
+package keiyoushi.lib.lzstring
 
 typealias getCharFromIntFn = (it: Int) -> String
 typealias getNextValueFn = (it: Int) -> Int

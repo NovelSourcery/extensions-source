@@ -1,9 +1,9 @@
-package eu.kanade.tachiyomi.lib.speedbinb.descrambler
+package keiyoushi.lib.speedbinb.descrambler
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Rect
-import eu.kanade.tachiyomi.lib.speedbinb.PtImgTranslation
+import keiyoushi.lib.speedbinb.PtImgTranslation
 import java.io.ByteArrayOutputStream
 
 abstract class SpeedBinbDescrambler {

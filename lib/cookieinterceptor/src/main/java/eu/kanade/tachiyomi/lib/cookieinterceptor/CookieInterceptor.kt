@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.lib.cookieinterceptor
+package keiyoushi.lib.cookieinterceptor
 
 import android.webkit.CookieManager
 import okhttp3.Interceptor

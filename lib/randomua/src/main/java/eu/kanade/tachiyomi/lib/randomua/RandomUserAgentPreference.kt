@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.lib.randomua
+package keiyoushi.lib.randomua
 
 import android.content.SharedPreferences
 import android.widget.Toast

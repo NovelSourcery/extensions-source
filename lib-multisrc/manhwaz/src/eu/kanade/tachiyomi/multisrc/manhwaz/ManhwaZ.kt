@@ -1,7 +1,7 @@
 package eu.kanade.tachiyomi.multisrc.manhwaz
 
 import android.util.Log
-import eu.kanade.tachiyomi.lib.i18n.Intl
+import keiyoushi.lib.i18n.Intl
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.await
 import eu.kanade.tachiyomi.source.model.Filter

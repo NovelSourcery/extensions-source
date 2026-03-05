@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.lib.synchrony
+package keiyoushi.lib.synchrony
 
 import app.cash.quickjs.QuickJs
 
