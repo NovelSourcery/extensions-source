@@ -14,6 +14,8 @@ import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import java.text.SimpleDateFormat
+import java.util.Locale
 
 class EpubKfcok :
     HttpSource(),
@@ -66,7 +68,7 @@ class EpubKfcok :
                         .map { it.trim().lowercase() }
                         .filter { it.isNotEmpty() }
                     tags.forEach { tag ->
-                        url.append("&tags[]=$tag")
+                         url.append("&tags[]=$tag")
                     }
                 }
 
@@ -97,26 +99,35 @@ class EpubKfcok :
         val document = Jsoup.parse(response.body.string())
 
         return SManga.create().apply {
-            // Title from h1
-            title = document.selectFirst("h1")?.text()?.trim() ?: ""
+            // Title - Try multiple selectors
+            title = document.selectFirst("h1")?.text()?.trim()
+                ?: document.selectFirst("strong.book-title")?.text()?.trim()
+                ?: ""
 
-            // Cover image from .cover div background-image
-            thumbnail_url = document.selectFirst("div.cover")?.attr("style")?.let { style ->
-                extractCoverUrl(style)
+            // Cover image
+            thumbnail_url = document.selectFirst("div.cover")?.let { cover ->
+                // Check for img tag first
+                cover.selectFirst("img")?.attr("src")?.let { imgSrc ->
+                    if (imgSrc.startsWith("http")) imgSrc else "$baseUrl$imgSrc"
+                } ?: cover.attr("style")?.let { style ->
+                    extractCoverUrl(style)
+                }
             }
 
-            // Description from .description div
-            description = document.select("section.description-box .description, section.box.description-box .description")
+            // Description
+            description = document.select("section.description-box .description, section.box.description-box .description, div.description")
                 .firstOrNull()?.text()?.trim() ?: ""
 
+            // Tags/Genres
             genre = document.select("div.tags a, .tags-box a")
                 .mapNotNull { it.text()?.trim() }
                 .filter { it.isNotEmpty() }
                 .joinToString(", ")
 
-            // Author from info list
-            author = document.selectFirst("ul.info-list li:contains(Author) strong")?.nextSibling()?.toString()?.trim()
-                ?: document.selectFirst("ul.info-list li:contains(Author)")?.text()?.replace("Author:", "")?.trim()
+            // Author
+            author = document.selectFirst("ul.info-list li:contains(Author)")?.let {
+                it.text().replace("Author:", "").trim()
+            }
 
             // Status
             val statusText = document.selectFirst("ul.info-list li:contains(Status)")?.text()?.lowercase() ?: ""
@@ -124,15 +135,6 @@ class EpubKfcok :
                 statusText.contains("completed") -> SManga.COMPLETED
                 statusText.contains("ongoing") -> SManga.ONGOING
                 else -> SManga.UNKNOWN
-            }
-
-            if (status == SManga.UNKNOWN) {
-                val badgeText = document.selectFirst(".status-badge")?.text()?.lowercase() ?: ""
-                status = when {
-                    badgeText.contains("completed") -> SManga.COMPLETED
-                    badgeText.contains("ongoing") -> SManga.ONGOING
-                    else -> SManga.UNKNOWN
-                }
             }
         }
     }
@@ -145,25 +147,38 @@ class EpubKfcok :
         val document = Jsoup.parse(response.body.string())
         val chapters = mutableListOf<SChapter>()
 
-        document.select("ul.chapter-list li, section.chapters-box ul li").forEach { li ->
-            val link = li.selectFirst("a") ?: return@forEach
-            val chapterNum = li.attr("data-ch").toIntOrNull()
+        // Try multiple chapter list selectors
+        document.select("ul.chapter-list li, section.chapters-box ul li, div.chapter-list div.chapter-item").forEach { item ->
+            val link = item.selectFirst("a") ?: return@forEach
+
+            // Extract chapter number from various possible attributes/text
+            val chapterNum = item.attr("data-ch").toIntOrNull()
+                ?: link.attr("data-ch").toIntOrNull()
                 ?: link.text().replace(Regex("[^0-9]"), "").toIntOrNull()
                 ?: chapters.size + 1
 
+            // Get chapter title/name
+            val chapterName = link.text()?.trim() ?: "Chapter $chapterNum"
+
+            // Get chapter URL
+            val chapterUrl = link.attr("href").let { href ->
+                when {
+                    href.startsWith("http") -> href.replace(baseUrl, "")
+                    href.startsWith("/") -> href
+                    else -> "/$href"
+                }
+            }
+
             chapters.add(
                 SChapter.create().apply {
-                    url = link.attr("href").let { href ->
-                        if (href.startsWith("http")) {
-                            href.removePrefix(baseUrl)
-                        } else if (href.startsWith("/")) {
-                            href
-                        } else {
-                            "/$href"
-                        }
-                    }
-                    name = link.text()?.trim() ?: "Chapter $chapterNum"
+                    url = chapterUrl
+                    name = chapterName
                     chapter_number = chapterNum.toFloat()
+
+                    // Try to get date if available
+                    item.selectFirst("span.date, time")?.text()?.let { dateStr ->
+                        date_upload = parseDate(dateStr)
+                    }
                 },
             )
         }
@@ -183,35 +198,36 @@ class EpubKfcok :
     override fun fetchPageList(chapter: SChapter): rx.Observable<List<Page>> = rx.Observable.just(listOf(Page(0, if (chapter.url.startsWith("http")) chapter.url else baseUrl + chapter.url)))
 
     // ======================== Page Text (Novel) ========================
-
     override suspend fun fetchPageText(page: Page): String {
         val request = GET(page.url, headers)
         val response = client.newCall(request).execute()
         val document = Jsoup.parse(response.body.string())
 
-        val reader = document.selectFirst("div.reader") ?: return ""
+        // Try multiple content selectors (adjust based on actual site structure)
+        val contentContainer = document.selectFirst(
+            "div.reader, div.chapter-content, div.content, div.chapter-body",
+        ) ?: return ""
 
-        val content = StringBuilder()
+        // Remove unwanted elements that are not part of the novel content
+        contentContainer.select(
+            "script, style, iframe, .ads, .advertisement, " +
+                ".toolbar, .topbar, .reader-controls, .toolbar-actions, " +
+                ".chapter-meta, .back-link, .chapter-kicker, .chapter-title, " +
+                ".chapter-subtitle, button, form, input, nav, .pagination",
+        ).remove()
 
-        reader.selectFirst("h1")?.let { h1 ->
-            content.append("<h1>${h1.text()}</h1>\n")
-        }
-
-        reader.select("p").forEach { p ->
-            val text = p.text()?.trim()
-            if (!text.isNullOrEmpty()) {
-                content.append("<p>$text</p>\n")
+        // Convert relative image URLs to absolute so they load correctly
+        contentContainer.select("img").forEach { img ->
+            val src = img.attr("src")
+            if (src.isNotBlank() && !src.startsWith("http")) {
+                val absoluteSrc = if (src.startsWith("//")) "https:$src" else "$baseUrl$src"
+                img.attr("src", absoluteSrc)
             }
         }
 
-        if (content.isEmpty()) {
-            val text = reader.text()?.trim() ?: ""
-            return "<p>$text</p>"
-        }
-
-        return content.toString()
+        // Return the cleaned inner HTML (preserves all tags, including images)
+        return contentContainer.html()
     }
-
     override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
 
     // ======================== Filters ========================
@@ -233,33 +249,48 @@ class EpubKfcok :
         val href = link.attr("href")
 
         return SManga.create().apply {
-            url = if (href.startsWith("http")) {
-                href.removePrefix(baseUrl)
-            } else if (href.startsWith("/")) {
-                href
-            } else {
-                "/$href"
+            url = when {
+                href.startsWith("http") -> href.replace(baseUrl, "")
+                href.startsWith("/") -> href
+                else -> "/$href"
             }
-            title = card.selectFirst("div.info strong")?.text()?.trim() ?: ""
 
+            // Title from strong.book-title
+            title = card.selectFirst("strong.book-title")?.text()?.trim() ?: ""
+
+            // Cover handling
             val coverDiv = card.selectFirst("div.cover")
-            thumbnail_url = coverDiv?.attr("style")?.let { style ->
-                extractCoverUrl(style)
+            thumbnail_url = coverDiv?.let { cover ->
+                // Check for img tag first
+                cover.selectFirst("img")?.attr("src")?.let { imgSrc ->
+                    if (imgSrc.startsWith("http")) imgSrc else "$baseUrl$imgSrc"
+                } ?: cover.attr("style")?.let { style ->
+                    extractCoverUrl(style)
+                }
             }
 
+            // Tags
             genre = card.select("div.tags a")
                 .mapNotNull { it.text()?.trim() }
                 .filter { it.isNotEmpty() }
                 .joinToString(", ")
+
+            // Check if it has image chapters
+            val hasImageChapters = card.select("span.book-flag.image-chapters").isNotEmpty()
+            if (hasImageChapters) {
+                // Add flag to description or status
+                description = "Contains image chapters"
+            }
         }
     }
 
     private fun extractCoverUrl(style: String): String? {
-        val match = Regex("""url\(([^)]+)\)""").find(style)
+        val match = Regex("""url\(['"]?([^)'"]+)['"]?\)""").find(style)
         val path = match?.groupValues?.getOrNull(1) ?: return null
 
         return when {
             path.startsWith("http") -> path
+            path.startsWith("//") -> "https:$path"
             path.startsWith("/") -> "$baseUrl$path"
             else -> "$baseUrl/$path"
         }
@@ -276,5 +307,26 @@ class EpubKfcok :
     private fun hasNextPage(document: Document): Boolean {
         val currentPage = document.selectFirst("div.pagination a.active")?.text()?.toIntOrNull() ?: 1
         return currentPage < cachedTotalPages
+    }
+
+    private fun parseDate(dateStr: String): Long {
+        return try {
+            val formats = listOf(
+                SimpleDateFormat("yyyy-MM-dd", Locale.US),
+                SimpleDateFormat("MM/dd/yyyy", Locale.US),
+                SimpleDateFormat("dd MMM yyyy", Locale.US),
+            )
+
+            for (format in formats) {
+                try {
+                    return format.parse(dateStr)?.time ?: 0
+                } catch (e: Exception) {
+                    // Continue to next format
+                }
+            }
+            0
+        } catch (e: Exception) {
+            0
+        }
     }
 }
