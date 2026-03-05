@@ -713,9 +713,7 @@ class NovelDex :
     /**
      * Clean title text by removing " — New Chapters" suffix and trailing hyphens.
      */
-    internal fun cleanTitleText(text: String): String {
-        return text.replace(" — New Chapters", "").replace(" - New Chapters", "").trim()
-    }
+    internal fun cleanTitleText(text: String): String = text.replace(" — New Chapters", "").replace(" - New Chapters", "").trim()
 
     companion object {
         private const val SHOW_LOCKED_PREF_KEY = "show_locked_chapters"
