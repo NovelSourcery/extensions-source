@@ -1,0 +1,31 @@
+name: Stale issue moderator
+
+on:
+  # Daily
+  schedule:
+    - cron: '45 2 * * *'
+  # Manual trigger
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v10
+        with:
+          stale-issue-label: 'stale'
+          stale-pr-label: 'stale'
+          only-labels: 'Need info'
+          exempt-issue-label: 'do-not-autoclose'
+          exempt-pr-label: 'do-not-autoclose'
+          stale-issue-message: 'This issue has been marked as requiring more information with no activity for 14 days. Remove stale label or comment or this will be closed in 7 days.'
+          stale-pr-message: 'This PR has been marked as stale. Remove stale label or comment or this may be closed.'
+          close-issue-message: 'This issue was closed because it has been stalled for 7 days with no activity.'
+          days-before-stale: 14
+          days-before-close: 7
+          days-before-pr-close: -1
