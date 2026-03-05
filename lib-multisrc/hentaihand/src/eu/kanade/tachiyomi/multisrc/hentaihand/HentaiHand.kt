@@ -37,7 +37,8 @@ abstract class HentaiHand(
     override val lang: String,
     private val chapters: Boolean,
     private val hhLangId: List<Int> = emptyList(),
-) : ConfigurableSource, HttpSource() {
+) : HttpSource(),
+    ConfigurableSource {
 
     override val supportsLatest = true
 
@@ -144,15 +145,11 @@ abstract class HentaiHand(
         return GET("$baseUrl/api/comics/$slug")
     }
 
-    override fun fetchMangaDetails(manga: SManga): Observable<SManga> {
-        return client.newCall(mangaDetailsApiRequest(manga))
-            .asObservableSuccess()
-            .map { mangaDetailsParse(it).apply { initialized = true } }
-    }
+    override fun fetchMangaDetails(manga: SManga): Observable<SManga> = client.newCall(mangaDetailsApiRequest(manga))
+        .asObservableSuccess()
+        .map { mangaDetailsParse(it).apply { initialized = true } }
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        return response.parseAs<MangaDetailsResponseDto>().toSMangaDetails()
-    }
+    override fun mangaDetailsParse(response: Response): SManga = response.parseAs<MangaDetailsResponseDto>().toSMangaDetails()
 
     // Chapters
 
@@ -167,15 +164,13 @@ abstract class HentaiHand(
 
     override fun chapterListRequest(manga: SManga): Request = chapterListApiRequest(manga)
 
-    override fun chapterListParse(response: Response): List<SChapter> {
-        return if (this.chapters) {
-            val slug = response.request.url.toString()
-                .substringAfter("/api/comics/")
-                .removeSuffix("/chapters")
-            response.parseAs<ChapterListResponseDto>().map { it.toSChapter(slug) }
-        } else {
-            listOf(response.parseAs<ChapterResponseDto>().toSChapter())
-        }
+    override fun chapterListParse(response: Response): List<SChapter> = if (this.chapters) {
+        val slug = response.request.url.toString()
+            .substringAfter("/api/comics/")
+            .removeSuffix("/chapters")
+        response.parseAs<ChapterListResponseDto>().map { it.toSChapter(slug) }
+    } else {
+        listOf(response.parseAs<ChapterResponseDto>().toSChapter())
     }
 
     // Pages
@@ -241,28 +236,26 @@ abstract class HentaiHand(
         screen.addPreference(screen.editTextPreference(PASSWORD_TITLE, PASSWORD_DEFAULT, password, true))
     }
 
-    private fun PreferenceScreen.editTextPreference(title: String, default: String, value: String, isPassword: Boolean = false): androidx.preference.EditTextPreference {
-        return androidx.preference.EditTextPreference(context).apply {
-            key = title
-            this.title = title
-            summary = value
-            this.setDefaultValue(default)
-            dialogTitle = title
+    private fun PreferenceScreen.editTextPreference(title: String, default: String, value: String, isPassword: Boolean = false): androidx.preference.EditTextPreference = androidx.preference.EditTextPreference(context).apply {
+        key = title
+        this.title = title
+        summary = value
+        this.setDefaultValue(default)
+        dialogTitle = title
 
-            if (isPassword) {
-                setOnBindEditTextListener {
-                    it.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-                }
+        if (isPassword) {
+            setOnBindEditTextListener {
+                it.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             }
-            setOnPreferenceChangeListener { _, newValue ->
-                try {
-                    val res = preferences.edit().putString(title, newValue as String).commit()
-                    Toast.makeText(context, "Restart Tachiyomi to apply new setting.", Toast.LENGTH_LONG).show()
-                    res
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                    false
-                }
+        }
+        setOnPreferenceChangeListener { _, newValue ->
+            try {
+                val res = preferences.edit().putString(title, newValue as String).commit()
+                Toast.makeText(context, "Restart Tachiyomi to apply new setting.", Toast.LENGTH_LONG).show()
+                res
+            } catch (e: Exception) {
+                e.printStackTrace()
+                false
             }
         }
     }

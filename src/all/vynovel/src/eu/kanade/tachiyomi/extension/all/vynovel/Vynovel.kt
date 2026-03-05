@@ -186,7 +186,7 @@ class Vynovel :
             )
         }
 
-        return chapters // API returns ascending (ch1, ch2...), Mihon expects descending (newest first)
+        return chapters // API returns ascending (ch1, ch2...), Tsundoku expects descending (newest first)
     }
 
     // ======================== Pages ========================

@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.lib.seedrandom
+package keiyoushi.lib.seedrandom
 
 import kotlin.math.floor
 import kotlin.math.pow
@@ -64,7 +64,13 @@ class SeedRandom(seed: String) {
             key[mask and j] = mixed
             j++
         }
-        val actualLen = if (stringseed.isEmpty()) 0 else if (stringseed.length < width) stringseed.length else width
+        val actualLen = if (stringseed.isEmpty()) {
+            0
+        } else if (stringseed.length < width) {
+            stringseed.length
+        } else {
+            width
+        }
         return key.copyOfRange(0, actualLen)
     }
 

@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.lib.lzstring
+package keiyoushi.lib.lzstring
 
 typealias getCharFromIntFn = (it: Int) -> String
 typealias getNextValueFn = (it: Int) -> Int
@@ -164,23 +164,21 @@ object LZString {
         }
     }
 
-    private const val base64KeyStr = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+    private const val BASE64_KEY_STR = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
 
-    fun compressToBase64(input: String): String =
-        compress(input, 6) { base64KeyStr[it].toString() }.let {
-            return when (it.length % 4) {
-                0 -> it
-                1 -> "$it==="
-                2 -> "$it=="
-                3 -> "$it="
-                else -> throw IllegalStateException("Modulo of 4 should not exceed 3.")
-            }
+    fun compressToBase64(input: String): String = compress(input, 6) { BASE64_KEY_STR[it].toString() }.let {
+        return when (it.length % 4) {
+            0 -> it
+            1 -> "$it==="
+            2 -> "$it=="
+            3 -> "$it="
+            else -> throw IllegalStateException("Modulo of 4 should not exceed 3.")
         }
+    }
 
-    fun decompressFromBase64(input: String): String =
-        decompress(input.length, 32) {
-            base64KeyStr.indexOf(input[it])
-        }
+    fun decompressFromBase64(input: String): String = decompress(input.length, 32) {
+        BASE64_KEY_STR.indexOf(input[it])
+    }
 }
 
 private data class DecompressionContext(
@@ -220,7 +218,7 @@ private data class CompressionContext(
     var c: String = "",
     var wc: String = "",
     var w: String = "",
-    var enlargeIn: Int = 2,  // Compensate for the first entry which should not count
+    var enlargeIn: Int = 2, // Compensate for the first entry which should not count
     var dictSize: Int = 3,
     var numBits: Int = 2,
     val data: StringBuilder = StringBuilder(uncompressedLength / 3),

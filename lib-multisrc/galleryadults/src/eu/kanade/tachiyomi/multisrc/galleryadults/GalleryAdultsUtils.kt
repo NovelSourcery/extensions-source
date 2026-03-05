@@ -127,12 +127,10 @@ private fun parseRelativeDate(date: String): Long {
     }
 }
 
-private fun SimpleDateFormat.tryParse(string: String): Long {
-    return try {
-        parse(string)?.time ?: 0L
-    } catch (_: ParseException) {
-        0L
-    }
+private fun SimpleDateFormat.tryParse(string: String): Long = try {
+    parse(string)?.time ?: 0L
+} catch (_: ParseException) {
+    0L
 }
 
 class WordSet(private vararg val words: String) {

@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.lib.synchrony
+package keiyoushi.lib.synchrony
 
 import app.cash.quickjs.QuickJs
 
@@ -24,7 +24,8 @@ object Deobfuscator {
             engine.evaluate(synchronyScript)
 
             engine.set(
-                "source", TestInterface::class.java,
+                "source",
+                TestInterface::class.java,
                 object : TestInterface {
                     override fun getValue() = source
                 },

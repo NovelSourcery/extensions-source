@@ -57,7 +57,7 @@ that existing contributors will not actively teach them to you.
 ### Tools
 
 - [Android Studio](https://developer.android.com/studio)
-- Emulator or phone with developer options enabled and a recent version of Mihon installed
+- Emulator or phone with developer options enabled and a recent version of Tsundoku installed
 - [Icon Generator](https://as280093.github.io/AndroidAssetStudio/icons-launcher.html)
 - [Try jsoup](https://try.jsoup.org/)
 
@@ -261,8 +261,8 @@ With the example used above, the version would be `1.4.1`.
 #### Extension API
 
 Extensions rely on [extensions-lib](https://github.com/tachiyomiorg/extensions-lib), which provides
-some interfaces and stubs from the [app](https://github.com/mihonapp/mihon) for compilation
-purposes. The actual implementations can be found [here](https://github.com/mihonapp/mihon/tree/main/app/src/main/java/eu/kanade/tachiyomi/source).
+some interfaces and stubs from the [app](https://github.com/tsundoku-otaku/tsundoku) for compilation
+purposes. The actual implementations can be found [here](https://github.com/tsundoku-otaku/tsundoku/tree/main/app/src/main/java/eu/kanade/tachiyomi/source).
 Referencing the actual implementation will help with understanding extensions' call flow.
 
 #### DataImage library
@@ -292,7 +292,7 @@ dependencies {
 #### Additional dependencies
 
 If you find yourself needing additional functionality, you can add more dependencies to your `build.gradle`
-file. Many of [the dependencies](https://github.com/mihonapp/mihon/blob/main/app/build.gradle.kts)
+file. Many of [the dependencies](https://github.com/tsundoku-otaku/tsundoku/blob/main/app/build.gradle.kts)
 from the app are exposed to extensions by default.
 
 > [!NOTE]
@@ -305,7 +305,7 @@ the main app has at the expense of app size.
 
 > [!IMPORTANT]
 > Using `compileOnly` restricts you to versions that must be compatible with those used in
-> [the latest stable version of the app](https://github.com/mihonapp/mihon/releases/latest).
+> [the latest stable version of the app](https://github.com/tsundoku-otaku/tsundoku/releases/latest).
 
 ### Extension main class
 
@@ -361,7 +361,7 @@ is similar to what happens with `fetchPopularManga`.
 The search flow have support to filters that can be added to a `FilterList` inside the `getFilterList`
 method. When the user changes the filters' state, they will be passed to the `searchRequest`, and they
 can be iterated to create the request (by getting the `filter.state` value, where the type varies
-depending on the `Filter` used). You can check the filter types available [here](https://github.com/mihonapp/mihon/blob/main/source-api/src/commonMain/kotlin/eu/kanade/tachiyomi/source/model/Filter.kt)
+depending on the `Filter` used). You can check the filter types available [here](https://github.com/tsundoku-otaku/tsundoku/blob/main/source-api/src/commonMain/kotlin/eu/kanade/tachiyomi/source/model/Filter.kt)
 and in the table below.
 
 | Filter             | State type  | Description                                                                                                                                                              |
@@ -695,15 +695,15 @@ For local development, use the following run configuration to launch the app dir
 
 ![](https://i.imgur.com/6s2dvax.png)
 
-Copy the following into `Launch Flags` for the Debug build of Mihon:
+Copy the following into `Launch Flags` for the Debug build of Tsundoku:
 
 ```
--W -S -n app.mihon.dev/eu.kanade.tachiyomi.ui.main.MainActivity -a eu.kanade.tachiyomi.SHOW_CATALOGUES
+-W -S -n app.tsundoku.dev/eu.kanade.tachiyomi.ui.main.MainActivity -a eu.kanade.tachiyomi.SHOW_CATALOGUES
 ```
 
-For other builds, replace  `app.mihon.dev` with the corresponding package IDs:
-- Release build: `app.mihon`
-- Preview build: `app.mihon.debug`
+For other builds, replace  `app.tsundoku.dev` with the corresponding package IDs:
+- Release build: `app.tsundoku`
+- Preview build: `app.tsundoku.debug`
 
 If the extension builds and runs successfully then the code changes should be ready to test in your local app.
 
@@ -728,7 +728,7 @@ error while launching.
 Instead, once you've built and installed your extension on the target device, use
 `Attach Debugger to Android Process` to start debugging the app. 
 
-Inside the `Attach Debugger to Android Process` window, once the app is running on your device and `Show all processes` is checked, you should be able to select `app.mihon.dev` and press OK.
+Inside the `Attach Debugger to Android Process` window, once the app is running on your device and `Show all processes` is checked, you should be able to select `app.tsundoku.dev` and press OK.
 
 ![](https://i.imgur.com/SUhdB52.png)
 

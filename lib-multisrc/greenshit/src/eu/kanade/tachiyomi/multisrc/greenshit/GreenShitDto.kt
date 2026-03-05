@@ -41,8 +41,7 @@ class ResultDto<T>(
     }
 }
 
-fun ResultDto<List<MangaDto>>.toSMangaList(cdnUrl: String, useWidth: Boolean, includeSlug: Boolean = true, defaultScanId: Int? = null): List<SManga> =
-    results.filter { it.type != "TEXTO" }.map { it.toSManga(cdnUrl, useWidth, includeSlug, defaultScanId) }
+fun ResultDto<List<MangaDto>>.toSMangaList(cdnUrl: String, useWidth: Boolean, includeSlug: Boolean = true, defaultScanId: Int? = null): List<SManga> = results.filter { it.type != "TEXTO" }.map { it.toSManga(cdnUrl, useWidth, includeSlug, defaultScanId) }
 
 @Serializable
 class MangaDto(
@@ -94,8 +93,7 @@ class MangaDto(
         }
     }
 
-    fun toSChapterList(): List<SChapter> =
-        chapters?.map { it.toSChapter() }?.sortedByDescending { it.chapter_number } ?: emptyList()
+    fun toSChapterList(): List<SChapter> = chapters?.map { it.toSChapter() }?.sortedByDescending { it.chapter_number } ?: emptyList()
 
     @Serializable
     class Genre(@JsonNames("tag_nome", "name") val value: String) {

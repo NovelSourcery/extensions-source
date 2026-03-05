@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.lib.randomua
+package keiyoushi.lib.randomua
 
 import android.content.SharedPreferences
 import android.widget.Toast
@@ -7,24 +7,19 @@ import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import okhttp3.Headers
 
-
 /**
  * Helper function to return UserAgentType based on SharedPreference value
  */
-fun SharedPreferences.getPrefUAType(): UserAgentType {
-    return when (getString(PREF_KEY_RANDOM_UA, "off")) {
-        "mobile" -> UserAgentType.MOBILE
-        "desktop" -> UserAgentType.DESKTOP
-        else -> UserAgentType.OFF
-    }
+fun SharedPreferences.getPrefUAType(): UserAgentType = when (getString(PREF_KEY_RANDOM_UA, "off")) {
+    "mobile" -> UserAgentType.MOBILE
+    "desktop" -> UserAgentType.DESKTOP
+    else -> UserAgentType.OFF
 }
 
 /**
  * Helper function to return custom UserAgent from SharedPreference
  */
-fun SharedPreferences.getPrefCustomUA(): String? {
-    return getString(PREF_KEY_CUSTOM_UA, null)
-}
+fun SharedPreferences.getPrefCustomUA(): String? = getString(PREF_KEY_CUSTOM_UA, null)
 
 /**
  * Helper function to add Random User-Agent settings to SharedPreference

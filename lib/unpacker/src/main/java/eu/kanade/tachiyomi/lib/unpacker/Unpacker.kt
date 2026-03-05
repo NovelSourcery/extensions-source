@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.lib.unpacker
+package keiyoushi.lib.unpacker
 
 /**
  * Helper class to unpack JavaScript code compressed by [packer](http://dean.edwards.name/packer/).
@@ -14,8 +14,7 @@ object Unpacker {
      *
      * Note: single quotes `\'` in the data will be replaced with double quotes `"`.
      */
-    fun unpack(script: String, left: String? = null, right: String? = null): String =
-        unpack(SubstringExtractor(script), left, right)
+    fun unpack(script: String, left: String? = null, right: String? = null): String = unpack(SubstringExtractor(script), left, right)
 
     /**
      * Unpacks JavaScript code compressed by packer.

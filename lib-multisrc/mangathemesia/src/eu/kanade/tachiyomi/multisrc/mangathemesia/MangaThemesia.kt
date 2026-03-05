@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.multisrc.mangathemesia
 
-import eu.kanade.tachiyomi.lib.i18n.Intl
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.model.Filter
@@ -11,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.ParsedHttpSource
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.lib.i18n.Intl
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
@@ -151,9 +151,7 @@ abstract class MangaThemesia(
     override fun searchMangaNextPageSelector() = "div.pagination .next, div.hpage .r"
 
     // Manga details
-    private fun selector(selector: String, contains: List<String>): String {
-        return contains.joinToString(", ") { selector.replace("%s", it) }
-    }
+    private fun selector(selector: String, contains: List<String>): String = contains.joinToString(", ") { selector.replace("%s", it) }
 
     open val seriesDetailsSelector = "div.bigcontent, div.animefull, div.main-info, div.postbody"
 
@@ -268,9 +266,7 @@ abstract class MangaThemesia(
         }
     }
 
-    protected fun String?.removeEmptyPlaceholder(): String? {
-        return if (this.isNullOrBlank() || this == "-" || this == "N/A" || this == "n/a") null else this
-    }
+    protected fun String?.removeEmptyPlaceholder(): String? = if (this.isNullOrBlank() || this == "-" || this == "N/A" || this == "n/a") null else this
 
     open fun String?.parseStatus(): Int = when {
         this == null -> SManga.UNKNOWN
@@ -320,9 +316,7 @@ abstract class MangaThemesia(
         return chapters
     }
 
-    private fun parseUpdatedOnDate(date: String): Long {
-        return SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).parse(date)?.time ?: 0L
-    }
+    private fun parseUpdatedOnDate(date: String): Long = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).parse(date)?.time ?: 0L
 
     override fun chapterFromElement(element: Element) = SChapter.create().apply {
         val urlElements = element.select("a")
@@ -352,7 +346,9 @@ abstract class MangaThemesia(
             .mapIndexed { i, img -> Page(i, chapterUrl, img.imgAttr()) }
 
         // Some sites also loads pages via javascript
-        if (htmlPages.isNotEmpty()) { return htmlPages }
+        if (htmlPages.isNotEmpty()) {
+            return htmlPages
+        }
 
         val docString = document.toString()
         val imageListJson = JSON_IMAGE_LIST_REGEX.find(docString)?.destructured?.toList()?.get(0).orEmpty()
@@ -522,9 +518,7 @@ abstract class MangaThemesia(
 
     protected var genrelist: List<GenreData>? = null
 
-    protected open fun getGenreList(): List<Genre> {
-        return genrelist?.map { Genre(it.name, it.value, it.state) }.orEmpty()
-    }
+    protected open fun getGenreList(): List<Genre> = genrelist?.map { Genre(it.name, it.value, it.state) }.orEmpty()
 
     open val hasProjectPage = false
 
@@ -563,6 +557,7 @@ abstract class MangaThemesia(
     }
 
     // Helpers
+
     /**
      * Given some string which represents an http urlString, returns path for a manga
      * which can be used to fetch its details at "$baseUrl$mangaUrlDirectory/$mangaPath"
@@ -598,18 +593,14 @@ abstract class MangaThemesia(
         return null
     }
 
-    private fun pathLengthIs(url: HttpUrl, n: Int, strict: Boolean = false): Boolean {
-        return url.pathSegments.size == n && url.pathSegments[n - 1].isNotEmpty() ||
-            (!strict && url.pathSegments.size == n + 1 && url.pathSegments[n].isEmpty())
-    }
+    private fun pathLengthIs(url: HttpUrl, n: Int, strict: Boolean = false): Boolean = (url.pathSegments.size == n && url.pathSegments[n - 1].isNotEmpty()) ||
+        (!strict && url.pathSegments.size == n + 1 && url.pathSegments[n].isEmpty())
 
-    protected open fun parseGenres(document: Document): List<GenreData>? {
-        return document.selectFirst("ul.genrez")?.select("li")?.map { li ->
-            GenreData(
-                li.selectFirst("label")!!.text(),
-                li.selectFirst("input[type=checkbox]")!!.attr("value"),
-            )
-        }
+    protected open fun parseGenres(document: Document): List<GenreData>? = document.selectFirst("ul.genrez")?.select("li")?.map { li ->
+        GenreData(
+            li.selectFirst("label")!!.text(),
+            li.selectFirst("input[type=checkbox]")!!.attr("value"),
+        )
     }
 
     protected open fun Element.imgAttr(): String = when {

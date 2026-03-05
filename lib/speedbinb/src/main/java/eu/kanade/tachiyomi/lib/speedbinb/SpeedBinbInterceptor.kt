@@ -1,11 +1,11 @@
-package eu.kanade.tachiyomi.lib.speedbinb
+package keiyoushi.lib.speedbinb
 
 import android.graphics.BitmapFactory
-import eu.kanade.tachiyomi.lib.speedbinb.descrambler.PtBinbDescramblerA
-import eu.kanade.tachiyomi.lib.speedbinb.descrambler.PtBinbDescramblerF
-import eu.kanade.tachiyomi.lib.speedbinb.descrambler.PtImgDescrambler
-import eu.kanade.tachiyomi.lib.textinterceptor.TextInterceptor
-import eu.kanade.tachiyomi.lib.textinterceptor.TextInterceptorHelper
+import keiyoushi.lib.speedbinb.descrambler.PtBinbDescramblerA
+import keiyoushi.lib.speedbinb.descrambler.PtBinbDescramblerF
+import keiyoushi.lib.speedbinb.descrambler.PtImgDescrambler
+import keiyoushi.lib.textinterceptor.TextInterceptor
+import keiyoushi.lib.textinterceptor.TextInterceptorHelper
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import okhttp3.Interceptor

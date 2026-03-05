@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.lib.zipinterceptor
+package keiyoushi.lib.zipinterceptor
 
 import android.app.ActivityManager
 import android.app.Application
@@ -27,7 +27,9 @@ object ImageDecoderWrapper {
     private var classSignature = ClassSignature.Newest
 
     private enum class ClassSignature {
-        Old, New, Newest
+        Old,
+        New,
+        Newest,
     }
 
     init {
@@ -126,13 +128,9 @@ object ImageDecoderWrapper {
 open class ZipInterceptor {
     private val dataUriRegex = Regex("""base64,([0-9a-zA-Z/+=\s]+)""")
 
-    open fun zipGetByteStream(request: Request, response: Response): InputStream {
-        return response.body.byteStream()
-    }
+    open fun zipGetByteStream(request: Request, response: Response): InputStream = response.body.byteStream()
 
-    open fun requestIsZipImage(request: Request): Boolean {
-        return request.url.fragment == "page" && request.url.pathSegments.last().contains(".zip")
-    }
+    open fun requestIsZipImage(request: Request): Boolean = request.url.fragment == "page" && request.url.pathSegments.last().contains(".zip")
 
     fun zipImageInterceptor(chain: Interceptor.Chain): Response {
         val request = chain.request()

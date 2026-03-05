@@ -49,5 +49,5 @@ Check out the repo's [issue backlog](https://github.com/novelsourcery/extensions
 
 This project does not have any affiliation with the content providers available.
 
-This project is not affiliated with Mihon/Tachiyomi. Don't ask for help about these extensions at the
-official support means of Mihon/Tachiyomi. All credits to the codebase goes to the original contributors.
+This project is not affiliated with Tsundoku/Tachiyomi. Don't ask for help about these extensions at the
+official support means of Tsundoku/Tachiyomi. All credits to the codebase goes to the original contributors.

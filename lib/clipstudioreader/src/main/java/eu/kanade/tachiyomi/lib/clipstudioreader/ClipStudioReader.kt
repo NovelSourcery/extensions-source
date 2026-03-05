@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.lib.clipstudioreader
+package keiyoushi.lib.clipstudioreader
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Page
