@@ -9,10 +9,14 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.setAltTitles
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
+import java.text.ParseException
+import java.text.SimpleDateFormat
+import java.util.Locale
 
 /**
  * Base class for LightNovelWP Engine powered novel sites.
@@ -158,6 +162,28 @@ open class LightNovelWPNovel(
 
             genre = doc.select(".genxed a, .sertogenre a").joinToString(", ") { it.text() }
 
+            // Parse alternative titles from info section
+            val altNameText = doc.select(
+                ".spe span:contains(Alternative), .spe span:contains(Alt), .infox .alternative, .seriestualt",
+            ).firstOrNull()?.let { el ->
+                el.nextElementSibling()?.text()?.trim()?.takeIf { it.isNotBlank() }
+                    ?: el.parent()?.text()
+                        ?.substringAfter("Alternative")?.substringAfter("Alt")
+                        ?.replace(":", "")?.trim()?.takeIf { it.isNotBlank() }
+            }
+            if (!altNameText.isNullOrBlank()) {
+                val titles = altNameText.split(",", ";")
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                setAltTitles(titles)
+                description = buildString {
+                    append(description.orEmpty())
+                    if (isNotEmpty()) append("\n\n")
+                    append("Alternative Titles: ")
+                    append(titles.joinToString(", "))
+                }.trim()
+            }
+
             status = when {
                 doc.select(".sertostat, .spe, .serl").text().contains("Completed", ignoreCase = true) -> SManga.COMPLETED
                 doc.select(".sertostat, .spe, .serl").text().contains("Ongoing", ignoreCase = true) -> SManga.ONGOING
@@ -198,11 +224,18 @@ open class LightNovelWPNovel(
                     name = "🔒 $name"
                 }
 
+                // Extract chapter number from epl-num text (trailing digits)
+                val extractedNumber = chapterNum.replace("\uD83D\uDD12", "").trim()
+                    .let { Regex("(\\d+)$").find(it)?.groupValues?.get(1)?.toFloatOrNull() }
+
                 chapters.add(
                     SChapter.create().apply {
                         this.url = url.replace(baseUrl, "")
                         this.name = name
                         date_upload = parseDate(dateStr)
+                        if (extractedNumber != null) {
+                            chapter_number = extractedNumber
+                        }
                     },
                 )
             } catch (e: Exception) {
@@ -210,8 +243,7 @@ open class LightNovelWPNovel(
             }
         }
 
-        // Reverse for proper order (newest first in source, but we want oldest first for reader)
-        return chapters.reversed()
+        return chapters
     }
 
     override fun pageListParse(response: Response): List<Page> {
@@ -284,16 +316,31 @@ open class LightNovelWPNovel(
     )
 
     protected fun parseDate(dateStr: String): Long {
-        return try {
-            // Basic parsing, can be improved
-            val date = dateStr.trim()
-            if (date.isEmpty()) return 0L
+        val date = dateStr.trim()
+        if (date.isEmpty()) return 0L
 
-            // Try common formats if needed, for now just return 0
-            0L
-        } catch (e: Exception) {
-            0L
+        // Try common date formats used by LightNovelWP sites
+        val formats = listOf(
+            "MMMM dd, yyyy", // January 5, 2025
+            "MMM dd, yyyy", // Jan 5, 2025
+            "MMMM d, yyyy", // January 5, 2025 (single digit)
+            "MMM d, yyyy", // Jan 5, 2025 (single digit)
+            "dd MMMM yyyy", // 05 January 2025
+            "dd MMM yyyy", // 05 Jan 2025
+            "yyyy-MM-dd", // 2025-01-05
+            "dd/MM/yyyy", // 05/01/2025
+            "MM/dd/yyyy", // 01/05/2025
+        )
+
+        for (format in formats) {
+            try {
+                return SimpleDateFormat(format, Locale.US).parse(date)?.time ?: continue
+            } catch (_: ParseException) {
+                // Try next format
+            }
         }
+
+        return 0L
     }
 
     protected fun Response.asJsoup(): Document = Jsoup.parse(body.string())

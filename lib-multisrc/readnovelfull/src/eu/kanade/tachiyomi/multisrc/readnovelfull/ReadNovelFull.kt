@@ -289,7 +289,7 @@ abstract class ReadNovelFull(
                     }
 
                     if (chapters.isNotEmpty()) {
-                        return chapters
+                        return chapters.reversed()
                     }
                 } catch (e: Exception) {
                     // Fall back to parsing from page

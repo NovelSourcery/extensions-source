@@ -1,6 +1,7 @@
 ﻿package eu.kanade.tachiyomi.extension.en.requiemtranslations
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
+import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Page
 
 /**
@@ -20,16 +21,14 @@ class RequiemTranslations :
      * Based on LNReader implementation.
      */
     private fun decodeText(text: String, url: String): String {
-        // Match LNReader logic exactly: url.slice(0, -1) which removes the last character
-        val cleanUrl = url.dropLast(1)
         val offsets = listOf(
             listOf(0, 12368, 12462),
             listOf(1, 6960, 7054),
             listOf(2, 4176, 4270),
         )
 
-        // Match LNReader: url.length * url.charCodeAt(url.length - 1) * 2 % 3
-        val idx = (cleanUrl.length * cleanUrl.last().code * 2) % 3
+        // JS: url.length * url.charCodeAt(url.length - 1) * 2 % 3
+        val idx = (url.length * url.last().code * 2) % 3
         val offset = offsets.getOrElse(idx) { offsets[0] }
         val offsetLower = offset[1]
         val offsetCap = offset[2]
@@ -50,13 +49,7 @@ class RequiemTranslations :
     }
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(
-            okhttp3.Request.Builder()
-                .url(baseUrl + page.url)
-                .headers(headers)
-                .build(),
-        ).execute()
-
+        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
         val doc = response.asJsoup()
 
         val chapterPath = page.url.trimEnd('/')

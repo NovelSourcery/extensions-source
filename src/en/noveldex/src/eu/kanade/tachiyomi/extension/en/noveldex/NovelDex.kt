@@ -188,7 +188,10 @@ class NovelDex :
                 try {
                     val obj = element.jsonObject
                     val slug = obj["slug"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-                    val title = obj["title"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+
+                    val title = obj["title"]?.jsonPrimitive?.contentOrNull
+                        ?.let { cleanTitleText(it) }
+                        ?: return@mapNotNull null
                     val cover = obj["coverImage"]?.jsonPrimitive?.contentOrNull
                         ?.let { if (it.startsWith("/")) baseUrl + it else it }
                     val type = obj["type"]?.jsonPrimitive?.contentOrNull ?: "WEB_NOVEL"
@@ -251,13 +254,12 @@ class NovelDex :
         // Extract the series object – it's embedded in RSC, parse key fields with regex
         return SManga.create().apply {
             title = Regex(""""title"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(seriesJson)
-                ?.groupValues?.get(1)?.unescape() ?: ""
-
+                ?.groupValues?.get(1)?.unescape()?.let { cleanTitleText(it) } ?: ""
             val rawDescription = Regex(""""description"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(seriesJson)
                 ?.groupValues?.get(1)?.unescape()
 
             val altTitle = Regex(""""altTitle"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(seriesJson)
-                ?.groupValues?.get(1)?.unescape()?.takeIf { it.isNotBlank() }
+                ?.groupValues?.get(1)?.unescape()?.takeIf { it.isNotBlank() }?.let { cleanTitleText(it) }
 
             // aliases is a JSON array
             val aliasesMatch = Regex(""""aliases"\s*:\s*\[(.*?)\]""").find(seriesJson)
@@ -267,7 +269,7 @@ class NovelDex :
 
             val originalTitle = Regex(""""originalTitle"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(seriesJson)
                 ?.groupValues?.get(1)?.unescape()?.takeIf { it.isNotBlank() }
-
+                ?.let { cleanTitleText(it) }
             description = buildString {
                 altTitle?.let { append("Alt Title: $it\n") }
                 originalTitle?.let { append("Original: $it\n") }
@@ -706,6 +708,13 @@ class NovelDex :
             summary = "When disabled, chapters that require coins to unlock will be hidden from the chapter list."
             setDefaultValue(true)
         }.also(screen::addPreference)
+    }
+
+    /**
+     * Clean title text by removing " — New Chapters" suffix and trailing hyphens.
+     */
+    internal fun cleanTitleText(text: String): String {
+        return text.replace(" — New Chapters", "").replace(" - New Chapters", "").trim()
     }
 
     companion object {

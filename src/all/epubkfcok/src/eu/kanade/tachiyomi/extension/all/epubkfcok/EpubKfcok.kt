@@ -68,7 +68,7 @@ class EpubKfcok :
                         .map { it.trim().lowercase() }
                         .filter { it.isNotEmpty() }
                     tags.forEach { tag ->
-                         url.append("&tags[]=$tag")
+                        url.append("&tags[]=$tag")
                     }
                 }
 

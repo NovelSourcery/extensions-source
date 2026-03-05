@@ -1,6 +1,7 @@
 package eu.kanade.tachiyomi.multisrc.scanr
 
 import eu.kanade.tachiyomi.source.model.SManga
+import keiyoushi.utils.setAltTitles
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -109,6 +110,7 @@ fun SeriesData.toDetailedSManga(useHighQuality: Boolean = false, slugSeparator: 
 
         val altTitles = this@toDetailedSManga.alternativeTitles
         description = if (!altTitles.isNullOrEmpty()) {
+            setAltTitles(altTitles)
             buildString {
                 if (!baseDescription.isNullOrBlank()) {
                     append(baseDescription)

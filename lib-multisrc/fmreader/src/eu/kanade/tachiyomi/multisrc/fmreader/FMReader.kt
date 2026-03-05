@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.ParsedHttpSource
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.utils.setAltTitles
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -189,6 +190,11 @@ abstract class FMReader(
                         description.isNullOrBlank() -> altName + it
                         else -> description + "\n\n$altName" + it
                     }
+                    setAltTitles(
+                        it.replace(":", "").split(",", ";")
+                            .map { t -> t.trim() }
+                            .filter { t -> t.isNotBlank() },
+                    )
                 }
             }
         }

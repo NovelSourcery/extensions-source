@@ -228,7 +228,7 @@ abstract class ReadWN(
             }
         }
 
-        return chapters
+        return chapters.reversed()
     }
 
     private fun parseRelativeDate(dateStr: String): Long {

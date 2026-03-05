@@ -35,6 +35,11 @@ or fixing it directly by submitting a Pull Request.
 7. [Building](#building)
 8. [Submitting the changes](#submitting-the-changes)
    1. [Pull Request checklist](#pull-request-checklist)
+9. [Novel Source Extensions](#novel-source-extensions)
+   1. [Kotlin Extensions (KT)](#1-kotlin-extensions-kt)
+   2. [JavaScript Plugins (JS)](#2-javascript-plugins-js)
+   3. [Key Differences: KT vs JS](#key-differences-kt-vs-js)
+   4. [Detection](#detection)
 
 ## Prerequisites
 
@@ -875,3 +880,90 @@ can find it below.
 - Have explicitly kept the `id` if a source's name or language were changed
 - Have tested the modifications by compiling and running the extension through Android Studio
 - Have removed `web_hi_res_512.png` when adding a new extension
+## Novel Source Extensions
+
+Tsundoku extends Tachiyomi/Mihon with novel (text-based) reading support. Novel sources return HTML/text content instead of images.
+
+### 1. Kotlin Extensions (KT)
+
+KT novel extensions live in this repository and implement the `NovelSource` interface:
+
+```kotlin
+interface NovelSource {
+    suspend fun fetchPageText(page: Page): String
+}
+```
+
+
+```kotlin
+class MyNovelSource : HttpSource(),NovelSource() {
+    override val isNovelSource = true
+    override val baseUrl = "https://example.com"
+    override val name = "Example Novels"
+    override val lang = "en"
+    override val isNovelSource = true
+
+
+    // Standard Tachiyomi source methods
+    override fun popularMangaRequest(page: Int) = GET("$baseUrl/novels?page=$page")
+    override fun popularMangaParse(response: Response): MangasPage { /* ... */ }
+    override fun chapterListParse(response: Response): List<SChapter> { /* ... */ }
+    override fun pageListParse(response: Response): List<Page> {
+        return listOf(Page(0, response.request.url.encodedPath))
+    }
+}
+```
+
+#### Novel Multisrc Base Classes
+
+For sites using common CMS templates, use these instead of writing from scratch:
+- `LightNovelWPNovel` — for LightNovelWP-based sites (most common)
+- `MadaraNovel` — for Madara-based sites
+- `ReadNovelFull` — for ReadNovelFull-based sites
+- `ReadWN` — for ReadWN-based sites
+
+
+```kotlin
+class site : LightNovelWPNovel(
+    baseUrl = "https://site.com",
+    name = "site",
+    lang = "en",
+) {
+    override suspend fun fetchPageText(page: Page): String {
+        val doc = client.newCall(GET(baseUrl + page.url, headers)).execute().asJsoup()
+        doc.select("div.entry-content script").remove()
+        val content = doc.selectFirst("div.entry-content") ?: return ""
+        // Custom decoding logic...
+        return content.html()
+    }
+}
+```
+
+#### Setting Alternative Titles
+
+When parsing manga details, if the source provides alternative titles, set them on the `altTitles` property **and** append them to `description` for backward compatibility:
+
+```kotlin
+override fun mangaDetailsParse(response: Response): SManga {
+    val doc = response.asJsoup()
+    return SManga.create().apply {
+        // ... parse other fields ...
+        val altNames = doc.select(".alternative-titles span").map { it.text() }
+        if (altNames.isNotEmpty()) {
+            altTitles = altNames
+            description = buildString {
+                append(description.orEmpty())
+                append("\n\nAlternative Titles:\n")
+                append(altNames.joinToString("\n") { "• $it" })
+            }.trim()
+        }
+    }
+}
+```
+
+### Detection
+
+A source is detected as a novel source if:
+1. `Source.isNovelSource` property returns `true`, OR
+2. The source implements the `NovelSource` interface, OR
+3. The source class implements an interface named `eu.kanade.tachiyomi.source.NovelSource` (cross-classloader fallback)
