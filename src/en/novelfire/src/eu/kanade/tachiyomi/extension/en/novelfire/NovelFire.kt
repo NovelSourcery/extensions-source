@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.tryParse
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -27,6 +28,7 @@ import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
+import java.text.SimpleDateFormat
 
 /**
  * NovelFire novel source - ported from LN Reader plugin
@@ -48,6 +50,7 @@ class NovelFire :
     private val json: Json by injectLazy()
 
     override val isNovelSource = true
+    private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
 
     // SharedPreferences for tag caching and settings
     private val preferences: SharedPreferences by lazy {
@@ -487,13 +490,14 @@ class NovelFire :
                 val linkElement = element.selectFirst("a") ?: return@forEach
                 val chapterName = linkElement.attr("title").ifEmpty { linkElement.text() }
                 val chapterUrl = linkElement.attr("href")
+                val chapterDate: Long = dateFormat.tryParse(linkElement.selectFirst(".chapter-update[datetime]")?.attr("datetime"))
 
                 if (chapterUrl.isNotEmpty()) {
                     allChapters.add(
                         SChapter.create().apply {
                             name = chapterName
                             url = chapterUrl.removePrefix(baseUrl)
-                            date_upload = 0L
+                            date_upload = chapterDate
                         },
                     )
                 }
