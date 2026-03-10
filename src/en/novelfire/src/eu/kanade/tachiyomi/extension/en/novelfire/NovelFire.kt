@@ -2,6 +2,7 @@ package eu.kanade.tachiyomi.extension.en.novelfire
 
 import android.app.Application
 import android.content.SharedPreferences
+import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.GET
@@ -28,6 +29,8 @@ import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
+import java.io.File
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 
 /**
@@ -65,6 +68,58 @@ class NovelFire :
 
     // Custom error for AJAX not found
     private class NovelFireAjaxNotFound(message: String = "Novel Fire says its Ajax interface is not found") : Exception(message)
+
+    // ======================== Pagination Caching ========================
+
+    @Serializable
+    data class PaginationState(
+        val lastFetchedPage: Int = 1,
+        val lastChapterTotal: Int = 0,
+        val lastUpdated: Long = 0L,
+        val cachedChapters: List<CachedChapter> = emptyList(),
+    )
+
+    @Serializable
+    data class CachedChapter(
+        val name: String,
+        val url: String,
+        val dateUpload: Long = 0L,
+    )
+
+    private val cacheDir: File by lazy {
+        val dir = File(Injekt.get<Application>().cacheDir, "novelfire_chapters")
+        dir.mkdirs()
+        dir
+    }
+
+    private val cacheLock = Any()
+
+    private fun getCacheFile(novelPath: String): File {
+        val md5 = MessageDigest.getInstance("MD5")
+            .digest(novelPath.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        return File(cacheDir, "$md5.json")
+    }
+
+    private fun loadPaginationState(novelPath: String): PaginationState? = synchronized(cacheLock) {
+        val file = getCacheFile(novelPath)
+        if (!file.exists()) return@synchronized null
+        try {
+            json.decodeFromString<PaginationState>(file.readText())
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun savePaginationState(novelPath: String, state: PaginationState) = synchronized(cacheLock) {
+        try {
+            getCacheFile(novelPath).writeText(json.encodeToString(state))
+        } catch (_: Exception) {}
+    }
+
+    private fun clearAllChapterCache() {
+        cacheDir.listFiles()?.forEach { it.delete() }
+    }
 
     // ======================== Tag Caching ========================
 
@@ -369,26 +424,44 @@ class NovelFire :
         // Get the novel URL path for building chapter URLs
         val novelPath = response.request.url.encodedPath.trimStart('/')
 
+        // Parse current total chapters from the chapters page
+        val totalChapters = doc.selectFirst("#gotochapno")?.attr("max")?.toIntOrNull()
+            ?: Regex("""A total of (\d+) chapters""").find(doc.text())?.groupValues?.get(1)?.toIntOrNull()
+            ?: doc.selectFirst(".header-stats .icon-book-open")?.parent()?.text()?.trim()
+                ?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
+            ?: 0
+
         // Try to extract post_id from the page
         val postId = extractPostId(doc)
 
-        return if (postId != null) {
-            // Use JSON Ajax endpoint (primary method)
-            try {
-                getAllChaptersFromAjax(novelPath, postId).reversed()
-            } catch (e: Exception) {
-                // Fall back to HTML parsing
-                val totalChaptersText = doc.selectFirst(".header-stats .icon-book-open")?.parent()?.text()?.trim() ?: "0"
-                val totalChapters = totalChaptersText.replace(Regex("[^0-9]"), "").toIntOrNull() ?: 0
-                val pages = (totalChapters + 99) / 100
-                getAllChaptersFromHtml(novelPath, pages).reversed()
+        val fetchMethod = preferences.getString(CHAPTER_FETCH_METHOD_KEY, "auto") ?: "auto"
+
+        return when (fetchMethod) {
+            "ajax" -> {
+                if (postId != null) {
+                    getAllChaptersFromAjax(novelPath, postId).reversed()
+                } else {
+                    throw Exception("Ajax method selected but post_id not found on page")
+                }
             }
-        } else {
-            // Fallback to HTML parsing
-            val totalChaptersText = doc.selectFirst(".header-stats .icon-book-open")?.parent()?.text()?.trim() ?: "0"
-            val totalChapters = totalChaptersText.replace(Regex("[^0-9]"), "").toIntOrNull() ?: 0
-            val pages = (totalChapters + 99) / 100
-            getAllChaptersFromHtml(novelPath, pages).reversed()
+            "html" -> {
+                val pages = (totalChapters + PAGE_SIZE - 1) / PAGE_SIZE
+                getAllChaptersFromHtmlCached(novelPath, totalChapters, pages).reversed()
+            }
+            else -> {
+                // Auto: try Ajax first, fall back to HTML
+                if (postId != null) {
+                    try {
+                        getAllChaptersFromAjax(novelPath, postId).reversed()
+                    } catch (e: Exception) {
+                        val pages = (totalChapters + PAGE_SIZE - 1) / PAGE_SIZE
+                        getAllChaptersFromHtmlCached(novelPath, totalChapters, pages).reversed()
+                    }
+                } else {
+                    val pages = (totalChapters + PAGE_SIZE - 1) / PAGE_SIZE
+                    getAllChaptersFromHtmlCached(novelPath, totalChapters, pages).reversed()
+                }
+            }
         }
     }
 
@@ -470,10 +543,75 @@ class NovelFire :
         }.sortedBy { it.chapter_number } // Sort chapters by number ascending
     }
 
-    private fun getAllChaptersFromHtml(novelPath: String, pages: Int): List<SChapter> {
+    /**
+     * cached chapter fetching for HTML pagination.
+     * If total chapters unchanged, returns cached chapters.
+     * If total increased, only fetches new/changed pages.
+     * If total decreased(somehow??), refetches all.
+     */
+    private fun getAllChaptersFromHtmlCached(novelPath: String, currentTotal: Int, totalPages: Int): List<SChapter> {
+        val cached = loadPaginationState(novelPath)
+
+        // If cache exists and total hasn't changed, return cached chapters
+        if (cached != null && cached.lastChapterTotal == currentTotal && cached.cachedChapters.isNotEmpty()) {
+            return cached.cachedChapters.map { ch ->
+                SChapter.create().apply {
+                    name = ch.name
+                    url = ch.url
+                    date_upload = ch.dateUpload
+                }
+            }
+        }
+
+        // Determine which pages to fetch
+        val startPage = if (cached != null && currentTotal >= cached.lastChapterTotal && cached.cachedChapters.isNotEmpty()) {
+            // Total increased - check if the last cached page was full
+            val lastPageChapterCount = cached.cachedChapters.size - (cached.lastFetchedPage - 1) * PAGE_SIZE
+            if (lastPageChapterCount >= PAGE_SIZE) {
+                // Last page was full, start from next page
+                (cached.lastFetchedPage + 1).coerceAtMost(totalPages)
+            } else {
+                // Last page was partial, refetch it
+                cached.lastFetchedPage.coerceAtLeast(1)
+            }
+        } else {
+            1
+        }
+
+        // Get previously cached chapters (only for pages before startPage)
+        val existingChapters = if (startPage > 1 && cached != null) {
+            val cachedPageBoundary = (startPage - 1) * PAGE_SIZE
+            cached.cachedChapters.take(cachedPageBoundary).map { ch ->
+                SChapter.create().apply {
+                    name = ch.name
+                    url = ch.url
+                    date_upload = ch.dateUpload
+                }
+            }.toMutableList()
+        } else {
+            mutableListOf()
+        }
+        val newChapters = getAllChaptersFromHtml(novelPath, totalPages, startPage)
+        existingChapters.addAll(newChapters)
+
+        val allCached = existingChapters.map { CachedChapter(it.name, it.url, it.date_upload) }
+        savePaginationState(
+            novelPath,
+            PaginationState(
+                lastFetchedPage = totalPages,
+                lastChapterTotal = currentTotal,
+                lastUpdated = System.currentTimeMillis(),
+                cachedChapters = allCached,
+            ),
+        )
+
+        return existingChapters
+    }
+
+    private fun getAllChaptersFromHtml(novelPath: String, pages: Int, startPage: Int = 1): List<SChapter> {
         val allChapters = mutableListOf<SChapter>()
 
-        for (page in 1..pages.coerceAtLeast(1)) {
+        for (page in startPage..pages.coerceAtLeast(1)) {
             val pageUrl = "$baseUrl/$novelPath/chapters?page=$page"
             val response = client.newCall(GET(pageUrl, headers)).execute()
             val body = response.body.string()
@@ -581,6 +719,15 @@ class NovelFire :
     // ======================== Preferences ========================
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        ListPreference(screen.context).apply {
+            key = CHAPTER_FETCH_METHOD_KEY
+            title = "Chapter Fetch Method"
+            summary = "%s"
+            entries = arrayOf("Auto (Ajax → HTML fallback)", "Ajax only", "HTML only")
+            entryValues = arrayOf("auto", "ajax", "html")
+            setDefaultValue("auto")
+        }.also(screen::addPreference)
+
         SwitchPreferenceCompat(screen.context).apply {
             key = CLEAR_TAG_CACHE_KEY
             title = "Clear Tag Cache"
@@ -592,6 +739,17 @@ class NovelFire :
                     .remove(TAGS_CACHE_TIME_KEY)
                     .apply()
                 tagCache = emptyList()
+                true
+            }
+        }.also(screen::addPreference)
+
+        SwitchPreferenceCompat(screen.context).apply {
+            key = "novelfire_clear_chapter_cache"
+            title = "Clear All Cached Chapter Data"
+            summary = "Toggle this to clear cached chapter pagination data for all novels."
+            setDefaultValue(false)
+            setOnPreferenceChangeListener { _, _ ->
+                clearAllChapterCache()
                 true
             }
         }.also(screen::addPreference)
@@ -805,5 +963,7 @@ class NovelFire :
         private const val TAGS_CACHE_KEY = "novelfire_tags_cache"
         private const val TAGS_CACHE_TIME_KEY = "novelfire_tags_cache_time"
         private const val CLEAR_TAG_CACHE_KEY = "novelfire_clear_tag_cache"
+        private const val CHAPTER_FETCH_METHOD_KEY = "novelfire_chapter_fetch_method"
+        private const val PAGE_SIZE = 100
     }
 }
