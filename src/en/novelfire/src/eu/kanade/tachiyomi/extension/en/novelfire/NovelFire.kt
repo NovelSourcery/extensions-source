@@ -361,8 +361,8 @@ class NovelFire :
             // Multiple fallbacks for title
             title = doc.selectFirst(".novel-title")?.text()?.trim()?.takeIf { it.isNotBlank() }
                 ?: doc.selectFirst(".cover > img")?.attr("alt")?.takeIf { it.isNotBlank() }
-                    ?: doc.selectFirst("h1")?.text()?.trim()?.takeIf { it.isNotBlank() }
-                    ?: "No Title Found"
+                ?: doc.selectFirst("h1")?.text()?.trim()?.takeIf { it.isNotBlank() }
+                ?: "No Title Found"
 
             // Get cover image
             val coverElement = doc.selectFirst(".cover > img")
@@ -591,7 +591,6 @@ class NovelFire :
         } else {
             mutableListOf()
         }
-        ]
         val newChapters = getAllChaptersFromHtml(novelPath, totalPages, startPage)
         existingChapters.addAll(newChapters)
 
