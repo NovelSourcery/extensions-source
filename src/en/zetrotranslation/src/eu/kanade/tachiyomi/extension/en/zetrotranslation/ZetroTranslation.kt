@@ -8,5 +8,5 @@ class ZetroTranslation :
         name = "Zetro Translation",
         lang = "en",
     ) {
-    override val reverseChapterList = true
+    override val reverseChapterListDefault = true
 }

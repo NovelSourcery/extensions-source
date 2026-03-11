@@ -60,6 +60,7 @@ abstract class ReadNovelFull(
     }
 
     // Configuration options - can be overridden by child classes
+    protected open val popularPage: String = "most-popular"
     protected open val latestPage: String = "latest-release-novel"
     protected open val searchPage: String = "search"
     protected open val novelListing: String? = null
@@ -83,9 +84,9 @@ abstract class ReadNovelFull(
     // ======================== Popular ========================
 
     override fun popularMangaRequest(page: Int): Request = if (pageAsPath && page > 1) {
-        GET("$baseUrl/most-popular/$page", headers)
+        GET("$baseUrl/$popularPage/$page", headers)
     } else {
-        GET("$baseUrl/most-popular?$pageParam=$page", headers)
+        GET("$baseUrl/$popularPage?$pageParam=$page", headers)
     }
 
     override fun popularMangaSelector() = "div.col-novel-main div.list-novel div.row, div.archive div.row, div.index-intro div.item, div.ul-list1 div.li, div.col-l div.li, div.col-r div.li"
@@ -363,20 +364,22 @@ abstract class ReadNovelFull(
 
     override fun getFilterList() = FilterList(
         Filter.Header("Type filters"),
-        TypeFilter(),
+        TypeFilter(getTypeOptions()),
         Filter.Header("Genre filters"),
         GenreFilter(getGenreList()),
         Filter.Header("Status filters"),
         StatusFilter(),
     )
 
-    private class TypeFilter :
+    private class TypeFilter(typeOptions: List<Pair<String, String>>) :
         Filter.Select<String>(
             "Type",
-            arrayOf("All", "English", "Japanese", "Korean", "Chinese"),
+            typeOptions.map { it.first }.toTypedArray(),
             0,
         ) {
-        fun toUriPart() = values[state].lowercase()
+        private val optionValues = typeOptions.map { it.second }
+
+        fun toUriPart() = optionValues.getOrElse(state) { "all" }
     }
 
     private class GenreFilter(genres: List<Genre>) :
@@ -398,49 +401,82 @@ abstract class ReadNovelFull(
 
     protected data class Genre(val name: String, val id: String)
 
-    protected open fun getGenreList() = listOf(
-        Genre("Action", "action"),
-        Genre("Adult", "adult"),
-        Genre("Adventure", "adventure"),
-        Genre("Comedy", "comedy"),
-        Genre("Drama", "drama"),
-        Genre("Eastern", "eastern"),
-        Genre("Ecchi", "ecchi"),
-        Genre("Fantasy", "fantasy"),
-        Genre("Game", "game"),
-        Genre("Gender Bender", "gender-bender"),
-        Genre("Harem", "harem"),
-        Genre("Historical", "historical"),
-        Genre("Horror", "horror"),
-        Genre("Josei", "josei"),
-        Genre("Lolicon", "lolicon"),
-        Genre("Martial Arts", "martial-arts"),
-        Genre("Mature", "mature"),
-        Genre("Mecha", "mecha"),
-        Genre("Modern Life", "modern-life"),
-        Genre("Mystery", "mystery"),
-        Genre("Psychological", "psychological"),
-        Genre("Reincarnation", "reincarnation"),
-        Genre("Romance", "romance"),
-        Genre("School Life", "school-life"),
-        Genre("Sci-fi", "sci-fi"),
-        Genre("Seinen", "seinen"),
-        Genre("Shoujo", "shoujo"),
-        Genre("Shounen", "shounen"),
-        Genre("Slice of Life", "slice-of-life"),
-        Genre("Smut", "smut"),
-        Genre("Sports", "sports"),
-        Genre("Supernatural", "supernatural"),
-        Genre("System", "system"),
-        Genre("Thriller", "thriller"),
-        Genre("Tragedy", "tragedy"),
-        Genre("Transmigration", "transmigration"),
-        Genre("Wuxia", "wuxia"),
-        Genre("Xianxia", "xianxia"),
-        Genre("Xuanhuan", "xuanhuan"),
-        Genre("Yaoi", "yaoi"),
-        Genre("Yuri", "yuri"),
+    protected open fun getTypeOptions() = listOf(
+        "All" to "all",
+        "English" to "english",
+        "Japanese" to "japanese",
+        "Korean" to "korean",
+        "Chinese" to "chinese",
     )
+
+    protected open fun getGenreOptions(): List<Pair<String, String>> = emptyList()
+
+    protected open fun getGenreList(): List<Genre> {
+        val legacyGenreOptions = getGenreOptions()
+            .mapNotNull { (name, rawId) ->
+                val normalizedId = normalizeLegacyGenreId(rawId)
+                if (normalizedId.isBlank()) null else Genre(name, normalizedId)
+            }
+
+        if (legacyGenreOptions.isNotEmpty()) {
+            return legacyGenreOptions
+        }
+
+        return listOf(
+            Genre("Action", "action"),
+            Genre("Adult", "adult"),
+            Genre("Adventure", "adventure"),
+            Genre("Comedy", "comedy"),
+            Genre("Drama", "drama"),
+            Genre("Eastern", "eastern"),
+            Genre("Ecchi", "ecchi"),
+            Genre("Fantasy", "fantasy"),
+            Genre("Game", "game"),
+            Genre("Gender Bender", "gender-bender"),
+            Genre("Harem", "harem"),
+            Genre("Historical", "historical"),
+            Genre("Horror", "horror"),
+            Genre("Josei", "josei"),
+            Genre("Lolicon", "lolicon"),
+            Genre("Martial Arts", "martial-arts"),
+            Genre("Mature", "mature"),
+            Genre("Mecha", "mecha"),
+            Genre("Modern Life", "modern-life"),
+            Genre("Mystery", "mystery"),
+            Genre("Psychological", "psychological"),
+            Genre("Reincarnation", "reincarnation"),
+            Genre("Romance", "romance"),
+            Genre("School Life", "school-life"),
+            Genre("Sci-fi", "sci-fi"),
+            Genre("Seinen", "seinen"),
+            Genre("Shoujo", "shoujo"),
+            Genre("Shounen", "shounen"),
+            Genre("Slice of Life", "slice-of-life"),
+            Genre("Smut", "smut"),
+            Genre("Sports", "sports"),
+            Genre("Supernatural", "supernatural"),
+            Genre("System", "system"),
+            Genre("Thriller", "thriller"),
+            Genre("Tragedy", "tragedy"),
+            Genre("Transmigration", "transmigration"),
+            Genre("Wuxia", "wuxia"),
+            Genre("Xianxia", "xianxia"),
+            Genre("Xuanhuan", "xuanhuan"),
+            Genre("Yaoi", "yaoi"),
+            Genre("Yuri", "yuri"),
+        )
+    }
+
+    private fun normalizeLegacyGenreId(rawId: String): String {
+        val trimmed = rawId.trim()
+        if (trimmed.isEmpty()) return ""
+
+        val suffix = trimmed.substringAfterLast('/').substringAfterLast('=')
+        return suffix
+            .replace("+", "-")
+            .replace("_", "-")
+            .lowercase()
+    }
 
     // ======================== Settings ========================
 

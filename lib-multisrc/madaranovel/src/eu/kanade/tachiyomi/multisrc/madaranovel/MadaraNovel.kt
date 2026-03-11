@@ -221,10 +221,13 @@ open class MadaraNovel(
             title = doc.selectFirst(".post-title h1, #manga-title h1")?.text()?.trim() ?: ""
 
             // Get cover from summary image
-            thumbnail_url = doc.selectFirst(".summary_image img")?.let { img ->
-                img.attr("data-lazy-src").ifEmpty { null }
-                    ?: img.attr("data-src").ifEmpty { null }
-                    ?: img.attr("src").ifEmpty { null }
+            val summaryImage = doc.selectFirst(".summary_image img")
+            thumbnail_url = if (summaryImage != null) {
+                summaryImage.attr("data-lazy-src").ifEmpty { null }
+                    ?: summaryImage.attr("data-src").ifEmpty { null }
+                    ?: summaryImage.attr("src").ifEmpty { null }
+            } else {
+                null
             }
 
             description = doc.selectFirst("div.summary__content")?.text()?.trim()
@@ -393,8 +396,14 @@ open class MadaraNovel(
         ).filterNotNull()
 
         // Select the candidate with the most paragraph tags (actual content)
-        val contentElement = candidates.maxByOrNull { element ->
-            element.select("p").sumOf { it.text().length }
+        var contentElement: org.jsoup.nodes.Element? = null
+        var maxParagraphText = -1
+        for (element in candidates) {
+            val paragraphTextLength = element.select("p").sumOf { it.text().length }
+            if (paragraphTextLength > maxParagraphText) {
+                maxParagraphText = paragraphTextLength
+                contentElement = element
+            }
         }
 
         if (preferences.getBoolean(PREF_RAW_HTML, false)) {

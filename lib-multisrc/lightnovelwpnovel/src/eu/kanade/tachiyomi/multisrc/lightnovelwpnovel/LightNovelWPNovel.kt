@@ -35,6 +35,7 @@ open class LightNovelWPNovel(
     override val client = network.cloudflareClient
 
     protected open val seriesPath = "series"
+    protected open val reverseChapters: Boolean = false
 
     override fun popularMangaRequest(page: Int): Request {
         val url = "$baseUrl/$seriesPath?page=$page"
@@ -243,7 +244,7 @@ open class LightNovelWPNovel(
             }
         }
 
-        return chapters
+        return if (reverseChapters) chapters.reversed() else chapters
     }
 
     override fun pageListParse(response: Response): List<Page> {
