@@ -3,7 +3,7 @@ ext {
     extClass = '.AllNovel'
     themePkg = 'readnovelfull'
     baseUrl = 'https://allnovel.org'
-    overrideVersionCode = 1
+    overrideVersionCode = 2
     isNsfw = false
     isNovel = true
 }

@@ -3,7 +3,7 @@ ext {
     extClass = '.AllNovelFull'
     themePkg = 'readnovelfull'
     baseUrl = 'https://novgo.net'
-    overrideVersionCode = 1
+    overrideVersionCode = 2
     isNsfw = false
     isNovel = true
 }
