@@ -311,18 +311,33 @@ class NovelDex :
     }
 
     private fun parseMangaFromRaw(body: String): SManga = SManga.create().apply {
-        title = Regex(""""title"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(body)
-            ?.groupValues?.get(1)?.unescape() ?: ""
+        // Use title near slug to avoid matching RSS/meta tag titles like "X — New Chapters"
+        val seriesTitle = Regex(""""title"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"slug"\s*:""").find(body)
+            ?.groupValues?.get(1)?.unescape()
+            ?: Regex(""""title"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(body)
+                ?.groupValues?.get(1)?.unescape()
+        title = cleanTitleText(seriesTitle ?: "")
 
         val desc = Regex(""""description"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(body)
             ?.groupValues?.get(1)?.unescape()
         val altTitle = Regex(""""altTitle"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(body)
-            ?.groupValues?.get(1)?.unescape()?.takeIf { it.isNotBlank() }
+            ?.groupValues?.get(1)?.unescape()?.takeIf { it.isNotBlank() }?.let { cleanTitleText(it) }
+
+        val originalTitle = Regex(""""originalTitle"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(body)
+            ?.groupValues?.get(1)?.unescape()?.takeIf { it.isNotBlank() }?.let { cleanTitleText(it) }
+
+        val aliasesMatch = Regex(""""aliases"\s*:\s*\[(.*?)\]""").find(body)
+        val aliases = aliasesMatch?.groupValues?.get(1)
+            ?.let { Regex(""""((?:[^"\\]|\\.)*)"""").findAll(it).map { m -> m.groupValues[1].unescape() }.toList() }
+            ?.filter { it.isNotBlank() }
 
         description = buildString {
-            altTitle?.let { append("Alt Title: $it\n\n") }
+            altTitle?.let { append("Alt Title: $it\n") }
+            originalTitle?.let { append("Original: $it\n") }
+            aliases?.takeIf { it.isNotEmpty() }?.let { append("Also known as: ${it.joinToString(", ")}\n") }
+            if (isNotEmpty()) append("\n")
             desc?.let { append(it) }
-        }.takeIf { it.isNotBlank() }
+        }.trim().takeIf { it.isNotBlank() }
 
         val coverImg = Regex(""""coverImage"\s*:\s*"(/[^"]+)"""").find(body)?.groupValues?.get(1)
         thumbnail_url = coverImg?.let { baseUrl + it }
@@ -713,7 +728,7 @@ class NovelDex :
     /**
      * Clean title text by removing " — New Chapters" suffix and trailing hyphens.
      */
-    internal fun cleanTitleText(text: String): String = text.replace(" — New Chapters", "").replace(" - New Chapters", "").trim()
+    internal fun cleanTitleText(text: String): String = text.replace(" — New Chapters", "").replace(" - New Chapters", "").replace(" — New Chapters", "").trim()
 
     companion object {
         private const val SHOW_LOCKED_PREF_KEY = "show_locked_chapters"

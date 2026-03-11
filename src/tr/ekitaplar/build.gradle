@@ -1,0 +1,11 @@
+ext {
+    extName = 'EKitaplar'
+    extClass = '.EKitaplar'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://e-kitaplar.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

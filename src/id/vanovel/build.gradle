@@ -1,0 +1,11 @@
+ext {
+    extName = 'Vanovel'
+    extClass = '.Vanovel'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://vanovel.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

@@ -1,0 +1,11 @@
+ext {
+    extName = 'NovelBookID'
+    extClass = '.NovelBookID'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://www.novelbook.id'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

@@ -1,0 +1,11 @@
+ext {
+    extName = 'DragonTea'
+    extClass = '.DragonTea'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://dragontea.ink'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

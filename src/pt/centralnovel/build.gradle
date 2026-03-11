@@ -1,0 +1,11 @@
+ext {
+    extName = 'CentralNovel'
+    extClass = '.CentralNovel'
+    themePkg = 'lightnovelwpnovel'
+    baseUrl = 'https://centralnovel.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

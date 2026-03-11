@@ -1,0 +1,11 @@
+ext {
+    extName = 'HizoManga'
+    extClass = '.HizoManga'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://hizomanga.net'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

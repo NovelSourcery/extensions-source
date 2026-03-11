@@ -1,0 +1,11 @@
+ext {
+    extName = 'LulloBox'
+    extClass = '.LulloBox'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://lullobox.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

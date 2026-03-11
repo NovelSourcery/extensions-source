@@ -1,0 +1,11 @@
+ext {
+    extName = 'KodeksLibrary'
+    extClass = '.KodeksLibrary'
+    themePkg = 'lightnovelwpnovel'
+    baseUrl = 'https://www.kodekslibrary.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

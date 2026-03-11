@@ -1,0 +1,11 @@
+ext {
+    extName = 'NovelTR'
+    extClass = '.NovelTR'
+    themePkg = 'lightnovelwpnovel'
+    baseUrl = 'https://noveltr.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

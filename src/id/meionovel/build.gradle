@@ -1,0 +1,11 @@
+ext {
+    extName = 'MeioNovel'
+    extClass = '.MeioNovel'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://meionovels.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

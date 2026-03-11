@@ -1,0 +1,11 @@
+ext {
+    extName = 'Namevt'
+    extClass = '.Namevt'
+    themePkg = 'lightnovelwpnovel'
+    baseUrl = 'https://namevt.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

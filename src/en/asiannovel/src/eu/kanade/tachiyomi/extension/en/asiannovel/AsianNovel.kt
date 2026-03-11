@@ -250,7 +250,7 @@ class AsianNovel :
             }
         }
 
-        return chapters
+        return chapters.reversed()
     }
     // ======================== Pages ========================
 

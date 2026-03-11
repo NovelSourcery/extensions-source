@@ -1,0 +1,10 @@
+ext {
+    extName = 'Sufficient Velocity'
+    extClass = '.SufficientVelocity'
+    themePkg = 'xenforo'
+    baseUrl = 'https://forums.sufficientvelocity.com'
+    overrideVersionCode = 1
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

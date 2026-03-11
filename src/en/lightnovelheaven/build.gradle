@@ -1,0 +1,11 @@
+ext {
+    extName = 'LightNovelHeaven'
+    extClass = '.LightNovelHeaven'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://lightnovelheaven.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

@@ -1,0 +1,11 @@
+ext {
+    extName = 'TurkceLightNovels'
+    extClass = '.TurkceLightNovels'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://turkcelightnovels.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

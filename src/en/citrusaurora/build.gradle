@@ -1,0 +1,11 @@
+ext {
+    extName = 'CitrusAurora'
+    extClass = '.CitrusAurora'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://citrusaurora.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

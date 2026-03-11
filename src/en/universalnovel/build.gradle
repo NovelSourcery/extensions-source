@@ -1,0 +1,11 @@
+ext {
+    extName = 'UniversalNovel'
+    extClass = '.UniversalNovel'
+    themePkg = 'lightnovelwpnovel'
+    baseUrl = 'https://universalnovel.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

@@ -1,0 +1,11 @@
+ext {
+    extName = 'WordExcerpt'
+    extClass = '.WordExcerpt'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://wordexcerpt.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

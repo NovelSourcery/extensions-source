@@ -1,0 +1,11 @@
+ext {
+    extName = 'MassNovel'
+    extClass = '.MassNovel'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://massnovel.fr'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

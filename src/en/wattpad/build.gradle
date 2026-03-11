@@ -1,0 +1,8 @@
+ext {
+    extName = 'Wattpad'
+    extClass = '.Wattpad'
+    extVersionCode = 1
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

@@ -1,0 +1,11 @@
+ext {
+    extName = 'NovelNinja'
+    extClass = '.NovelNinja'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://novelninja.xyz'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

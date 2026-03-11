@@ -1,0 +1,11 @@
+ext {
+    extName = 'NovelLib'
+    extClass = '.NovelLib'
+    themePkg = 'fictioneer'
+    baseUrl = 'https://novelib.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

@@ -1,0 +1,11 @@
+ext {
+    extName = 'BacaLightNovel'
+    extClass = '.BacaLightNovel'
+    themePkg = 'lightnovelwpnovel'
+    baseUrl = 'https://bacalightnovel.co'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

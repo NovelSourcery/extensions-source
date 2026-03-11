@@ -61,11 +61,16 @@ open class MadaraNovel(
         get() = preferences.getBoolean(USE_NEW_CHAPTER_ENDPOINT_PREF, useNewChapterEndpointDefault)
 
     /**
+     * Override this in subclass to change the default value for chapter reversal.
+     */
+    protected open val reverseChapterListDefault: Boolean = false
+
+    /**
      * Whether to reverse the chapter list (show oldest first).
-     * Default is false (newest first).
+     * Default is false (newest first), override [reverseChapterListDefault] to change.
      */
     protected val reverseChapterList: Boolean
-        get() = preferences.getBoolean(PREF_REVERSE_CHAPTERS, false)
+        get() = preferences.getBoolean(PREF_REVERSE_CHAPTERS, reverseChapterListDefault)
 
     // LN Reader: Captcha title checks
     private val captchaTitles = listOf(
@@ -453,7 +458,7 @@ open class MadaraNovel(
             key = PREF_REVERSE_CHAPTERS
             title = "Reverse Chapter List"
             summary = "Show chapters in oldest-to-newest order instead of newest-to-oldest."
-            setDefaultValue(false)
+            setDefaultValue(reverseChapterListDefault)
         }.also(screen::addPreference)
 
         SwitchPreferenceCompat(screen.context).apply {

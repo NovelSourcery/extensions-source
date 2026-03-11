@@ -1,0 +1,11 @@
+ext {
+    extName = 'TCandSega'
+    extClass = '.TCandSega'
+    themePkg = 'lightnovelwpnovel'
+    baseUrl = 'https://teamchmantranslations.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

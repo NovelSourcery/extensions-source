@@ -1,0 +1,11 @@
+ext {
+    extName = 'Free Kol Novel'
+    extClass = '.FreeKolNovel'
+    themePkg = 'lightnovelwpnovel'
+    baseUrl = 'https://free.kolnovel.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

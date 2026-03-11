@@ -1,0 +1,11 @@
+ext {
+    extName = 'NovelsParadise'
+    extClass = '.NovelsParadise'
+    themePkg = 'lightnovelwpnovel'
+    baseUrl = 'https://novelsparadise.site'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

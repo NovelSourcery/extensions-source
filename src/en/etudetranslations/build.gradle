@@ -1,0 +1,11 @@
+ext {
+    extName = 'EtudeTranslations'
+    extClass = '.EtudeTranslations'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://etudetranslations.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

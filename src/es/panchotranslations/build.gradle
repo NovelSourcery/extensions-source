@@ -1,0 +1,11 @@
+ext {
+    extName = 'PanchoTranslations'
+    extClass = '.PanchoTranslations'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://panchonovels.online'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

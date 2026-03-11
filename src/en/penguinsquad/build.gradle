@@ -1,0 +1,11 @@
+ext {
+    extName = 'PenguinSquad'
+    extClass = '.PenguinSquad'
+    themePkg = 'fictioneer'
+    baseUrl = 'https://penguin-squad.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

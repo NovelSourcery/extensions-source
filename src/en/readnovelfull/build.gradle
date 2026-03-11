@@ -1,0 +1,11 @@
+ext {
+    extName = 'ReadNovelFull'
+    extClass = '.ReadNovelFullSource'
+    themePkg = 'readnovelfull'
+    baseUrl = 'https://readnovelfull.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

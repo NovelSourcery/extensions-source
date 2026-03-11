@@ -1,0 +1,11 @@
+ext {
+    extName = 'WorldNovel'
+    extClass = '.WorldNovel'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://world-novel.fr'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

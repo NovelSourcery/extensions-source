@@ -271,10 +271,17 @@ class WtrLab :
             throw Exception("API returned error: $error")
         }
 
-        val body = jsonResult["data"]?.jsonObject
+        val dataObj = jsonResult["data"]?.jsonObject
             ?.get("data")?.jsonObject
-            ?.get("body")
+            ?: throw Exception("Could not find chapter data in API response")
+
+        val body = dataObj["body"]
             ?: throw Exception("Could not find chapter content in API response")
+
+        // Extract image URLs for [image] tag replacement
+        val imageUrls = dataObj["images"]?.jsonArray
+            ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+            ?: emptyList()
 
         val paragraphs = if (body is JsonArray) {
             body.mapNotNull { it.jsonPrimitive.contentOrNull?.trim() }.filter { it.isNotEmpty() }
@@ -290,21 +297,42 @@ class WtrLab :
             }
         }
 
+        // Replace [image] tags with actual <img> elements
+        var imageIndex = 0
+        val processedParagraphs = paragraphs.map { paragraph ->
+            if (paragraph == "[image]" && imageIndex < imageUrls.size) {
+                val url = imageUrls[imageIndex++]
+                "<img src=\"$url\" />"
+            } else {
+                "<p>$paragraph</p>"
+            }
+        }
+
         val htmlContent = when (translationMode) {
-            "raw" -> {
-                paragraphs.joinToString("") { "<p>$it</p>" }
-            }
-
             "web" -> {
-                // Requires user to set Google API key in extension settings
-                translateWithGoogle(paragraphs)
+                // Translate text paragraphs, then re-insert images at original positions
+                val textParagraphs = paragraphs.filter { it != "[image]" }
+                val translatedHtml = translateWithGoogle(textParagraphs)
+                if (imageUrls.isEmpty()) {
+                    translatedHtml
+                } else {
+                    // Parse translated paragraphs back and interleave with images
+                    val translatedParts = Jsoup.parse(translatedHtml).select("p, a").map { it.outerHtml() }
+                    var textIdx = 0
+                    var imgIdx = 0
+                    paragraphs.joinToString("") { paragraph ->
+                        if (paragraph == "[image]" && imgIdx < imageUrls.size) {
+                            "<img src=\"${imageUrls[imgIdx++]}\" />"
+                        } else if (textIdx < translatedParts.size) {
+                            translatedParts[textIdx++]
+                        } else {
+                            "<p>$paragraph</p>"
+                        }
+                    }
+                }
             }
 
-            "ai" -> {
-                paragraphs.joinToString("") { "<p>$it</p>" }
-            }
-
-            else -> paragraphs.joinToString("") { "<p>$it</p>" }
+            else -> processedParagraphs.joinToString("")
         }
 
         if (translationMode == "ai") {
@@ -601,7 +629,7 @@ class WtrLab :
             return emptyList()
         }
 
-        return fetchAllChapters(rawId, chapterCount, slug)
+        return fetchAllChapters(rawId, chapterCount, slug).reversed()
     }
 
     private fun fetchAllChapters(rawId: Int, totalChapters: Int, slug: String): List<SChapter> {

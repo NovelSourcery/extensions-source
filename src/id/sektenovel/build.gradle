@@ -1,0 +1,11 @@
+ext {
+    extName = 'SekteNovel'
+    extClass = '.SekteNovel'
+    themePkg = 'lightnovelwpnovel'
+    baseUrl = 'https://sektenovel.web.id'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"
