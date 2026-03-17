@@ -252,7 +252,30 @@ class NovelHub :
         val chaptersText = doc.selectFirst("div:contains(Chapters)")
             ?.selectFirst("div.font-bold, div.text-lg")?.text()
 
-        val totalChapters = chaptersText?.replace(Regex("[^0-9]"), "")?.toIntOrNull() ?: 0
+        var totalChapters = chaptersText?.replace(Regex("[^0-9]"), "")?.toIntOrNull() ?: 0
+
+        if (totalChapters == 0) {
+            val latestChapter = doc.select("a.group h3")
+                .firstOrNull()?.text()
+                ?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
+
+            if (latestChapter != null && latestChapter > 0) {
+                totalChapters = latestChapter
+            } else {
+                try {
+                    val chaptersResponse = client.newCall(GET("$baseUrl$novelPath/chapters?sort=desc", headers)).execute()
+                    val chaptersDoc = Jsoup.parse(chaptersResponse.body.string())
+                    val firstChapter = chaptersDoc.select("a.group h3")
+                        .firstOrNull()?.text()
+                        ?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
+                    if (firstChapter != null && firstChapter > 0) {
+                        totalChapters = firstChapter
+                    }
+                } catch (e: Exception) {
+                    // Ignore
+                }
+            }
+        }
 
         if (totalChapters == 0) return emptyList()
 
@@ -262,6 +285,7 @@ class NovelHub :
                 url = "$novelPath/chapter-$chapterNum"
                 name = "Chapter $chapterNum"
                 chapter_number = chapterNum.toFloat()
+                date_upload = 0L
             }
         }.reversed()
     }
