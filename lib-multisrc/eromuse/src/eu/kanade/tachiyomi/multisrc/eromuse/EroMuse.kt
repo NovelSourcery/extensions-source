@@ -107,9 +107,11 @@ open class EroMuse(override val name: String, override val baseUrl: String) : Ht
                 }
                 internalParse(document)
             }
+
             AUTHOR -> {
                 internalParse(document)
             }
+
             SEARCH_RESULTS_OR_BASE -> {
                 val searchMangas = mutableListOf<SManga>()
                 document.select(albumSelector)
@@ -124,10 +126,12 @@ open class EroMuse(override val name: String, override val baseUrl: String) : Ht
                                         pageStack.addLast(StackItem(url, VARIOUS_AUTHORS))
                                         if (searchMangas.isEmpty()) searchMangas += internalParse(client.newCall(stackRequest()).execute().asJsoup()) else null
                                     }
+
                                     2 -> { // eg. /comics/album/Fakku-Comics/Bosshi
                                         pageStack.addLast(StackItem(url, AUTHOR))
                                         if (searchMangas.isEmpty()) searchMangas += internalParse(client.newCall(stackRequest()).execute().asJsoup()) else null
                                     }
+
                                     else -> {
                                         // eg. 3 -> /comics/album/Fakku-Comics/Bosshi/After-Summer-After
                                         // eg. 5 -> /comics/album/Various-Authors/Firollian/Reward/Reward-22/ElfAlfie
@@ -136,6 +140,7 @@ open class EroMuse(override val name: String, override val baseUrl: String) : Ht
                                     }
                                 }
                             }
+
                             AUTHOR -> {
                                 if (depth == 1) { // eg. /comics/album/ShadBase-Comics
                                     pageStack.addLast(StackItem(url, AUTHOR))
@@ -146,11 +151,13 @@ open class EroMuse(override val name: String, override val baseUrl: String) : Ht
                                     searchMangas.add(mangaFromElement(element))
                                 }
                             }
+
                             else -> null // SEARCH_RESULTS_OR_BASE shouldn't be a case
                         }
                     }
                 searchMangas
             }
+
             else -> emptyList()
         }
         return MangasPage(mangas, pageStack.isNotEmpty())
@@ -237,10 +244,12 @@ open class EroMuse(override val name: String, override val baseUrl: String) : Ht
                     // eg. https://comics.8muses.com/comics/album/Incase-Comics/Comic/Alfie
                     select("div.top-menu-breadcrumb li:nth-child(2)").text()
                 }
+
                 VARIOUS_AUTHORS -> {
                     // eg. https://comics.8muses.com/comics/album/Various-Authors/NLT-Media/A-Sunday-Schooling
                     select("div.top-menu-breadcrumb li:nth-child(3)").text()
                 }
+
                 else -> null
             }
         }

@@ -9,7 +9,6 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import okhttp3.Headers
 import okhttp3.HttpUrl
@@ -132,6 +131,7 @@ abstract class ZeistManga(
     protected open val statusSelectorList = listOf(
         "Status",
         "Estado",
+        "الحالة",
     )
 
     protected open val authorSelectorList = listOf(
@@ -396,12 +396,15 @@ abstract class ZeistManga(
         "ativo",
         "lançando",
         "مستمر",
+        "مستمرة",
     )
 
     protected open val statusCompletedList = listOf(
         "completed",
         "completo",
         "finalizado",
+        "مكتمل",
+        "مكتملة",
     )
 
     protected open val statusHiatusList = listOf(

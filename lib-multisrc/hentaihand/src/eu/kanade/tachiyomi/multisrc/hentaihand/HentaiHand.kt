@@ -114,14 +114,19 @@ abstract class HentaiHand(
         (if (filters.isEmpty()) getFilterList() else filters).forEach { filter ->
             when (filter) {
                 is SortFilter -> url.addQueryParameter("sort", getSortPairs()[filter.state].second)
+
                 is OrderFilter -> url.addQueryParameter("order", getOrderPairs()[filter.state].second)
+
                 is DurationFilter -> url.addQueryParameter("duration", getDurationPairs()[filter.state].second)
+
                 is AttributesGroupFilter -> filter.state.forEach {
                     if (it.state) url.addQueryParameter("attributes", it.value)
                 }
+
                 is StatusGroupFilter -> filter.state.forEach {
                     if (it.state) url.addQueryParameter("statuses", it.value)
                 }
+
                 is LookupFilter -> {
                     filter.state.split(",").map { it.trim() }.filter { it.isNotBlank() }.map {
                         lookupFilterId(it, filter.uri) ?: throw Exception("No ${filter.singularName} \"$it\" was found")
@@ -131,6 +136,7 @@ abstract class HentaiHand(
                         }
                     }
                 }
+
                 else -> {}
             }
         }

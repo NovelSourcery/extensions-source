@@ -74,11 +74,14 @@ abstract class Zbulu(
 
         val url = when {
             query.isNotBlank() -> "$baseUrl/?s=$query"
+
             authorFilter.state.isNotBlank() -> "$baseUrl/author/${authorFilter.state.replace(" ", "-")}/page-$page"
+
             genreFilter.state != 0 -> {
                 val genre = genreFilter.toUriPart().let { if (it == "completed") "completed" else "genre/$it" }
                 "$baseUrl/$genre/page-$page"
             }
+
             else -> "$baseUrl/manga-list/page-$page/"
         }
 
@@ -146,24 +149,31 @@ abstract class Zbulu(
                 "second" in date -> Calendar.getInstance().apply {
                     add(Calendar.SECOND, -value)
                 }.timeInMillis
+
                 "minute" in date -> Calendar.getInstance().apply {
                     add(Calendar.MINUTE, -value)
                 }.timeInMillis
+
                 "hour" in date -> Calendar.getInstance().apply {
                     add(Calendar.HOUR_OF_DAY, -value)
                 }.timeInMillis
+
                 "day" in date -> Calendar.getInstance().apply {
                     add(Calendar.DATE, -value)
                 }.timeInMillis
+
                 "week" in date -> Calendar.getInstance().apply {
                     add(Calendar.DATE, -value * 7)
                 }.timeInMillis
+
                 "month" in date -> Calendar.getInstance().apply {
                     add(Calendar.MONTH, -value)
                 }.timeInMillis
+
                 "year" in date -> Calendar.getInstance().apply {
                     add(Calendar.YEAR, -value)
                 }.timeInMillis
+
                 else -> {
                     0L
                 }

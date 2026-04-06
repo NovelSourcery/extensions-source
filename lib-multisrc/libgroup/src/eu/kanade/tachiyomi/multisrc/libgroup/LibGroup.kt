@@ -28,7 +28,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerializationException
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.Headers
@@ -106,27 +105,28 @@ abstract class LibGroup(
         add("Referer", baseUrl)
     }.build()
 
-    @Suppress("ktlint:standard:backing-property-naming")
-    private var _constants: Constants? = null
+    private var constants: Constants? = null
     private fun getConstants(): Constants? {
-        if (_constants == null) {
+        if (constants == null) {
             try {
-                _constants = client.newCall(
+                constants = client.newCall(
                     GET("$apiDomain/api/constants?fields[]=genres&fields[]=tags&fields[]=types&fields[]=scanlateStatus&fields[]=status&fields[]=format&fields[]=ageRestriction&fields[]=imageServers", headers),
                 ).execute().parseAs<Data<Constants>>().data
-                return _constants
+                return constants
             } catch (ex: Exception) {
                 Log.d("LibGroup", "Error getting constants: $ex")
             }
         }
-        return _constants
+        return constants
     }
 
     private fun checkForToken(chain: Interceptor.Chain): Response {
         val req = chain.request().newBuilder()
         val url = chain.request().url.toString()
+        val manualToken = preferences.getString("bearer_token", "")
         if (url.contains(apiDomain) && !url.contains("/api/auth/me")) {
-            if (bearerToken.isNullOrBlank()) {
+            // Force change token if use manual
+            if (bearerToken.isNullOrBlank() || (!manualToken.isNullOrBlank() && bearerToken != manualToken)) {
                 val token = loadToken()
                 if (token != null) {
                     bearerToken = token.getToken()
@@ -146,6 +146,24 @@ abstract class LibGroup(
 
     @SuppressLint("ApplySharedPref")
     private fun loadToken(): AuthToken? {
+        // Try to get manually configured token from preferences
+        val manualToken = preferences.getString("bearer_token", "")
+        val userId = preferences.getString("user_id", "")
+        val expiresIn = preferences.getString("expires_in", "0")?.toLongOrNull() ?: 0
+
+        if (!manualToken.isNullOrBlank()) {
+            return AuthToken(
+                auth = AuthToken.Auth(
+                    id = userId?.toIntOrNull() ?: 0,
+                ),
+                token = AuthToken.Token(
+                    timestamp = System.currentTimeMillis(),
+                    expiresIn = expiresIn,
+                    tokenType = "Bearer",
+                    accessToken = manualToken,
+                ),
+            )
+        }
         try {
             var token = preferences.getString(TOKEN_STORE, "")!!.parseAs<AuthToken>()
             if (token.isExpired() || !isUserTokenValid(token.getToken())) {
@@ -187,8 +205,8 @@ abstract class LibGroup(
                     view.evaluateJavascript(script) {
                         view.stopLoading()
                         view.destroy()
-                        if (!it.isNullOrBlank() && it != "null") {
-                            val str: String = if (it.first() == '"' && it.last() == '"') {
+                        if (!it.isNullOrBlank() && (it != "null")) {
+                            val str: String = if ((it.first() == '"') && (it.last() == '"')) {
                                 it.substringAfter("\"").substringBeforeLast("\"")
                                     .replace("\\", "")
                             } else {
@@ -313,36 +331,39 @@ abstract class LibGroup(
         val chaptersData = response.parseAs<Data<List<Chapter>>>()
             .also { if (it.data.isEmpty()) return emptyList() }
         val sortingList = preferences.getString(SORTING_PREF, "ms_mixing")
-        val defaultBranchId = if (sortingList == "ms_mixing" && chaptersData.data.getBranchCount() > 1) {
+        val defaultBranchId = if ((sortingList == "ms_mixing") && (chaptersData.data.getBranchCount() > 1)) {
             runCatching { getDefaultBranch(slugUrl.substringBefore("-")).first().id }.getOrNull()
         } else {
             null
         }
+        val showPaidChapters = preferences.getBoolean(PAID_CHAPTER_DISPLAY_PREF, false)
 
         return chaptersData.data.flatMap { chapter ->
             when {
-                chapter.branchesCount > 1 && sortingList == "ms_mixing" -> {
+                (chapter.branchesCount > 1) && (sortingList == "ms_mixing") -> {
                     val branch = chapter.branches
                         .firstOrNull { it.branchId == defaultBranchId }?.branchId
                         ?: chapter.branches.first().branchId
 
                     listOf(
-                        chapter.toSChapter(slugUrl, branch, isScanUser()),
+                        chapter.toSChapter(slugUrl, branch, isScanUser(), showPaidChapters),
                     )
                 }
-                chapter.branchesCount > 1 && sortingList == "ms_combining" -> {
+
+                (chapter.branchesCount > 1) && (sortingList == "ms_combining") -> {
                     chapter.branches.map { branch ->
-                        chapter.toSChapter(slugUrl, branch.branchId, isScanUser())
+                        chapter.toSChapter(slugUrl, branch.branchId, isScanUser(), showPaidChapters)
                     }
                 }
-                else -> listOf(chapter.toSChapter(slugUrl, isScanUser = isScanUser()))
+
+                else -> listOf(chapter.toSChapter(slugUrl, isScanUser = isScanUser(), showPaidChapter = showPaidChapters))
             }
-        }.reversed()
+        }.filterNotNull().reversed()
     }
 
     override fun fetchChapterList(manga: SManga): Observable<List<SChapter>> {
         if (manga.status == SManga.LICENSED) {
-            throw Exception("Лицензировано - Нет глав")
+            Log.d("MangaLib", "Manga is licensed: ${manga.title}")
         }
         return client.newCall(chapterListRequest(manga))
             .asObservable().doOnNext { response ->
@@ -359,6 +380,7 @@ abstract class LibGroup(
     override fun pageListRequest(chapter: SChapter): Request {
         // throw exception if old url
         if (!chapter.url.contains("--")) throw Exception(urlChangedError(name))
+        if (chapter.name.contains("$$")) throw Exception("Глава не куплена")
 
         return GET("$apiDomain/api/manga${chapter.url}", headers)
     }
@@ -427,26 +449,31 @@ abstract class LibGroup(
                         url.addQueryParameter("types[]", category.id)
                     }
                 }
+
                 is FormatList -> filter.state.forEach { format ->
                     if (format.state != Filter.TriState.STATE_IGNORE) {
                         url.addQueryParameter(if (format.isIncluded()) "format[]" else "format_exclude[]", format.id)
                     }
                 }
+
                 is StatusList -> filter.state.forEach { status ->
                     if (status.state) {
                         url.addQueryParameter("scanlate_status[]", status.id)
                     }
                 }
+
                 is StatusTitleList -> filter.state.forEach { title ->
                     if (title.state) {
                         url.addQueryParameter("status[]", title.id)
                     }
                 }
+
                 is GenreList -> filter.state.forEach { genre ->
                     if (genre.state != Filter.TriState.STATE_IGNORE) {
                         url.addQueryParameter(if (genre.isIncluded()) "genres[]" else "genres_exclude[]", genre.id)
                     }
                 }
+
                 is OrderBy -> {
                     if (filter.state!!.index == 0) {
                         url.addQueryParameter("sort_type", if (filter.state!!.ascending) "asc" else "desc")
@@ -459,26 +486,31 @@ abstract class LibGroup(
                         url.addQueryParameter("rate_min", "50")
                     }
                 }
+
                 is MyList -> filter.state.forEach { favorite ->
                     if (favorite.state != Filter.TriState.STATE_IGNORE) {
                         url.addQueryParameter(if (favorite.isIncluded()) "bookmarks[]" else "bookmarks_exclude[]", favorite.id)
                     }
                 }
+
                 is RequireChapters -> {
                     if (filter.state == 0) {
                         url.setQueryParameter("chap_count_min", "1")
                     }
                 }
+
                 is AgeList -> filter.state.forEach { age ->
                     if (age.state) {
                         url.addQueryParameter("caution[]", age.id)
                     }
                 }
+
                 is TagList -> filter.state.forEach { tag ->
                     if (tag.state != Filter.TriState.STATE_IGNORE) {
                         url.addQueryParameter(if (tag.isIncluded()) "tags[]" else "tags_exclude[]", tag.id)
                     }
                 }
+
                 else -> {}
             }
         }
@@ -508,7 +540,7 @@ abstract class LibGroup(
             OrderBy(),
         )
 
-        filters += if (_constants != null) {
+        filters += if (constants != null) {
             listOf(
                 CategoryList(getConstants()!!.getCategories(siteId).map { CheckFilter(it.label, it.id.toString()) }),
                 FormatList(getConstants()!!.getFormats(siteId).map { SearchFilter(it.name, it.id.toString()) }),
@@ -585,6 +617,10 @@ abstract class LibGroup(
         private const val API_DOMAIN_TITLE = "Выбор домена API"
         private const val API_DOMAIN_DEFAULT = "https://api.cdnlibs.org"
 
+        private const val PAID_CHAPTER_DISPLAY_PREF = "MangaLibPaidChapterDisplay"
+
+        private const val PAID_CHAPTER_DISPLAY_TITLE = "Показывать все платные главы"
+
         private const val TOKEN_STORE = "TokenStore"
 
         val simpleDateFormat by lazy { SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'", Locale.US) }
@@ -660,12 +696,48 @@ abstract class LibGroup(
             }
         }
 
+        val paidChapterDisplayPref = androidx.preference.CheckBoxPreference(screen.context).apply {
+            key = PAID_CHAPTER_DISPLAY_PREF // This key links to SharedPreferences
+            title = PAID_CHAPTER_DISPLAY_TITLE
+            summary = "Показывает не купленные главы и отмечает их $$ (может вызвать ошибки при обновлении/автозагрузке)"
+            setDefaultValue(false) // Default value when no saved value exists
+        }
+
+        // Authentication fields
+        val bearerTokenPref = androidx.preference.EditTextPreference(screen.context).apply {
+            key = "bearer_token"
+            title = "Bearer Token"
+            summary = "Токен авторизации (оставьте пустым для автоматического получения)"
+            dialogTitle = "Введите Bearer Token"
+            setDefaultValue("")
+        }
+
+        val userIdPref = androidx.preference.EditTextPreference(screen.context).apply {
+            key = "user_id"
+            title = "User ID"
+            summary = "ID пользователя (оставьте пустым для автоматического получения)"
+            dialogTitle = "Введите User ID"
+            setDefaultValue("")
+        }
+
+        val expiresInPref = androidx.preference.EditTextPreference(screen.context).apply {
+            key = "expires_in"
+            title = "Expires In (ms)"
+            summary = "Время жизни токена в миллисекундах (оставьте пустым для автоматического получения)"
+            dialogTitle = "Введите время жизни токена"
+            setDefaultValue("")
+        }
+
         screen.addPreference(serverPref)
         screen.addPreference(sortingPref)
         screen.addPreference(screen.editTextPreference(TRANSLATORS_TITLE, TRANSLATORS_DEFAULT, groupTranslates()))
         screen.addPreference(scanlatorUsername)
         screen.addPreference(titleLanguagePref)
+        screen.addPreference(paidChapterDisplayPref)
         screen.addPreference(domainApiPref)
+        screen.addPreference(bearerTokenPref)
+        screen.addPreference(userIdPref)
+        screen.addPreference(expiresInPref)
     }
     private fun PreferenceScreen.editTextPreference(title: String, default: String, value: String): androidx.preference.EditTextPreference = androidx.preference.EditTextPreference(context).apply {
         key = title

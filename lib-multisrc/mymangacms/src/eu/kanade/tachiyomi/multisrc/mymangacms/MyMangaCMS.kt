@@ -131,6 +131,7 @@ abstract class MyMangaCMS(
             )
                 .map { MangasPage(listOf(it), false) }
         }
+
         else -> super.fetchSearchManga(page, query, filters)
     }
 
@@ -149,13 +150,17 @@ abstract class MyMangaCMS(
                             else -> {}
                         }
                     }
+
                     is Author -> if (it.state.isNotEmpty()) {
                         addQueryParameter("artist", it.state)
                     }
+
                     is Sort -> addQueryParameter("sort", it.toUriPart())
+
                     is Status -> if (it.state != 0) {
                         addQueryParameter("status", it.state.toString())
                     }
+
                     else -> {}
                 }
             }
@@ -197,12 +202,15 @@ abstract class MyMangaCMS(
                 "$parseAlternativeNameString:" -> alternativeNames += value.joinToString(", ") { name ->
                     removeGenericWords(name.text()).trim() + ", "
                 }
+
                 "$parseAlternative2ndNameString:" -> alternativeNames += value.joinToString(", ") { name ->
                     removeGenericWords(name.text()).trim() + ", "
                 }
+
                 "$parseAuthorString:" -> author = value.joinToString(", ") { auth ->
                     auth.text().trim()
                 }
+
                 "$parseStatusString:" -> status = when (value.first()!!.text().lowercase().trim()) {
                     parseStatusOngoingStringLowerCase -> SManga.ONGOING
                     parseStatusOnHoldStringLowerCase -> SManga.ON_HIATUS

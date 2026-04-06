@@ -69,6 +69,7 @@ abstract class VerComics(
                         url.addPathSegments(page.toString())
                     }
                 }
+
                 else -> {}
             }
         }

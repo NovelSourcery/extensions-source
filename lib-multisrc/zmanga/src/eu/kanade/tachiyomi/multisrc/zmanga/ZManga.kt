@@ -59,9 +59,11 @@ abstract class ZManga(
                 is AuthorFilter -> {
                     url.addQueryParameter("author", filter.state)
                 }
+
                 is YearFilter -> {
                     url.addQueryParameter("yearx", filter.state)
                 }
+
                 is StatusFilter -> {
                     val status = when (filter.state) {
                         Filter.TriState.STATE_INCLUDE -> "completed"
@@ -70,23 +72,28 @@ abstract class ZManga(
                     }
                     url.addQueryParameter("status", status)
                 }
+
                 is TypeFilter -> {
                     url.addQueryParameter("type", filter.toUriPart())
                 }
+
                 is OrderByFilter -> {
                     url.addQueryParameter("order", filter.toUriPart())
                 }
+
                 is GenreList -> {
                     filter.state
                         .filter { it.state }
                         .forEach { url.addQueryParameter("genre[]", it.id) }
                 }
+
                 // if site has project page, default value "hasProjectPage" = false
                 is ProjectFilter -> {
                     if (filter.toUriPart() == "project-filter-on") {
                         url = "$baseUrl$projectPageString/page/$page".toHttpUrl().newBuilder()
                     }
                 }
+
                 else -> {}
             }
         }

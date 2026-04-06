@@ -136,6 +136,7 @@ abstract class Paprika(
         return try {
             when {
                 this.contains("yesterday", ignoreCase = true) -> Calendar.getInstance().apply { add(Calendar.DAY_OF_MONTH, -1) }.timeInMillis
+
                 this.contains("ago", ignoreCase = true) -> {
                     val trimmedDate = this.substringBefore(" ago").removeSuffix("s").split(" ")
                     val num = trimmedDate[0].toIntOrNull() ?: 1 // for "an hour ago"
@@ -148,6 +149,7 @@ abstract class Paprika(
                         else -> null
                     }?.timeInMillis ?: 0L
                 }
+
                 else ->
                     SimpleDateFormat("MMM d yy", Locale.US)
                         .parse("${this.substringBefore(",")} $currentYear")?.time ?: 0

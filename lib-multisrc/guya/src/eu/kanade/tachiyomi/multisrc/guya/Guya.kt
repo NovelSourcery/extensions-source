@@ -144,6 +144,7 @@ abstract class Guya(
                     searchMangaParseWithSlug(response, slug)
                 }
         }
+
         else -> {
             client.newCall(searchMangaRequest(page, query, filters))
                 .asObservableSuccess()
@@ -234,6 +235,7 @@ abstract class Guya(
                         ),
                     )
                 }
+
                 response.has(sortKey) -> {
                     chapterList.add(
                         parseChapterFromJson(
@@ -244,6 +246,7 @@ abstract class Guya(
                         ),
                     )
                 }
+
                 else -> {
                     val groups = chapterObj.getJSONObject("groups")
                     val groupsIter = groups.keys()

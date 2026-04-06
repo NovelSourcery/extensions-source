@@ -159,6 +159,7 @@ abstract class MangaReader(
         val count = authors.size
         when (count) {
             0 -> return manga
+
             1 -> {
                 manga.author = text.first()
                 return manga

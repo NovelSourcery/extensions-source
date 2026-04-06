@@ -99,18 +99,23 @@ abstract class MangaThemesia(
                 is AuthorFilter -> {
                     url.addQueryParameter("author", filter.state)
                 }
+
                 is YearFilter -> {
                     url.addQueryParameter("yearx", filter.state)
                 }
+
                 is StatusFilter -> {
                     url.addQueryParameter("status", filter.selectedValue())
                 }
+
                 is TypeFilter -> {
                     url.addQueryParameter("type", filter.selectedValue())
                 }
+
                 is OrderByFilter -> {
                     url.addQueryParameter("order", filter.selectedValue())
                 }
+
                 is GenreListFilter -> {
                     filter.state
                         .filter { it.state != Filter.TriState.STATE_IGNORE }
@@ -119,12 +124,14 @@ abstract class MangaThemesia(
                             url.addQueryParameter("genre[]", value)
                         }
                 }
+
                 // if site has project page, default value "hasProjectPage" = false
                 is ProjectFilter -> {
                     if (filter.selectedValue() == "project-filter-on") {
                         url.setPathSegment(0, projectPageString.substring(1))
                     }
                 }
+
                 else -> { /* Do Nothing */ }
             }
         }
@@ -167,6 +174,7 @@ abstract class MangaThemesia(
             "الناشر",
             "İllüstratör",
             "Çizer",
+            "Sanatçı",
         ),
     )
 
@@ -266,7 +274,7 @@ abstract class MangaThemesia(
         }
     }
 
-    protected fun String?.removeEmptyPlaceholder(): String? = if (this.isNullOrBlank() || this == "-" || this == "N/A" || this == "n/a") null else this
+    protected fun String?.removeEmptyPlaceholder(): String? = if (this.isNullOrBlank() || (this == "-") || (this == "N/A") || (this == "n/a") || (this == "Unknown")) null else this
 
     open fun String?.parseStatus(): Int = when {
         this == null -> SManga.UNKNOWN
@@ -593,7 +601,7 @@ abstract class MangaThemesia(
         return null
     }
 
-    private fun pathLengthIs(url: HttpUrl, n: Int, strict: Boolean = false): Boolean = (url.pathSegments.size == n && url.pathSegments[n - 1].isNotEmpty()) ||
+    private fun pathLengthIs(url: HttpUrl, n: Int, strict: Boolean = false): Boolean = ((url.pathSegments.size == n) && (url.pathSegments[n - 1].isNotEmpty())) ||
         (!strict && url.pathSegments.size == n + 1 && url.pathSegments[n].isEmpty())
 
     protected open fun parseGenres(document: Document): List<GenreData>? = document.selectFirst("ul.genrez")?.select("li")?.map { li ->

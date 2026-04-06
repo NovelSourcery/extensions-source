@@ -111,12 +111,15 @@ abstract class MadTheme(
                             }
                         }
                 }
+
                 is StatusFilter -> {
                     url.addQueryParameter("status", filter.toUriPart())
                 }
+
                 is OrderFilter -> {
                     url.addQueryParameter("sort", filter.toUriPart())
                 }
+
                 else -> {}
             }
         }
@@ -348,6 +351,7 @@ abstract class MadTheme(
             " ago" in date -> {
                 parseRelativeDate(date)
             }
+
             else -> dateFormat.tryParse(date)
         }
     }

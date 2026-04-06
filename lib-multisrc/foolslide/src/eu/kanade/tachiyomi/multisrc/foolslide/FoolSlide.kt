@@ -164,6 +164,7 @@ abstract class FoolSlide(
                 relativeDate.set(Calendar.SECOND, 0)
                 relativeDate.set(Calendar.MILLISECOND, 0)
             }
+
             lcDate.startsWith("today") -> {
                 relativeDate = Calendar.getInstance()
                 relativeDate.set(Calendar.HOUR_OF_DAY, 0)
@@ -171,6 +172,7 @@ abstract class FoolSlide(
                 relativeDate.set(Calendar.SECOND, 0)
                 relativeDate.set(Calendar.MILLISECOND, 0)
             }
+
             lcDate.startsWith("tomorrow") -> {
                 relativeDate = Calendar.getInstance()
                 relativeDate.add(Calendar.DAY_OF_MONTH, +1) // tomorrow

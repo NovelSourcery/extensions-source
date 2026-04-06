@@ -20,12 +20,14 @@ class SortFilter : SelectFilter("Sort by", sortFilterOptions) {
                 else -> selected
             }
         }
+
         "tag" -> {
             when (state) {
                 0 -> ""
                 else -> selected
             }
         }
+
         else -> ""
     }
 }

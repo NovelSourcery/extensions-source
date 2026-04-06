@@ -347,12 +347,24 @@ abstract class Keyoapp(
             ?: return 0L
 
         when {
-            "second" in this -> now.add(Calendar.SECOND, -relativeDate) // parse: 30 seconds ago
-            "minute" in this -> now.add(Calendar.MINUTE, -relativeDate) // parses: "42 minutes ago"
-            "hour" in this -> now.add(Calendar.HOUR, -relativeDate) // parses: "1 hour ago" and "2 hours ago"
-            "day" in this -> now.add(Calendar.DAY_OF_YEAR, -relativeDate) // parses: "2 days ago"
-            "week" in this -> now.add(Calendar.WEEK_OF_YEAR, -relativeDate) // parses: "2 weeks ago"
-            "month" in this -> now.add(Calendar.MONTH, -relativeDate) // parses: "2 months ago"
+            "second" in this -> now.add(Calendar.SECOND, -relativeDate)
+
+            // parse: 30 seconds ago
+            "minute" in this -> now.add(Calendar.MINUTE, -relativeDate)
+
+            // parses: "42 minutes ago"
+            "hour" in this -> now.add(Calendar.HOUR, -relativeDate)
+
+            // parses: "1 hour ago" and "2 hours ago"
+            "day" in this -> now.add(Calendar.DAY_OF_YEAR, -relativeDate)
+
+            // parses: "2 days ago"
+            "week" in this -> now.add(Calendar.WEEK_OF_YEAR, -relativeDate)
+
+            // parses: "2 weeks ago"
+            "month" in this -> now.add(Calendar.MONTH, -relativeDate)
+
+            // parses: "2 months ago"
             "year" in this -> now.add(Calendar.YEAR, -relativeDate) // parse: "2 years ago"
         }
         return now.timeInMillis

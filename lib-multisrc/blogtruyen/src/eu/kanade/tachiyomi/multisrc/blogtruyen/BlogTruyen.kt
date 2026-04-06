@@ -115,6 +115,7 @@ abstract class BlogTruyen(
             )
                 .map { MangasPage(listOf(it), false) }
         }
+
         else -> super.fetchSearchManga(page, query, filters)
     }
 
@@ -153,15 +154,19 @@ abstract class BlogTruyen(
                             else -> {}
                         }
                     }
+
                     is Author -> {
                         addQueryParameter("aut", filter.state)
                     }
+
                     is Scanlator -> {
                         addQueryParameter("gr", filter.state)
                     }
+
                     is Status -> {
                         status = filter.state
                     }
+
                     else -> {}
                 }
             }

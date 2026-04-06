@@ -295,9 +295,11 @@ abstract class MangaHub(
                 is OrderBy -> {
                     order = filter.values[filter.state].key
                 }
+
                 is GenreList -> {
                     genres = filter.included.joinToString(",").takeIf { it.isNotBlank() } ?: "all"
                 }
+
                 else -> {}
             }
         }

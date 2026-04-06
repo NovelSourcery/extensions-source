@@ -48,12 +48,14 @@ open class LectorMOnline(
                         url.addQueryParameter("isDesc", "false")
                     }
                 }
+
                 is GenreFilter -> {
                     val selectedGenre = filter.toUriPart()
                     if (selectedGenre.isNotEmpty()) {
                         return GET("$baseUrl/genres/$selectedGenre?page=$page", headers)
                     }
                 }
+
                 else -> { }
             }
         }

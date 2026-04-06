@@ -73,6 +73,7 @@ abstract class Etoshore(
                         ?: return@forEach
                     url.addQueryParameter(selected.query, selected.value)
                 }
+
                 else -> {}
             }
         }

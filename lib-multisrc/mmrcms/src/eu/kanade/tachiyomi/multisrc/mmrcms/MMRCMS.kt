@@ -245,10 +245,13 @@ constructor(
         document.select(".row .dl-horizontal dt").forEach { element ->
             when (element.text().lowercase().removeSuffix(":")) {
                 in detailAuthor -> author = element.nextElementSibling()!!.text()
+
                 in detailArtist -> artist = element.nextElementSibling()!!.text()
+
                 in detailGenre -> genre = element.nextElementSibling()!!.select("a").joinToString {
                     it.text()
                 }
+
                 in detailStatus -> status = when (element.nextElementSibling()!!.text().lowercase()) {
                     in detailStatusComplete -> SManga.COMPLETED
                     in detailStatusOngoing -> SManga.ONGOING

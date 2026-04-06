@@ -128,9 +128,11 @@ abstract class ReaderFront(
         popularMangaParse(res).let { mp ->
             when {
                 query.isBlank() -> mp
+
                 !query.startsWith(STUB_QUERY) -> mp.filter {
                     it.title.contains(query, true)
                 }
+
                 else -> mp.filter {
                     it.url == query.substringAfter(STUB_QUERY)
                 }

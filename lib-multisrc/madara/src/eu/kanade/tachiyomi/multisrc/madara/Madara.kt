@@ -38,7 +38,7 @@ abstract class Madara(
     override val name: String,
     override val baseUrl: String,
     final override val lang: String,
-    private val dateFormat: SimpleDateFormat = SimpleDateFormat("MMMM dd, yyyy", Locale.US),
+    protected val dateFormat: SimpleDateFormat = SimpleDateFormat("MMMM dd, yyyy", Locale.US),
 ) : ParsedHttpSource() {
 
     override val supportsLatest = true
@@ -177,7 +177,7 @@ abstract class Madara(
             }
 
             selectFirst(popularMangaUrlSelectorImg)?.let {
-                manga.thumbnail_url = imageFromElement(it)
+                manga.thumbnail_url = processThumbnail(imageFromElement(it), true)
             }
         }
 
@@ -284,16 +284,19 @@ abstract class Madara(
                         url.addQueryParameter("author", filter.state)
                     }
                 }
+
                 is ArtistFilter -> {
                     if (filter.state.isNotBlank()) {
                         url.addQueryParameter("artist", filter.state)
                     }
                 }
+
                 is YearFilter -> {
                     if (filter.state.isNotBlank()) {
                         url.addQueryParameter("release", filter.state)
                     }
                 }
+
                 is StatusFilter -> {
                     filter.state.forEach {
                         if (it.state) {
@@ -301,17 +304,21 @@ abstract class Madara(
                         }
                     }
                 }
+
                 is OrderByFilter -> {
                     if (filter.state != 0) {
                         url.addQueryParameter("m_orderby", filter.toUriPart())
                     }
                 }
+
                 is AdultContentFilter -> {
                     url.addQueryParameter("adult", filter.toUriPart())
                 }
+
                 is GenreConditionFilter -> {
                     url.addQueryParameter("op", filter.toUriPart())
                 }
+
                 is GenreList -> {
                     filter.state
                         .filter { it.state }
@@ -321,6 +328,7 @@ abstract class Madara(
                             }
                         }
                 }
+
                 else -> {}
             }
         }
@@ -364,6 +372,7 @@ abstract class Madara(
                             taxQueryIdx++
                         }
                     }
+
                     is ArtistFilter -> {
                         if (filter.state.isNotBlank()) {
                             add("vars[tax_query][$taxQueryIdx][taxonomy]", "wp-manga-artist")
@@ -373,6 +382,7 @@ abstract class Madara(
                             taxQueryIdx++
                         }
                     }
+
                     is YearFilter -> {
                         if (filter.state.isNotBlank()) {
                             add("vars[tax_query][$taxQueryIdx][taxonomy]", "wp-manga-release")
@@ -382,6 +392,7 @@ abstract class Madara(
                             taxQueryIdx++
                         }
                     }
+
                     is StatusFilter -> {
                         val statuses = filter.state
                             .filter { it.state }
@@ -397,6 +408,7 @@ abstract class Madara(
                             metaQueryIdx++
                         }
                     }
+
                     is OrderByFilter -> {
                         if (filter.state != 0) {
                             when (filter.toUriPart()) {
@@ -405,24 +417,29 @@ abstract class Madara(
                                     add("vars[order]", "DESC")
                                     add("vars[meta_key]", "_latest_update")
                                 }
+
                                 "alphabet" -> {
                                     add("vars[orderby]", "post_title")
                                     add("vars[order]", "ASC")
                                 }
+
                                 "rating" -> {
                                     add("vars[orderby][query_average_reviews]", "DESC")
                                     add("vars[orderby][query_total_reviews]", "DESC")
                                 }
+
                                 "trending" -> {
                                     add("vars[orderby]", "meta_value_num")
                                     add("vars[meta_key]", "_wp_manga_week_views_value")
                                     add("vars[order]", "DESC")
                                 }
+
                                 "views" -> {
                                     add("vars[orderby]", "meta_value_num")
                                     add("vars[meta_key]", "_wp_manga_views")
                                     add("vars[order]", "DESC")
                                 }
+
                                 else -> {
                                     add("vars[orderby]", "date")
                                     add("vars[order]", "DESC")
@@ -430,6 +447,7 @@ abstract class Madara(
                             }
                         }
                     }
+
                     is AdultContentFilter -> {
                         if (filter.state != 0) {
                             add("vars[meta_query][$metaQueryIdx][key]", "manga_adult_content")
@@ -441,11 +459,13 @@ abstract class Madara(
                             metaQueryIdx++
                         }
                     }
+
                     is GenreConditionFilter -> {
                         if (filter.state == 1 && genres.isNotEmpty()) {
                             add("vars[tax_query][$taxQueryIdx][operation]", "AND")
                         }
                     }
+
                     is GenreList -> {
                         if (genres.isNotEmpty()) {
                             add("vars[tax_query][$taxQueryIdx][taxonomy]", "wp-manga-genre")
@@ -458,6 +478,7 @@ abstract class Madara(
                             taxQueryIdx++
                         }
                     }
+
                     else -> {}
                 }
             }
@@ -596,7 +617,7 @@ abstract class Madara(
                 manga.title = it.ownText()
             }
             selectFirst("img")?.let {
-                manga.thumbnail_url = imageFromElement(it)
+                manga.thumbnail_url = processThumbnail(imageFromElement(it), true)
             }
         }
 
@@ -629,7 +650,7 @@ abstract class Madara(
 
     protected val ongoingStatusList: Array<String> = arrayOf(
         "OnGoing", "Продолжается", "Updating", "Em Lançamento", "Em lançamento", "Em andamento",
-        "Em Andamento", "En cours", "En Cours", "En cours de publication", "Ativo", "Lançando", "Đang Tiến Hành", "Devam Ediyor",
+        "Em Andamento", "En cours", "En Cours", "En cours de publication", "Ativo", "Lançando", "Đang Tiến Hành", "Còn Nữa", "Devam Ediyor",
         "Devam ediyor", "In Corso", "In Arrivo", "مستمرة", "مستمر", "En Curso", "En curso", "Emision",
         "Curso", "En marcha", "Publicandose", "Publicándose", "En emision", "连载中", "Em Lançamento", "Devam Ediyo",
         "Đang làm", "Em postagem", "Devam Eden", "Em progresso", "Em curso", "Atualizações Semanais",
@@ -684,7 +705,7 @@ abstract class Madara(
                 }
             }
             selectFirst(mangaDetailsSelectorThumbnail)?.let {
-                manga.thumbnail_url = imageFromElement(it)
+                manga.thumbnail_url = processThumbnail(imageFromElement(it))
             }
             select(mangaDetailsSelectorStatus).last()?.let {
                 manga.status = with(it.text().filter { ch -> ch.isLetterOrDigit() || ch.isWhitespace() }.trim()) {
@@ -771,6 +792,11 @@ abstract class Madara(
     protected open fun String.getSrcSetImage(): String? = this.split(" ")
         .filter(URL_REGEX::matches)
         .maxOfOrNull(String::toString)
+
+    /**
+     *  Apply any additional processing to the thumbnail URL if needed.
+     */
+    protected open fun processThumbnail(url: String?, fromSearch: Boolean = false): String? = url
 
     /**
      * Set it to true if the source uses the new AJAX endpoint to
@@ -883,6 +909,7 @@ abstract class Madara(
                     set(Calendar.MILLISECOND, 0)
                 }.timeInMillis
             }
+
             WordSet("today").startsWith(date) -> {
                 Calendar.getInstance().apply {
                     set(Calendar.HOUR_OF_DAY, 0)
@@ -891,6 +918,7 @@ abstract class Madara(
                     set(Calendar.MILLISECOND, 0)
                 }.timeInMillis
             }
+
             WordSet("يومين").startsWith(date) -> {
                 Calendar.getInstance().apply {
                     add(Calendar.DAY_OF_MONTH, -2) // day before yesterday
@@ -900,16 +928,20 @@ abstract class Madara(
                     set(Calendar.MILLISECOND, 0)
                 }.timeInMillis
             }
-            WordSet("ago", "atrás", "önce", "قبل").endsWith(date) -> {
+
+            WordSet("ago", "atrás", "önce", "قبل", "trước").endsWith(date) -> {
                 parseRelativeDate(date)
             }
-            WordSet("hace", "giờ", "phút", "giây").startsWith(date) -> {
+
+            WordSet("hace", "năm", "tháng", "tuần", "ngày", "giờ", "phút", "giây").startsWith(date) -> {
                 parseRelativeDate(date)
             }
+
             // Handle "jour" with a number before it
             date.contains(Regex("""\b\d+ jour""")) -> {
                 parseRelativeDate(date)
             }
+
             date.contains(Regex("""\d(st|nd|rd|th)""")) -> {
                 // Clean date (e.g. 5th December 2019 to 5 December 2019) before parsing it
                 date.split(" ").map {
@@ -921,6 +953,7 @@ abstract class Madara(
                 }
                     .let { dateFormat.tryParse(it.joinToString(" ")) }
             }
+
             else -> dateFormat.tryParse(date)
         }
     }

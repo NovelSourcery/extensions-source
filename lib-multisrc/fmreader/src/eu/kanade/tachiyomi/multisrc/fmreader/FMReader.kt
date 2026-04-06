@@ -10,7 +10,6 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.ParsedHttpSource
 import eu.kanade.tachiyomi.util.asJsoup
-import keiyoushi.utils.setAltTitles
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -74,13 +73,16 @@ abstract class FMReader(
                     val status = arrayOf("", "1", "2")[filter.state]
                     url.addQueryParameter("m_status", status)
                 }
+
                 is TextField -> url.addQueryParameter(filter.key, filter.state)
+
                 is GenreList -> {
                     val included = filter.state.filter { it.isIncluded() }.joinToString(",") { it.name }
                     val excluded = filter.state.filter { it.isExcluded() }.joinToString(",") { it.name }
                     url.addQueryParameter("genre", included)
                     url.addQueryParameter("ungenre", excluded)
                 }
+
                 is SortBy -> {
                     url.addQueryParameter(
                         "sort",
@@ -94,6 +96,7 @@ abstract class FMReader(
                         url.addQueryParameter("sort_type", "ASC")
                     }
                 }
+
                 else -> {}
             }
         }
@@ -184,11 +187,6 @@ abstract class FMReader(
                         description.isNullOrBlank() -> altName + it
                         else -> description + "\n\n$altName" + it
                     }
-                    setAltTitles(
-                        it.replace(":", "").split(",", ";")
-                            .map { t -> t.trim() }
-                            .filter { t -> t.isNotBlank() },
-                    )
                 }
             }
         }
@@ -277,31 +275,37 @@ abstract class FMReader(
                     set(Calendar.SECOND, 0)
                     set(Calendar.MILLISECOND, 0)
                 }.timeInMillis
+
                 "hour", "giờ", "hora", "saat" -> Calendar.getInstance().apply {
                     add(Calendar.HOUR_OF_DAY, -value)
                     set(Calendar.SECOND, 0)
                     set(Calendar.MILLISECOND, 0)
                 }.timeInMillis
+
                 "day", "ngày", "día", "gün" -> Calendar.getInstance().apply {
                     add(Calendar.DATE, -value)
                     set(Calendar.SECOND, 0)
                     set(Calendar.MILLISECOND, 0)
                 }.timeInMillis
+
                 "week", "tuần", "semana", "hafta" -> Calendar.getInstance().apply {
                     add(Calendar.DATE, -value * 7)
                     set(Calendar.SECOND, 0)
                     set(Calendar.MILLISECOND, 0)
                 }.timeInMillis
+
                 "month", "tháng", "mes", "ay" -> Calendar.getInstance().apply {
                     add(Calendar.MONTH, -value)
                     set(Calendar.SECOND, 0)
                     set(Calendar.MILLISECOND, 0)
                 }.timeInMillis
+
                 "year", "năm", "año", "yıl" -> Calendar.getInstance().apply {
                     add(Calendar.YEAR, -value)
                     set(Calendar.SECOND, 0)
                     set(Calendar.MILLISECOND, 0)
                 }.timeInMillis
+
                 else -> {
                     return 0L
                 }
@@ -327,6 +331,7 @@ abstract class FMReader(
         fun Element.decoded(): String {
             val attr =
                 when {
+                    this.hasAttr("data-img") -> "data-img"
                     this.hasAttr("data-original") -> "data-original"
                     this.hasAttr("data-src") -> "data-src"
                     this.hasAttr("data-srcset") -> "data-srcset"

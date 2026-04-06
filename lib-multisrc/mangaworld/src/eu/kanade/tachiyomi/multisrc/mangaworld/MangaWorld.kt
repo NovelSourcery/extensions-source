@@ -87,16 +87,21 @@ abstract class MangaWorld(
                     filter.state.filter { it.state }.forEach {
                         url.addQueryParameter("genre", it.id)
                     }
+
                 is StatusList ->
                     filter.state.filter { it.state }.forEach {
                         url.addQueryParameter("status", it.id)
                     }
+
                 is MTypeList ->
                     filter.state.filter { it.state }.forEach {
                         url.addQueryParameter("type", it.id)
                     }
+
                 is SortBy -> url.addQueryParameter("sort", filter.toUriPart())
+
                 is TextField -> url.addQueryParameter(filter.key, filter.state)
+
                 else -> {}
             }
         }
@@ -173,9 +178,12 @@ abstract class MangaWorld(
         val params = url.split("?").let { if (it.size > 1) it[1] else "" }
         return when {
             params.contains("style=list") -> url
+
             params.contains("style=pages") ->
                 url.replace("style=pages", "style=list")
+
             params.isEmpty() -> "$url?style=list"
+
             else -> "$url&style=list"
         }
     }
