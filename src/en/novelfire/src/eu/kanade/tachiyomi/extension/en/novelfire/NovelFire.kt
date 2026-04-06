@@ -448,13 +448,13 @@ class NovelFire :
                 getAllChaptersFromHtmlCached(novelPath, totalChapters, pages).reversed()
             }
             else -> {
-                // Auto: try Ajax first, fall back to HTML
+                // Auto: try HTML first, fall back to Ajax
                 if (postId != null) {
                     try {
-                        getAllChaptersFromAjax(novelPath, postId).reversed()
-                    } catch (e: Exception) {
                         val pages = (totalChapters + PAGE_SIZE - 1) / PAGE_SIZE
                         getAllChaptersFromHtmlCached(novelPath, totalChapters, pages).reversed()
+                    } catch (e: Exception) {
+                        getAllChaptersFromAjax(novelPath, postId).reversed()
                     }
                 } else {
                     val pages = (totalChapters + PAGE_SIZE - 1) / PAGE_SIZE
@@ -722,7 +722,7 @@ class NovelFire :
             key = CHAPTER_FETCH_METHOD_KEY
             title = "Chapter Fetch Method"
             summary = "%s"
-            entries = arrayOf("Auto (Ajax → HTML fallback)", "Ajax only", "HTML only")
+            entries = arrayOf("Auto (HTML → Ajax fallback)", "Ajax only", "HTML only")
             entryValues = arrayOf("auto", "ajax", "html")
             setDefaultValue("auto")
         }.also(screen::addPreference)
