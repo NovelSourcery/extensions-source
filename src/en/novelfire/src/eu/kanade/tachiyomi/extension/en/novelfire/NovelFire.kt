@@ -18,7 +18,6 @@ import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.utils.tryParse
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -964,6 +963,6 @@ class NovelFire :
         private const val TAGS_CACHE_TIME_KEY = "novelfire_tags_cache_time"
         private const val CLEAR_TAG_CACHE_KEY = "novelfire_clear_tag_cache"
         private const val CHAPTER_FETCH_METHOD_KEY = "novelfire_chapter_fetch_method"
-        private const val PAGE_SIZE = 100
+        private const val PAGE_SIZE = 50
     }
 }
