@@ -444,21 +444,18 @@ class NovelFire :
                 }
             }
             "html" -> {
-                val pages = (totalChapters + PAGE_SIZE - 1) / PAGE_SIZE
-                getAllChaptersFromHtmlCached(novelPath, totalChapters, pages).reversed()
+                getAllChaptersFromHtmlCached(novelPath, totalChapters).reversed()
             }
             else -> {
                 // Auto: try HTML first, fall back to Ajax
                 if (postId != null) {
                     try {
-                        val pages = (totalChapters + PAGE_SIZE - 1) / PAGE_SIZE
-                        getAllChaptersFromHtmlCached(novelPath, totalChapters, pages).reversed()
+                        getAllChaptersFromHtmlCached(novelPath, totalChapters).reversed()
                     } catch (e: Exception) {
                         getAllChaptersFromAjax(novelPath, postId).reversed()
                     }
                 } else {
-                    val pages = (totalChapters + PAGE_SIZE - 1) / PAGE_SIZE
-                    getAllChaptersFromHtmlCached(novelPath, totalChapters, pages).reversed()
+                    getAllChaptersFromHtmlCached(novelPath, totalChapters).reversed()
                 }
             }
         }
@@ -548,7 +545,7 @@ class NovelFire :
      * If total increased, only fetches new/changed pages.
      * If total decreased(somehow??), refetches all.
      */
-    private fun getAllChaptersFromHtmlCached(novelPath: String, currentTotal: Int, totalPages: Int): List<SChapter> {
+    private fun getAllChaptersFromHtmlCached(novelPath: String, currentTotal: Int): List<SChapter> {
         val cached = loadPaginationState(novelPath)
 
         // If cache exists and total hasn't changed, return cached chapters
@@ -562,25 +559,29 @@ class NovelFire :
             }
         }
 
-        // Determine which pages to fetch
-        val startPage = if (cached != null && currentTotal >= cached.lastChapterTotal && cached.cachedChapters.isNotEmpty()) {
-            // Total increased - check if the last cached page was full
-            val lastPageChapterCount = cached.cachedChapters.size - (cached.lastFetchedPage - 1) * PAGE_SIZE
-            if (lastPageChapterCount >= PAGE_SIZE) {
-                // Last page was full, start from next page
-                (cached.lastFetchedPage + 1).coerceAtMost(totalPages)
-            } else {
-                // Last page was partial, refetch it
-                cached.lastFetchedPage.coerceAtLeast(1)
-            }
+        // Determine start page: if total grew and last page was "full" enough,
+        // resume from where we left off; otherwise re-fetch the last page
+        val startPage = if (
+            cached != null &&
+            currentTotal > cached.lastChapterTotal &&
+            cached.cachedChapters.isNotEmpty()
+        ) {
+            // We don't know the true page size, so re-fetch the last page to be safe
+            cached.lastFetchedPage.coerceAtLeast(1)
         } else {
             1
         }
 
         // Get previously cached chapters (only for pages before startPage)
         val existingChapters = if (startPage > 1 && cached != null) {
-            val cachedPageBoundary = (startPage - 1) * PAGE_SIZE
-            cached.cachedChapters.take(cachedPageBoundary).map { ch ->
+            // Keep chapters from pages strictly before the resume point
+            // Use lastFetchedPage - 1 pages worth, based on actual cached count
+            val keepCount = cached.cachedChapters.size -
+                (
+                    cached.cachedChapters.size - (startPage - 1) * /* approx chapters per page */
+                        (cached.cachedChapters.size / cached.lastFetchedPage.coerceAtLeast(1))
+                    )
+            cached.cachedChapters.take(keepCount).map { ch ->
                 SChapter.create().apply {
                     name = ch.name
                     url = ch.url
@@ -590,27 +591,29 @@ class NovelFire :
         } else {
             mutableListOf()
         }
-        val newChapters = getAllChaptersFromHtml(novelPath, totalPages, startPage)
+
+        val newChapters = getAllChaptersFromHtml(novelPath, startPage)
         existingChapters.addAll(newChapters)
 
-        val allCached = existingChapters.map { CachedChapter(it.name, it.url, it.date_upload) }
+        val lastPage = cached?.lastFetchedPage?.coerceAtLeast(startPage) ?: startPage
         savePaginationState(
             novelPath,
             PaginationState(
-                lastFetchedPage = totalPages,
+                lastFetchedPage = lastPage,
                 lastChapterTotal = currentTotal,
                 lastUpdated = System.currentTimeMillis(),
-                cachedChapters = allCached,
+                cachedChapters = existingChapters.map { CachedChapter(it.name, it.url, it.date_upload) },
             ),
         )
 
         return existingChapters
     }
 
-    private fun getAllChaptersFromHtml(novelPath: String, pages: Int, startPage: Int = 1): List<SChapter> {
+    private fun getAllChaptersFromHtml(novelPath: String, startPage: Int = 1): List<SChapter> {
         val allChapters = mutableListOf<SChapter>()
+        var page = startPage
 
-        for (page in startPage..pages.coerceAtLeast(1)) {
+        while (true) {
             val pageUrl = "$baseUrl/$novelPath/chapters?page=$page"
             val response = client.newCall(GET(pageUrl, headers)).execute()
             val body = response.body.string()
@@ -627,8 +630,9 @@ class NovelFire :
                 val linkElement = element.selectFirst("a") ?: return@forEach
                 val chapterName = linkElement.attr("title").ifEmpty { linkElement.text() }
                 val chapterUrl = linkElement.attr("href")
-                val chapterDate: Long = dateFormat.tryParse(linkElement.selectFirst(".chapter-update[datetime]")?.attr("datetime"))
-
+                val chapterDate: Long = dateFormat.tryParse(
+                    linkElement.selectFirst(".chapter-update[datetime]")?.attr("datetime"),
+                )
                 if (chapterUrl.isNotEmpty()) {
                     allChapters.add(
                         SChapter.create().apply {
@@ -639,13 +643,18 @@ class NovelFire :
                     )
                 }
             }
+
+            // Stop if there's no next page
+            val hasNextPage = doc.selectFirst("a[rel=\"next\"]") != null
+            if (!hasNextPage) break
+            page++
         }
 
         // Sort by chapter number numerically (extract number from name)
         return allChapters.sortedWith(
             compareBy { chapter ->
-                val match = Regex("""(?:chapter|ch\.?)\s*(\d+(?:\.\d+)?)""", RegexOption.IGNORE_CASE).find(chapter.name)
-                match?.groupValues?.get(1)?.toDoubleOrNull() ?: Double.MAX_VALUE
+                Regex("""(?:chapter|ch\.?)\s*(\d+(?:\.\d+)?)""", RegexOption.IGNORE_CASE)
+                    .find(chapter.name)?.groupValues?.get(1)?.toDoubleOrNull() ?: Double.MAX_VALUE
             },
         )
     }
@@ -963,6 +972,5 @@ class NovelFire :
         private const val TAGS_CACHE_TIME_KEY = "novelfire_tags_cache_time"
         private const val CLEAR_TAG_CACHE_KEY = "novelfire_clear_tag_cache"
         private const val CHAPTER_FETCH_METHOD_KEY = "novelfire_chapter_fetch_method"
-        private const val PAGE_SIZE = 50
     }
 }
