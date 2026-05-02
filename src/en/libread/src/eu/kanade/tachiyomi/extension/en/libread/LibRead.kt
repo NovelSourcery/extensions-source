@@ -20,12 +20,10 @@ class LibRead :
         lang = "en",
     ) {
     override val latestPage = "sort/latest-release"
+    override val popularPage = "sort/most-popular"
+    override val pageAsPath = true
 
-    // LibRead uses /sort/ prefix
-    override fun popularMangaRequest(page: Int): Request = okhttp3.Request.Builder()
-        .url("$baseUrl/sort/most-popular?page=$page")
-        .headers(headers)
-        .build()
+    // LibRead uses /sort/ prefix; pagination handled by base class when pageAsPath=true
 
     override fun popularMangaSelector() = "div.ul-list1 div.li, ul.ul-list2 li"
 
@@ -41,14 +39,36 @@ class LibRead :
         }
     }
 
-    override fun popularMangaNextPageSelector() = "div.pages ul li a[rel=next], div.pages ul li.next:not(.disabled) a"
+    override fun popularMangaNextPageSelector() = "li.next:not(.disabled), ul.pagination li.active + li a, div.pages a[href], div.pages ul li a[href]"
 
     override fun popularMangaParse(response: Response): MangasPage {
         val document = response.asJsoup()
         val mangas = document.select(popularMangaSelector()).map { popularMangaFromElement(it) }
 
-        val hasNextPage = document.selectFirst("div.pages ul li a[rel=next]") != null ||
-            document.selectFirst("div.pages ul li.active + li a") != null
+        // Try common next-page indicators first
+        var hasNextPage = document.selectFirst("li.next:not(.disabled), ul.pagination li.active + li a") != null
+
+        if (!hasNextPage) {
+            // Fallback: inspect div.pages anchors — look for numeric links greater than current page
+            val path = response.request.url.encodedPath.trimEnd('/')
+            val currentPage = path.substringAfterLast('/').toIntOrNull() ?: 1
+
+            val pageAnchors = document.select("div.pages a[href]").filter { a ->
+                val href = a.attr("href")
+                href.isNotBlank() && !href.startsWith("javascript", true)
+            }
+
+            hasNextPage = pageAnchors.any { a ->
+                val text = a.text().trim()
+                val num = text.toIntOrNull()
+                if (num != null) {
+                    num > currentPage
+                } else {
+                    // treat arrows (>, >>) or next labels as next page
+                    text.contains(">") || a.attr("rel") == "next"
+                }
+            }
+        }
 
         return MangasPage(mangas, hasNextPage)
     }
@@ -73,22 +93,39 @@ class LibRead :
                 .build()
         }
 
+        // When no search query, apply filters in priority order: Genre > Type
         val genreFilter = filters.filterIsInstance<GenreFilter>().firstOrNull()
         val selectedGenre = genreFilter?.getSelectedGenre()
-        if (selectedGenre != null) {
-            return Request.Builder()
-                .url("$baseUrl/$selectedGenre?page=$page")
-                .headers(headers)
-                .build()
+        if (selectedGenre != null && selectedGenre.isNotEmpty()) {
+            val genrePath = selectedGenre.trim().trimStart('/')
+            return if (pageAsPath && page > 1) {
+                Request.Builder()
+                    .url("$baseUrl/$genrePath/$page")
+                    .headers(headers)
+                    .build()
+            } else {
+                Request.Builder()
+                    .url("$baseUrl/$genrePath${if (!pageAsPath) "?page=$page" else ""}")
+                    .headers(headers)
+                    .build()
+            }
         }
 
         val typeFilter = filters.filterIsInstance<TypeFilter>().firstOrNull()
         val selectedType = typeFilter?.getSelectedType()
-        if (selectedType != null) {
-            return Request.Builder()
-                .url("$baseUrl/$selectedType?page=$page")
-                .headers(headers)
-                .build()
+        if (selectedType != null && selectedType.isNotEmpty()) {
+            val typePath = selectedType.trim().trimStart('/')
+            return if (pageAsPath && page > 1) {
+                Request.Builder()
+                    .url("$baseUrl/$typePath/$page")
+                    .headers(headers)
+                    .build()
+            } else {
+                Request.Builder()
+                    .url("$baseUrl/$typePath${if (!pageAsPath) "?page=$page" else ""}")
+                    .headers(headers)
+                    .build()
+            }
         }
 
         // Default: popular
@@ -106,23 +143,24 @@ class LibRead :
     private class TypeFilter :
         Filter.Select<String>(
             "Novel Type",
-            arrayOf("Most Popular", "Latest Release", "Chinese Novel", "Korean Novel", "Japanese Novel", "English Novel"),
+            arrayOf("All", "Most Popular", "Latest Release", "Chinese Novel", "Korean Novel", "Japanese Novel", "English Novel"),
         ) {
         fun getSelectedType(): String? = when (state) {
-            0 -> null
+            0 -> "sort/latest-release" // All maps to latest-release according to libread.json
 
-            // default, use popular request
-            1 -> "sort/latest-release"
+            1 -> "sort/most-popular"
 
-            2 -> "sort/latest-release/chinese-novel"
+            2 -> "sort/latest-release"
 
-            3 -> "sort/latest-release/korean-novel"
+            3 -> "sort/latest-release/chinese-novel"
 
-            4 -> "sort/latest-release/japanese-novel"
+            4 -> "sort/latest-release/korean-novel"
 
-            5 -> "sort/latest-release/english-novel"
+            5 -> "sort/latest-release/japanese-novel"
 
-            else -> null
+            6 -> "sort/latest-release/english-novel"
+
+            else -> "sort/latest-release"
         }
     }
 
@@ -139,7 +177,7 @@ class LibRead :
             ),
         ) {
         fun getSelectedGenre(): String? {
-            if (state == 0) return null
+            if (state == 0) return ""
             val values = arrayOf(
                 "", "genre/Action", "genre/Adult", "genre/Adventure", "genre/Comedy",
                 "genre/Drama", "genre/Eastern", "genre/Ecchi", "genre/Fantasy",
@@ -151,7 +189,7 @@ class LibRead :
                 "genre/Smut", "genre/Sports", "genre/Supernatural", "genre/Tragedy",
                 "genre/Wuxia", "genre/Xianxia", "genre/Xuanhuan", "genre/Yaoi",
             )
-            return values.getOrNull(state)
+            return values.getOrNull(state) ?: ""
         }
     }
 
