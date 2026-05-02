@@ -33,9 +33,6 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import okhttp3.Cookie
-import okhttp3.CookieJar
-import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -80,40 +77,26 @@ class TomatoMTL :
     // Decryption key from the website's JavaScript
     private val unlockCode = "65237366656177646a7671646b65313736383537393230302356523111774562"
 
-    // Custom cookie jar to persist translation preferences
+    // Override client to append machine translation cookies without bypassing the default WebView CookieJar
     override val client: OkHttpClient = network.cloudflareClient.newBuilder()
-        .cookieJar(
-            object : CookieJar {
-                private val cookies = mutableMapOf<String, MutableList<Cookie>>()
+        .addNetworkInterceptor { chain ->
+            val request = chain.request()
+            val originalCookies = request.header("Cookie") ?: ""
+            val translationMode = getTranslationMode()
 
-                override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
-                    this.cookies.getOrPut(url.host) { mutableListOf() }.apply {
-                        cookies.forEach { cookie ->
-                            removeAll { it.name == cookie.name }
-                            add(cookie)
-                        }
-                    }
-                }
+            // Build the injected string - ensures we don't break existing user cookies like PHPSESSID from Webview
+            val newCookieHeader = buildString {
+                append(originalCookies)
+                if (isNotEmpty() && !endsWith("; ")) append("; ")
+                append("machine_translation=$translationMode; translator_button=en")
+            }
 
-                override fun loadForRequest(url: HttpUrl): List<Cookie> {
-                    val hostCookies = cookies[url.host] ?: mutableListOf()
-                    val translationMode = getTranslationMode()
-                    val additionalCookies = listOf(
-                        Cookie.Builder()
-                            .domain(url.host)
-                            .name("machine_translation")
-                            .value(translationMode)
-                            .build(),
-                        Cookie.Builder()
-                            .domain(url.host)
-                            .name("translator_button")
-                            .value("en")
-                            .build(),
-                    )
-                    return hostCookies + additionalCookies
-                }
-            },
-        )
+            chain.proceed(
+                request.newBuilder()
+                    .header("Cookie", newCookieHeader)
+                    .build(),
+            )
+        }
         .build()
 
     // ======================== Popular ========================
@@ -145,11 +128,11 @@ class TomatoMTL :
                 val bookId = item["book_id"]?.jsonPrimitive?.contentOrNull
                     ?: return@mapNotNull null
 
-                val rawTitle = (
+                val rawTitle = cleanHtml(
                     item["name_raw"]?.jsonPrimitive?.contentOrNull
                         ?: item["book_name"]?.jsonPrimitive?.contentOrNull
-                        ?: "Unknown"
-                    ).let { Parser.unescapeEntities(it, false) }
+                        ?: "Unknown",
+                )
 
                 titlesToTranslate.add(rawTitle)
 
@@ -229,9 +212,18 @@ class TomatoMTL :
             val response = client.newCall(request).execute()
             val responseBody = response.body.string()
 
+            if (!response.isSuccessful) {
+                Log.e("TomatoMTL", "Translate API Error: ${response.code}")
+                return titles
+            }
+
             val responseJson = json.parseToJsonElement(responseBody).jsonArray
             if (responseJson.isNotEmpty() && responseJson[0] is JsonArray) {
-                responseJson[0].jsonArray.mapNotNull { it.jsonPrimitive.contentOrNull }
+                responseJson[0].jsonArray.mapNotNull {
+                    it.jsonPrimitive.contentOrNull?.let { translatedTxt ->
+                        Parser.unescapeEntities(translatedTxt, false)
+                    }
+                }
             } else {
                 titles
             }
@@ -287,14 +279,24 @@ class TomatoMTL :
 
             val categoryId = categoryFilter.toUriPart()
             val gender = genderFilter?.toUriPart() ?: "1"
-            val creationStatus = creationStatusFilter?.toUriPart() ?: "0"
-            val wordCount = wordCountFilterCat?.toUriPart() ?: "0"
-            val sort = sortFilterCat?.toUriPart() ?: "0"
-            val page = (offset / 20) + 1
+            val creationStatus = creationStatusFilter?.toUriPart() ?: "creation_status_default"
+            val wordCount = wordCountFilterCat?.toUriPart() ?: "word_num_default"
+            val sort = sortFilterCat?.toUriPart() ?: "sort_default"
 
-            val url = "$baseUrl/categories_v2?category_id=$categoryId&sub_category_id=" +
-                "&word_count=$wordCount&creation_status=$creationStatus" +
-                "&gender=$gender&sort=$sort&page=$page"
+            // Direct API endpoint categories_v1b.php uses limit=18, so offset must be based on 18
+            val catOffset = (page - 1) * 18
+
+            // Use the direct API endpoint categories_v1b.php (unencrypted JSON response)
+            val url = "$baseUrl/api/categories_v1b.php?" +
+                "category_id=$categoryId&" +
+                "gender=$gender&" +
+                "creation_status=$creationStatus&" +
+                "word_count=$wordCount&" +
+                "sort=$sort&" +
+                "sub_category_id=&" +
+                "offset=$catOffset&" +
+                "limit=18&" +
+                "genre_type=0"
 
             return GET(url, headers)
         }
@@ -338,9 +340,15 @@ class TomatoMTL :
         val requestUrl = response.request.url.toString()
 
         val isGardenApi = requestUrl.contains("tomato-garden-api")
-        val isCategoriesV2 = requestUrl.contains("categories_v2")
+        val isCategoriesV1b = requestUrl.contains("categories_v1b.php")
+        val isCategoriesV1 = requestUrl.contains("categories_v1")
 
-        if (isCategoriesV2) {
+        if (isCategoriesV1b) {
+            // Direct API call with unencrypted JSON response (new endpoint)
+            return parseCategoriesV1bResponse(responseBody)
+        }
+
+        if (isCategoriesV1) {
             return parseCategoriesV2Html(responseBody)
         }
 
@@ -410,7 +418,8 @@ class TomatoMTL :
                         ?: return@mapNotNull null
 
                     val rawTitle = book["name"]?.jsonPrimitive?.contentOrNull ?: "Unknown"
-                    titlesToTranslate.add(rawTitle)
+                    val cleanedTitle = cleanHtml(rawTitle)
+                    titlesToTranslate.add(cleanedTitle)
 
                     val hexUrl = stringToHex(bookUrl)
                     val source = book["host"]?.jsonPrimitive?.contentOrNull
@@ -480,7 +489,7 @@ class TomatoMTL :
                     "/book/$bookId"
                 }
 
-                val rawTitle = (bookData["book_name"]?.jsonPrimitive?.contentOrNull ?: "Unknown").let { Parser.unescapeEntities(it, false) }
+                val rawTitle = cleanHtml(bookData["book_name"]?.jsonPrimitive?.contentOrNull ?: "Unknown")
                 titlesToTranslate.add(rawTitle)
 
                 Triple(
@@ -527,8 +536,9 @@ class TomatoMTL :
                     val book = element.jsonObject
                     val bookId = book["book_id"]?.jsonPrimitive?.contentOrNull
                         ?: return@mapNotNull null
-                    val rawTitle = (book["book_name"]?.jsonPrimitive?.contentOrNull ?: "Unknown").let { Parser.unescapeEntities(it, false) }
-                    titlesToTranslate.add(rawTitle)
+                    val rawTitle = (book["book_name"]?.jsonPrimitive?.contentOrNull ?: "Unknown")
+                    val cleanedTitle = cleanHtml(rawTitle)
+                    titlesToTranslate.add(cleanedTitle)
 
                     Triple(
                         "/book/$bookId",
@@ -555,6 +565,69 @@ class TomatoMTL :
             MangasPage(mangas, hasMore)
         } catch (e: Exception) {
             Log.e("TomatoMTL", "Error parsing categories response: ${e.message}")
+            MangasPage(emptyList(), false)
+        }
+    }
+
+    /**
+     * Parse the direct API response from categories_v1b.php
+     * Response is unencrypted JSON with structure:
+     * {
+     *   "success": true,
+     *   "books": [{"book_id", "book_name", "thumb_url", "author", "score"}, ...],
+     *   "has_more": true,
+     *   "total_count": 18,
+     *   "offset": 0,
+     *   "next_offset": 18
+     * }
+     */
+    private fun parseCategoriesV1bResponse(responseBody: String): MangasPage {
+        return try {
+            val jsonResult = json.parseToJsonElement(responseBody).jsonObject
+            val success = jsonResult["success"]?.jsonPrimitive?.booleanOrNull ?: false
+
+            if (!success) {
+                Log.e("TomatoMTL", "categories_v1b.php returned success=false")
+                return MangasPage(emptyList(), false)
+            }
+
+            val books = jsonResult["books"]?.jsonArray ?: return MangasPage(emptyList(), false)
+            val hasMore = jsonResult["has_more"]?.jsonPrimitive?.booleanOrNull ?: false
+
+            val titlesToTranslate = mutableListOf<String>()
+            val mangaData = books.mapNotNull { element ->
+                try {
+                    val book = element.jsonObject
+                    val bookId = book["book_id"]?.jsonPrimitive?.contentOrNull
+                        ?: return@mapNotNull null
+                    val rawTitle = cleanHtml(book["book_name"]?.jsonPrimitive?.contentOrNull ?: "Unknown")
+                    titlesToTranslate.add(rawTitle)
+
+                    Triple(
+                        "/book/$bookId",
+                        book["thumb_url"]?.jsonPrimitive?.contentOrNull?.let { linkCover(it) },
+                        book["author"]?.jsonPrimitive?.contentOrNull,
+                    )
+                } catch (e: Exception) {
+                    null
+                }
+            }
+
+            // Batch translate titles using Google Translate API
+            val translatedTitles = translateTitles(titlesToTranslate)
+
+            val mangas = mangaData.mapIndexed { index, (url, cover, author) ->
+                SManga.create().apply {
+                    this.url = url
+                    title = translatedTitles.getOrNull(index) ?: titlesToTranslate.getOrNull(index) ?: "Unknown"
+                    thumbnail_url = cover
+                    this.author = author
+                }
+            }
+
+            MangasPage(mangas, hasMore)
+        } catch (e: Exception) {
+            Log.e("TomatoMTL", "Error parsing categories_v1b response: ${e.message}")
             MangasPage(emptyList(), false)
         }
     }
@@ -591,8 +664,8 @@ class TomatoMTL :
                     val bookId = book["book_id"]?.jsonPrimitive?.contentOrNull
                         ?: return@mapNotNull null
                     val rawTitle = (book["book_name"]?.jsonPrimitive?.contentOrNull ?: "Unknown")
-                        .let { Parser.unescapeEntities(it, false) }
-                    titlesToTranslate.add(rawTitle)
+                    val cleanedTitle = cleanHtml(rawTitle)
+                    titlesToTranslate.add(cleanedTitle)
 
                     Triple(
                         "/book/$bookId",
@@ -655,19 +728,29 @@ class TomatoMTL :
             return "$baseUrl/assets/images/noimg_1.jpg"
         }
 
-        if (url.contains("wsrv.nl") || url.contains("cover-img.raudo.eu.org")) {
-            // Fix malformed URLs like "https://wsrv.nl//novel-pic/..."
-            return url.replace("wsrv.nl//", "wsrv.nl/?url=https://p6-novel.byteimg.com/origin/")
+        // Clean up escaped slashes from raw JS/JSON strings
+        val cleanedUrl = url.replace("\\/", "/")
+
+        if (cleanedUrl.contains("wsrv.nl") || cleanedUrl.contains("cover-img.raudo.eu.org")) {
+            // Fix malformed URLs generated by raw JSON extraction, like "https://wsrv.nl//?url="
+            if (cleanedUrl.contains("wsrv.nl//?url=")) {
+                return cleanedUrl.replace("wsrv.nl//?url=", "wsrv.nl/?url=")
+            }
+            // Fix relative paths missing host
+            if (cleanedUrl.contains("wsrv.nl//novel-pic/")) {
+                return cleanedUrl.replace("wsrv.nl//", "wsrv.nl/?url=https://p6-novel.byteimg.com/origin/")
+            }
+            return cleanedUrl
         }
 
-        if (url.contains("tomato-proxy.cachefly.net")) {
-            return url
+        if (cleanedUrl.contains("tomato-proxy.cachefly.net")) {
+            return cleanedUrl
         }
 
-        if (url.contains("fqnovelpic.com") || url.contains("byteimg.com")) {
-            val novelPicIndex = url.indexOf("/novel-pic/")
+        if (cleanedUrl.contains("fqnovelpic.com") || cleanedUrl.contains("byteimg.com")) {
+            val novelPicIndex = cleanedUrl.indexOf("/novel-pic/")
             if (novelPicIndex != -1) {
-                val path = url.substring(novelPicIndex)
+                val path = cleanedUrl.substring(novelPicIndex)
                     .split("~")[0] // Remove tilde parts
                     .split("?")[0] // Remove query params
                 return "https://wsrv.nl/?url=https://p6-novel.byteimg.com/origin$path&w=225&h=300&fit=cover&output=webp"
@@ -675,7 +758,7 @@ class TomatoMTL :
         }
 
         // Default: return the URL as-is (might be external or already valid)
-        return url
+        return cleanedUrl
     }
 
     // ======================== Details ========================
@@ -733,8 +816,11 @@ class TomatoMTL :
                                 val rawStatus = data["status"]?.jsonPrimitive?.contentOrNull
 
                                 manga.apply {
-                                    // Translate title
-                                    title = rawName?.let { translateSingleTitle(it) } ?: manga.title
+                                    // Translate title with HTML cleaning
+                                    title = rawName?.let {
+                                        val cleaned = cleanHtml(it)
+                                        translateSingleTitle(cleaned)
+                                    } ?: manga.title
 
                                     // Author
                                     author = rawAuthor ?: manga.author
@@ -749,17 +835,18 @@ class TomatoMTL :
                                         }
                                     }
 
-                                    // Description - translate if needed
+                                    // Description - clean HTML entities and translate if needed
                                     description = buildString {
                                         rawDescription?.let { desc ->
-                                            val translatedDesc = if (needsTranslation(desc)) {
+                                            val cleanedDesc = cleanHtml(desc)
+                                            val translatedDesc = if (needsTranslation(cleanedDesc)) {
                                                 try {
-                                                    translateSingleTitle(desc)
+                                                    translateSingleTitle(cleanedDesc)
                                                 } catch (e: Exception) {
-                                                    desc
+                                                    cleanedDesc
                                                 }
                                             } else {
-                                                desc
+                                                cleanedDesc
                                             }
                                             append(translatedDesc)
                                             append("\n\n")
@@ -817,10 +904,16 @@ class TomatoMTL :
 
     /**
      * Clean HTML tags and entities from text using Jsoup
+     * Decodes HTML entities and removes all HTML tags
      */
     private fun cleanHtml(text: String?): String {
         if (text.isNullOrBlank()) return ""
-        return Jsoup.parse(text).text().trim()
+        // First decode HTML entities
+        val decoded = Parser.unescapeEntities(text, false)
+        // Then parse with Jsoup to remove tags and normalize whitespace
+        val cleaned = Jsoup.parse(decoded).text().trim()
+        // Remove excessive whitespace
+        return cleaned.replace(Regex("\\s+"), " ")
     }
 
     /**
@@ -850,19 +943,22 @@ class TomatoMTL :
             val descriptionJs = extractJsVariable(html, "description")
             val authorsZh = extractJsVariable(html, "authors_zh")
 
-            // Title - prefer JS variable, decode unicode escapes
+            // Title - prefer JS variable, decode unicode escapes and HTML entities
             title = if (!bookName.isNullOrBlank()) {
-                val decoded = decodeUnicodeEscapes(bookName)
-                translateSingleTitle(decoded)
+                val withUnicodeDecoded = decodeUnicodeEscapes(bookName)
+                val cleaned = cleanHtml(withUnicodeDecoded)
+                translateSingleTitle(cleaned)
             } else {
-                document.selectFirst("h1.book-title, #book_name")?.text() ?: "Unknown"
+                cleanHtml(document.selectFirst("h1.book-title, #book_name")?.text())
             }
 
             // Cover
-            thumbnail_url = bookCover?.let { decodeUnicodeEscapes(it) }
-                ?: document.selectFirst("#book_cover")?.attr("src")
-                ?: document.selectFirst("#book_cover_link")?.attr("href")
-                ?: document.selectFirst(".book-cover img")?.attr("src")
+            thumbnail_url = bookCover?.let { decodeUnicodeEscapes(it) }?.let { linkCover(it) }
+                ?: document.selectFirst("#book_cover")?.attr("data-src")?.let { linkCover(it) }
+                ?: document.selectFirst("#book_cover")?.attr("src")?.let { linkCover(it) }
+                ?: document.selectFirst("#book_cover_link")?.attr("href")?.let { linkCover(it) }
+                ?: document.selectFirst(".book-cover img")?.attr("data-src")?.let { linkCover(it) }
+                ?: document.selectFirst(".book-cover img")?.attr("src")?.let { linkCover(it) }
 
             // Author from JS or metadata
             author = if (!authorsZh.isNullOrBlank()) {
@@ -883,17 +979,33 @@ class TomatoMTL :
                 else -> SManga.UNKNOWN
             }
 
-            // Description - prefer JS variable, decode and translate
+            // Description - prefer JS variable, decode unicode escapes, HTML entities, and translate
             description = if (!descriptionJs.isNullOrBlank()) {
-                val decoded = decodeUnicodeEscapes(descriptionJs)
-                val translated = if (needsTranslation(decoded)) {
-                    translateWithGoogle(decoded)
+                val withUnicodeDecoded = decodeUnicodeEscapes(descriptionJs)
+                val cleaned = cleanHtml(withUnicodeDecoded)
+                if (needsTranslation(cleaned)) {
+                    val rawTranslated = translateContent(cleaned, getTranslationMode())
+                    Parser.unescapeEntities(rawTranslated, false)
+                        .replace(Regex("</p>\\s*<p>"), "\n\n")
+                        .replace("<p>", "")
+                        .replace("</p>", "")
+                        .trim()
                 } else {
-                    decoded
+                    cleaned
                 }
-                translated
             } else {
-                document.selectFirst("#description, .book-description")?.text()
+                val rawHtml = document.selectFirst("#description, .book-description")?.html()
+                val cleanedDesc = cleanHtml(rawHtml)
+                if (needsTranslation(cleanedDesc)) {
+                    val rawTranslated = translateContent(cleanedDesc, getTranslationMode())
+                    Parser.unescapeEntities(rawTranslated, false)
+                        .replace(Regex("</p>\\s*<p>"), "\n\n")
+                        .replace("<p>", "")
+                        .replace("</p>", "")
+                        .trim()
+                } else {
+                    cleanedDesc
+                }
             }
 
             // Alternative titles (Original name)
@@ -901,6 +1013,13 @@ class TomatoMTL :
                 ?.selectFirst("span")?.text()
             if (!originalName.isNullOrBlank() && originalName != title) {
                 description = "Original Title: $originalName\n\n$description"
+            }
+
+            // Word Count and Chapters
+            val wordsItem = metadataItems.find { it.text().contains("Words:") }
+            if (wordsItem != null) {
+                val wordsAndChapters = wordsItem.text().trim()
+                description = "$wordsAndChapters\n\n$description"
             }
 
             // Genre/Categories
@@ -934,12 +1053,13 @@ class TomatoMTL :
      */
     private fun decodeUnicodeEscapes(input: String): String = try {
         val pattern = Regex("""\\u([0-9a-fA-F]{4})""")
-        pattern.replace(input) { matchResult ->
+        val decoded = pattern.replace(input) { matchResult ->
             val codePoint = matchResult.groupValues[1].toInt(16)
             codePoint.toChar().toString()
         }
+        decoded.replace("\\/", "/")
     } catch (e: Exception) {
-        input
+        input.replace("\\/", "/")
     }
 
     // ======================== Chapters ========================
@@ -997,6 +1117,7 @@ class TomatoMTL :
                                 val chapterName = chapterObj["name"]?.jsonPrimitive?.contentOrNull
                                     ?: chapterObj["title"]?.jsonPrimitive?.contentOrNull
                                     ?: "Chapter ${index + 1}"
+                                val cleanedChapterName = cleanHtml(chapterName)
                                 val chapterUrl = chapterObj["url"]?.jsonPrimitive?.contentOrNull
 
                                 if (chapterUrl.isNullOrBlank()) {
@@ -1007,11 +1128,11 @@ class TomatoMTL :
                                 chapters.add(
                                     SChapter.create().apply {
                                         url = "/garden/$source/$hexId/${URLEncoder.encode(chapterUrl, "UTF-8")}-$index"
-                                        name = chapterName
+                                        name = cleanedChapterName
                                         chapter_number = (index + 1).toFloat()
                                     },
                                 )
-                                chapterNames.add(chapterName)
+                                chapterNames.add(cleanedChapterName)
                             } catch (e: Exception) {
                                 Log.e("TomatoMTL", "Error parsing garden chapter $index: ${e.message}")
                             }
@@ -1051,7 +1172,7 @@ class TomatoMTL :
                             chapter_number = 0f
                         },
                     )
-                }
+                }.sortedByDescending { it.chapter_number }
             } catch (e: Exception) {
                 Log.e("TomatoMTL", "Error fetching garden chapter list: ${e.message}")
                 listOf(
@@ -1068,6 +1189,7 @@ class TomatoMTL :
     override fun chapterListParse(response: Response): List<SChapter> {
         val document = Jsoup.parse(response.body.string())
         val chapters = mutableListOf<SChapter>()
+        val chapterNames = mutableListOf<String>()
 
         val chapterLinks =
             document.select(".chapter-link, a[href*='/book/'][href*='/'], a[href*='/garden/']")
@@ -1077,18 +1199,22 @@ class TomatoMTL :
                 val href = link.attr("href")
                 if (href.isBlank() || href == "#" || !isChapterUrl(href)) return@forEach
 
+                // Extract and clean chapter name
+                val rawChapterName = link.text().trim().ifBlank {
+                    link.attr("title").ifBlank { "Chapter" }
+                }
+                val chapterName = cleanHtml(rawChapterName)
+
                 val chapter = SChapter.create().apply {
                     url = if (href.startsWith("http")) {
                         href.removePrefix(baseUrl)
                     } else {
                         href
                     }
-                    name = link.text().trim().ifBlank {
-                        link.attr("title").ifBlank { "Chapter" }
-                    }
+                    name = chapterName
 
                     val chapterNumMatch = Regex("""#?(\d+)""").find(
-                        link.selectFirst(".chapter-number")?.text() ?: name,
+                        link.selectFirst(".chapter-number")?.text() ?: chapterName,
                     )
                     chapter_number = chapterNumMatch?.groupValues?.get(1)?.toFloatOrNull() ?: -1f
                 }
@@ -1096,13 +1222,29 @@ class TomatoMTL :
                 // Avoid duplicates
                 if (chapters.none { it.url == chapter.url }) {
                     chapters.add(chapter)
+                    chapterNames.add(chapterName)
                 }
             } catch (e: Exception) {
                 Log.e("TomatoMTL", "Error parsing chapter: ${e.message}")
             }
         }
 
-        return chapters.reversed()
+        // Translate chapter names in batch if needed
+        if (chapters.isNotEmpty() && chapterNames.any { needsTranslation(it) }) {
+            try {
+                val translatedNames = translateTitles(chapterNames)
+                chapters.forEachIndexed { index, chapter ->
+                    if (index < translatedNames.size) {
+                        chapter.name = translatedNames[index]
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("TomatoMTL", "Error translating chapter names: ${e.message}")
+            }
+        }
+
+        // Sort by chapter number in descending order (newest first)
+        return chapters.sortedByDescending { it.chapter_number }
     }
 
     /**
@@ -1156,8 +1298,9 @@ class TomatoMTL :
                                 val chapterId = chapterObj["id"]?.jsonPrimitive?.contentOrNull
                                     ?: return@forEachIndexed
 
-                                // Decode unicode escapes in title
-                                val chapterTitle = decodeUnicodeEscapes(rawTitle)
+                                // Decode unicode escapes and HTML entities in title
+                                val withUnicodeDecoded = decodeUnicodeEscapes(rawTitle)
+                                val chapterTitle = cleanHtml(withUnicodeDecoded)
 
                                 chapters.add(
                                     SChapter.create().apply {
@@ -1196,7 +1339,8 @@ class TomatoMTL :
                     )
                 }
 
-                chapters
+                // Sort chapters by chapter_number descending (newest first)
+                chapters.sortedByDescending { it.chapter_number }
             } catch (e: Exception) {
                 Log.e("TomatoMTL", "Error fetching regular chapter list: ${e.message}")
                 emptyList<SChapter>()
@@ -1377,15 +1521,15 @@ class TomatoMTL :
         val fullUrl = if (chapterUrl.startsWith("http")) chapterUrl else "$baseUrl$chapterUrl"
         val pageResponse = client.newCall(GET(fullUrl, headers)).execute()
         val pageHtml = pageResponse.body.string()
-        val document = Jsoup.parse(pageHtml)
 
-        val encryptedDataMatch = Regex("""let\s+encryptedData\s*=\s*\{[^}]*"iv"\s*:\s*"([^"]+)"[^}]*"enc"\s*:\s*"([^"]+)"[^}]*\}""").find(pageHtml)
-            ?: Regex("""encryptedData\s*=\s*\{[^}]*"iv"\s*:\s*"([^"]+)"[^}]*"enc"\s*:\s*"([^"]+)"[^}]*\}""").find(pageHtml)
+        // First, try to extract encryptedData from script tags in raw HTML
+        val ivMatch = Regex("""["']iv["']\s*:\s*["']([^"']+)["']""").find(pageHtml)
+        val encMatch = Regex("""["']enc["']\s*:\s*["']([^"']+)["']""").find(pageHtml)
 
-        if (encryptedDataMatch != null) {
-            val iv = encryptedDataMatch.groupValues[1]
-            val enc = encryptedDataMatch.groupValues[2]
-            Log.d("TomatoMTL", "Found encryptedData in HTML: iv=${iv.take(20)}...")
+        if (ivMatch != null && encMatch != null) {
+            val iv = ivMatch.groupValues[1]
+            val enc = encMatch.groupValues[1]
+            Log.d("TomatoMTL", "Found encryptedData in HTML script: iv=${iv.take(20)}...")
 
             val decrypted = decryptContent(iv, enc)
             if (decrypted.isNotBlank()) {
@@ -1394,28 +1538,12 @@ class TomatoMTL :
             }
         }
 
+        val document = Jsoup.parse(pageHtml)
+        // Fallback: try to find chapter content in DOM
         val contentElement =
             document.selectFirst("#chapter-content, .chapter-content, #content, .content")
         if (contentElement != null) {
             return processAndTranslate(contentElement.html())
-        }
-
-        val scripts = document.select("script")
-        for (script in scripts) {
-            val data = script.data()
-            if (data.contains("\"iv\"") && data.contains("\"enc\"")) {
-                val ivMatch = Regex(""""iv"\s*:\s*"([^"]+)"""").find(data)
-                val encMatch = Regex(""""enc"\s*:\s*"([^"]+)"""").find(data)
-
-                val iv = ivMatch?.groupValues?.get(1)
-                val enc = encMatch?.groupValues?.get(1)
-
-                if (iv != null && enc != null) {
-                    val decrypted = decryptContent(iv, enc)
-                    val sanitizedContent = sanitizeChapterContent(decrypted)
-                    return processAndTranslate(sanitizedContent)
-                }
-            }
         }
 
         return "Could not find chapter content"
@@ -1484,6 +1612,7 @@ class TomatoMTL :
         "google2" -> translateWithGoogle2(content)
         "gemini" -> translateWithGemini(content)
         "bing" -> translateWithBing(content)
+        "longcat" -> translateWithLongcat(content)
         "yandex" -> translateWithYandex(content)
         else -> formatContent(content)
     }
@@ -1527,10 +1656,16 @@ class TomatoMTL :
             val response = client.newCall(request).execute()
             val responseBody = response.body.string()
 
+            if (!response.isSuccessful) {
+                Log.e("TomatoMTL", "Translate API Error: ${response.code}")
+                return formatContent(content)
+            }
+
             val responseJson = json.parseToJsonElement(responseBody).jsonArray
             if (responseJson.isNotEmpty() && responseJson[0] is JsonArray) {
                 val translations = responseJson[0].jsonArray
                 return translations.mapNotNull { it.jsonPrimitive.contentOrNull }
+                    .map { cleanHtml(it) }
                     .joinToString("\n") { "<p>$it</p>" }
             }
 
@@ -1569,6 +1704,7 @@ class TomatoMTL :
             val translation = responseJson["translation"]?.jsonPrimitive?.contentOrNull
 
             return translation?.split("\n")
+                ?.map { cleanHtml(it) }
                 ?.filter { it.isNotBlank() }
                 ?.joinToString("\n") { "<p>$it</p>" }
                 ?: formatContent(content)
@@ -1581,6 +1717,69 @@ class TomatoMTL :
     private fun translateWithGemini(content: String): String {
         // Gemini AI translation (currently under maintenance per website)
         return translateWithGoogle(content)
+    }
+
+    private fun translateWithLongcat(content: String): String {
+        try {
+            val paragraphs = try {
+                json.parseToJsonElement(content).jsonArray
+                    .mapNotNull { it.jsonPrimitive.contentOrNull }
+            } catch (e: Exception) {
+                content.split("\n").filter { it.isNotBlank() }
+            }
+
+            if (paragraphs.isEmpty()) return formatContent(content)
+
+            // Number the paragraphs to help the AI keep input/output 1:1 if needed,
+            // or just join them by newline. Let's join by newline.
+            val textToTranslate = paragraphs.joinToString("\n")
+
+            val prompt = "You are a translator. Translate the following text into English. Requirements: accurate translation, natural flow, preserve the original style. Translate names and proper nouns. Do not omit any sentence or add extra commentary. Keep line breaks, and the number of output lines must equal the number of input lines.\n\nSource:\n$textToTranslate"
+
+            val requestBody = buildJsonObject {
+                put("model", "LongCat-Flash-Chat")
+                put("temperature", 0.2)
+                put(
+                    "messages",
+                    buildJsonArray {
+                        add(
+                            buildJsonObject {
+                                put("role", "user")
+                                put("content", prompt)
+                            },
+                        )
+                    },
+                )
+            }.toString().toRequestBody("application/json".toMediaType())
+
+            val request = Request.Builder()
+                .url("https://api.longcat.chat/openai/v1/chat/completions")
+                .post(requestBody)
+                .header("Authorization", "Bearer ${getLongcatApiKey()}")
+                .build()
+
+            val response = client.newCall(request).execute()
+            val responseBody = response.body.string()
+
+            if (!response.isSuccessful) {
+                Log.e("TomatoMTL", "LongCat translate failed (${response.code}): $responseBody")
+                return translateWithGoogle(content) // fallback
+            }
+
+            val jsonElement = json.parseToJsonElement(responseBody).jsonObject
+            val translation = jsonElement["choices"]?.jsonArray?.get(0)?.jsonObject
+                ?.get("message")?.jsonObject?.get("content")?.jsonPrimitive?.contentOrNull
+
+            if (translation.isNullOrBlank()) return formatContent(content)
+
+            return translation.split("\n")
+                .map { cleanHtml(it).trim() }
+                .filter { it.isNotBlank() }
+                .joinToString("\n") { "<p>$it</p>" }
+        } catch (e: Exception) {
+            Log.e("TomatoMTL", "LongCat translate error: ${e.message}")
+            return translateWithGoogle(content) // fallback
+        }
     }
 
     private fun translateWithBing(content: String): String {
@@ -1631,6 +1830,7 @@ class TomatoMTL :
                 ?.get(0)?.jsonObject?.get("text")?.jsonPrimitive?.contentOrNull
 
             return translation?.split("\n")
+                ?.map { cleanHtml(it) }
                 ?.filter { it.isNotBlank() }
                 ?.joinToString("\n") { "<p>$it</p>" }
                 ?: formatContent(content)
@@ -1674,6 +1874,7 @@ class TomatoMTL :
 
             return textArray?.mapNotNull { it.jsonPrimitive.contentOrNull }
                 ?.flatMap { it.split("\n") }
+                ?.map { cleanHtml(it) }
                 ?.filter { it.isNotBlank() }
                 ?.joinToString("\n") { "<p>$it</p>" }
                 ?: formatContent(content)
@@ -1688,6 +1889,7 @@ class TomatoMTL :
     // ======================== Preferences ========================
 
     private fun getTranslationMode(): String = preferences.getString(TRANSLATION_MODE_KEY, "bing") ?: "bing"
+    private fun getLongcatApiKey(): String = preferences.getString(LONGCAT_API_KEY, "ak_23m7QG2Hh2lb1jD4053bV6Qf4NF7c") ?: "ak_23m7QG2Hh2lb1jD4053bV6Qf4NF7c"
 
     private fun shouldCacheSources(): Boolean = preferences.getBoolean(CACHE_SOURCES_KEY, true)
 
@@ -1699,11 +1901,12 @@ class TomatoMTL :
                 "Bing Translate (fast)",
                 "Google Translate (fast)",
                 "Google Translate 2 (fast)",
+                "LongCat LLM (API Key required)",
                 "Gemini AI (under maintenance)",
                 "Yandex Translate (fast)",
                 "None (Raw Chinese)",
             )
-            entryValues = arrayOf("bing", "google", "google2", "gemini", "yandex", "none")
+            entryValues = arrayOf("bing", "google", "google2", "longcat", "gemini", "yandex", "none")
             setDefaultValue("bing")
             summary = "%s"
         }.also(screen::addPreference)
@@ -1714,6 +1917,13 @@ class TomatoMTL :
             summary = "When enabled, caches the garden sources list. " +
                 "Disable to always fetch fresh data."
             setDefaultValue(true)
+        }.also(screen::addPreference)
+
+        androidx.preference.EditTextPreference(screen.context).apply {
+            key = LONGCAT_API_KEY
+            title = "LongCat API Key"
+            summary = "API key for LongCat Flash Chat translation."
+            setDefaultValue("ak_23m7QG2Hh2lb1jD4053bV6Qf4NF7c")
         }.also(screen::addPreference)
     }
 
@@ -1866,6 +2076,7 @@ class TomatoMTL :
         private const val TRANSLATION_MODE_KEY = "translationMode"
         private const val CACHE_SOURCES_KEY = "cacheSources"
         private const val SOURCES_CACHE_KEY = "sourcesCache"
+        private const val LONGCAT_API_KEY = "longcatApiKey"
     }
 }
 
@@ -1932,9 +2143,9 @@ private class CreationStatusFilter :
     SelectFilter(
         "Creation Status",
         arrayOf(
-            Pair("All", "0"),
-            Pair("Completed", "2"),
-            Pair("Ongoing", "1"),
+            Pair("All", "creation_status_default"),
+            Pair("Completed", "creation_status_end"),
+            Pair("Ongoing", "creation_status_loading"),
         ),
     )
 
@@ -1942,7 +2153,13 @@ private class WordCountFilterCategory :
     SelectFilter(
         "Word Count",
         arrayOf(
-            Pair("All", "0"),
+            Pair("All", "word_num_default"),
+            Pair("< 10k", "word_num_lte10"),
+            Pair("10k - 50k", "word_num_10_50"),
+            Pair("50k - 100k", "word_num_50_100"),
+            Pair("100k - 200k", "word_num_100_200"),
+            Pair("200k - 300k", "word_num_200_300"),
+            Pair("≥ 300k", "word_num_gte300"),
         ),
     )
 
@@ -1950,10 +2167,10 @@ private class SortFilterCategory :
     SelectFilter(
         "Sort By",
         arrayOf(
-            Pair("Default", "0"),
-            Pair("New Books", "1"),
-            Pair("High Rating", "2"),
-            Pair("Word Count", "3"),
+            Pair("Default", "sort_default"),
+            Pair("New Books", "sort_new_book"),
+            Pair("High Rating", "sort_score"),
+            Pair("Word Count", "sort_word_number"),
         ),
     )
 
