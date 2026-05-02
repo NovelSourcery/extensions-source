@@ -10,6 +10,7 @@ class ReadNovelFullSource :
     ) {
     override val popularPage = "novel-list/most-popular-novel"
     override val latestPage = "novel-list/latest-release-novel"
+    override val pageAsPath = false
     override val searchPage = "novel-list/search"
 
     override fun getTypeOptions() = listOf(
@@ -57,4 +58,15 @@ class ReadNovelFullSource :
         "Tragedy" to "genres/tragedy",
         "Transmigration" to "genres/transmigration",
     )
+
+    // Return raw genre IDs (keep 'genres/<name>') so multisrc uses exact path segment
+    override fun getGenreList(): List<eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull.Genre> {
+        val opts = getGenreOptions()
+        if (opts.isNotEmpty()) {
+            return opts.map { (name, rawId) ->
+                eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull.Genre(name, rawId)
+            }
+        }
+        return super.getGenreList()
+    }
 }

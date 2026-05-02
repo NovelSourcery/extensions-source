@@ -84,7 +84,12 @@ abstract class ReadNovelFull(
     // ======================== Popular ========================
 
     override fun popularMangaRequest(page: Int): Request = if (pageAsPath && page > 1) {
-        GET("$baseUrl/$popularPage/$page", headers)
+        // If this specific page path is listed in `noPages`, fall back to query parameter pagination
+        if (noPages.any { it.trim().trimStart('/') == popularPage.trim().trimStart('/') }) {
+            GET("$baseUrl/$popularPage?$pageParam=$page", headers)
+        } else {
+            GET("$baseUrl/$popularPage/$page", headers)
+        }
     } else {
         GET("$baseUrl/$popularPage?$pageParam=$page", headers)
     }
@@ -92,17 +97,39 @@ abstract class ReadNovelFull(
     override fun popularMangaSelector() = "div.col-novel-main div.list-novel div.row, div.archive div.row, div.index-intro div.item, div.ul-list1 div.li, div.col-l div.li, div.col-r div.li"
 
     override fun popularMangaFromElement(element: Element): SManga = SManga.create().apply {
-        val link = element.selectFirst("h3.novel-title a, .novel-title a, a.cover, h3.tit a, .txt h3.tit a, div.txt h3.tit a, div.con a")
+        title = "Unknown Title"
+        url = ""
+
+        // Try to find the title link with progressively broader selectors
+        // Extended selectors to handle FreeWebNovel and other site variations
+        val link = element.selectFirst("h3.novel-title a, .novel-title a, a.cover, h3.tit a, .txt h3.tit a, div.txt h3.tit a, div.con a, a.tit, a[title], a.s2, span.s2 a, .truyen-title a")
+
         if (link != null) {
-            title = link.text().trim().ifEmpty { link.attr("title") }
-            setUrlWithoutDomain(link.attr("abs:href"))
+            // Prefer title attribute, then text content
+            title = link.attr("title").ifEmpty { link.text().trim() }.ifBlank { "Unknown Title" }
+            // Set URL regardless of title - even "Unknown Title" entries need URLs to work
+            val href = link.attr("abs:href")
+            if (href.isNotBlank()) {
+                setUrlWithoutDomain(href)
+            }
         } else {
-            // Fallback - try to find any link in the element
-            element.selectFirst("a[href]")?.let {
-                title = it.attr("title").ifEmpty { it.text().trim() }
-                setUrlWithoutDomain(it.attr("abs:href"))
+            // Last resort: look for any link with href in the element
+            val anyLink = element.selectFirst("a[href]")
+            if (anyLink != null) {
+                val linkText = anyLink.attr("title").ifEmpty { anyLink.text().trim() }
+                if (linkText.isNotBlank()) {
+                    title = linkText
+                    setUrlWithoutDomain(anyLink.attr("abs:href"))
+                } else {
+                    // If no text, still set URL with generic title
+                    val href = anyLink.attr("abs:href")
+                    if (href.isNotBlank()) {
+                        setUrlWithoutDomain(href)
+                    }
+                }
             }
         }
+
         // Try multiple image selectors for different site structures
         // Use abs:src and abs:data-src to handle relative URLs
         thumbnail_url = element.selectFirst("img")?.let { img ->
@@ -112,12 +139,16 @@ abstract class ReadNovelFull(
         }
     }
 
-    override fun popularMangaNextPageSelector() = "li.next:not(.disabled), ul.pagination li.active + li a"
+    override fun popularMangaNextPageSelector() = "li.next:not(.disabled), ul.pagination li.active + li a, div.pages a:contains(>>), div.pages a:contains(>), div.pages a[href], div.paging a[href], div.pagination a.next"
 
     // ======================== Latest ========================
 
     override fun latestUpdatesRequest(page: Int): Request = if (pageAsPath && page > 1) {
-        GET("$baseUrl/$latestPage/$page", headers)
+        if (noPages.any { it.trim().trimStart('/') == latestPage.trim().trimStart('/') }) {
+            GET("$baseUrl/$latestPage?$pageParam=$page", headers)
+        } else {
+            GET("$baseUrl/$latestPage/$page", headers)
+        }
     } else {
         GET("$baseUrl/$latestPage?$pageParam=$page", headers)
     }
@@ -128,9 +159,11 @@ abstract class ReadNovelFull(
         // Handle ul-list2 li structure for FreeWebNovel latest updates
         if (element.tagName() == "li" && element.selectFirst("div.s1.con") != null) {
             return SManga.create().apply {
+                title = "Unknown Title"
+                url = ""
                 val link = element.selectFirst("a.tit")
                 if (link != null) {
-                    title = link.attr("title").ifEmpty { link.text().trim() }
+                    title = link.attr("title").ifEmpty { link.text().trim() }.ifBlank { "Unknown Title" }
                     setUrlWithoutDomain(link.attr("abs:href"))
                 }
                 thumbnail_url = element.selectFirst("div.pic img")?.let { img ->
@@ -146,6 +179,81 @@ abstract class ReadNovelFull(
     // ======================== Search ========================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+        var selectedType = "all"
+        val selectedGenres = mutableListOf<String>()
+        var selectedStatus = "all"
+
+        filters.forEach { filter ->
+            when (filter) {
+                is TypeFilter -> selectedType = filter.toUriPart()
+                is GenreFilter -> selectedGenres += filter.state.filter { it.state }.map { it.id }
+                is StatusFilter -> selectedStatus = filter.toUriPart()
+                else -> {}
+            }
+        }
+
+        // Match LNReader multisrc behavior for browse filters on path-based sites.
+        // When query is empty and the source is path-driven (no novelListing),
+        // build URLs like /most-popular?page=1 or /genre/action?page=1.
+        if (query.isBlank() && novelListing == null) {
+            val genrePath = selectedGenres.firstOrNull()?.let { genre ->
+                val normalized = genre.trim().trimStart('/')
+                when {
+                    normalized.isBlank() -> null
+                    normalized.contains('/') -> normalized
+                    else -> "genre/$normalized"
+                }
+            }
+
+            val basePath = when {
+                !genrePath.isNullOrBlank() -> genrePath
+                selectedType != "all" -> selectedType.trimStart('/').ifBlank { popularPage }
+                else -> popularPage
+            }
+
+            // Respect page-as-path pagination like the template implementation
+            if (pageAsPath && page > 1 && !noPages.any { it.trim().trimStart('/') == basePath.trim().trimStart('/') }) {
+                val pathUrl = "$baseUrl/$basePath/$page"
+                val builder = pathUrl.toHttpUrl().newBuilder()
+                if (selectedStatus != "all") builder.addQueryParameter("status", selectedStatus)
+                return GET(builder.build(), headers)
+            }
+
+            val routeUrl = "$baseUrl/$basePath".toHttpUrl().newBuilder().apply {
+                if (selectedStatus != "all") {
+                    addQueryParameter("status", selectedStatus)
+                }
+                // Only add query page param when using query-style pagination or when page>1
+                if (!pageAsPath || page > 1) addQueryParameter(pageParam, page.toString())
+            }
+
+            return GET(routeUrl.build(), headers)
+        }
+
+        if (selectedType != "all" && selectedType.contains('/')) {
+            val selectedTypePath = selectedType.trim().trimStart('/')
+
+            if (pageAsPath && page > 1 && !noPages.any { it.trim().trimStart('/') == selectedTypePath }) {
+                val pathUrl = "$baseUrl/$selectedTypePath/$page"
+                val builder = pathUrl.toHttpUrl().newBuilder()
+                if (query.isNotEmpty()) builder.addQueryParameter(searchKey, query)
+                selectedGenres.forEach { builder.addQueryParameter(genreParam, it) }
+                if (selectedStatus != "all") builder.addQueryParameter("status", selectedStatus)
+                return GET(builder.build(), headers)
+            }
+
+            val typePathUrl = "$baseUrl/$selectedTypePath".toHttpUrl().newBuilder()
+            if (query.isNotEmpty()) {
+                typePathUrl.addQueryParameter(searchKey, query)
+            }
+            selectedGenres.forEach { typePathUrl.addQueryParameter(genreParam, it) }
+            if (selectedStatus != "all") {
+                typePathUrl.addQueryParameter("status", selectedStatus)
+            }
+            if (!pageAsPath || page > 1) typePathUrl.addQueryParameter(pageParam, page.toString())
+            return GET(typePathUrl.build(), headers)
+        }
+
         // Build URL with filters
         val urlBuilder = "$baseUrl/$searchPage".toHttpUrl().newBuilder()
 
@@ -189,6 +297,7 @@ abstract class ReadNovelFull(
         return if (postSearch && query.isNotEmpty()) {
             val body = FormBody.Builder()
                 .add(searchKey, query)
+                .add(pageParam, page.toString()) // Add page to POST body for pagination
                 .build()
             POST(url, headers, body)
         } else {
@@ -214,6 +323,15 @@ abstract class ReadNovelFull(
             } ?: ""
         }
 
+        if (title.isBlank()) {
+            title = document.selectFirst("meta[property=\"og:title\"]")?.attr("content")
+                ?.substringBefore(" - ")
+                ?.trim()
+                .orEmpty()
+                .ifEmpty { document.title().substringBefore(" - ").trim() }
+                .ifEmpty { "Unknown Title" }
+        }
+
         // Parse info section
         document.select("div.info div, ul.info-meta li, div.m-imgtxt div.item").forEach { element ->
             val text = element.text()
@@ -232,6 +350,15 @@ abstract class ReadNovelFull(
                     status = parseStatus(text.substringAfter(":").trim())
                 }
             }
+        }
+
+        // Fallback: some sites may expose status in other selectors or meta tags
+        if (status == SManga.UNKNOWN) {
+            val statusCandidates = listOf(
+                document.selectFirst(".status, span.status, li.status, p.status")?.text(),
+                document.selectFirst("meta[property=\"og:novel:status\"]")?.attr("content"),
+            )
+            statusCandidates.firstOrNull { !it.isNullOrBlank() }?.let { status = parseStatus(it!!.trim()) }
         }
 
         // Try multiple selectors for description
@@ -346,18 +473,28 @@ abstract class ReadNovelFull(
             val content = document.selectFirst(selector)
             if (content != null) {
                 if (preferences.getBoolean(PREF_RAW_HTML, false)) {
-                    return content.html()
+                    var raw = content.html()
+                    // Remove obfuscated freewebnovel watermarks (e.g., free𝑤𝑒𝑏novel.com)
+                    raw = raw.replace(Regex("free.*?novel\\.com", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+                    return raw
                 }
 
                 // Remove ads and unwanted elements
                 content.select("div.ads, div.unlock-buttons, sub, script, ins, .adsbygoogle").remove()
 
+                // Remove any watermark-like text fragments (best-effort)
+                var contentHtml = content.html()
+                contentHtml = contentHtml.replace(Regex("free.*?novel\\.com", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+
                 // Get clean HTML content
-                return content.html()
+                return contentHtml
             }
         }
 
-        return ""
+        // Fallback for pages where content is embedded under article/main containers.
+        val fallback = document.selectFirst("article, main") ?: return ""
+        fallback.select("script, style, noscript").remove()
+        return fallback.html()
     }
 
     // ======================== Filters ========================
