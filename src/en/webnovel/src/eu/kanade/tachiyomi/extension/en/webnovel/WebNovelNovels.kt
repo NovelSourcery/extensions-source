@@ -1,6 +1,11 @@
 package eu.kanade.tachiyomi.extension.en.webnovel
 
+import android.app.Application
+import android.content.SharedPreferences
+import androidx.preference.CheckBoxPreference
+import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -14,10 +19,13 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
+import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.get
 
 class WebNovelNovels :
     HttpSource(),
-    NovelSource {
+    NovelSource,
+    ConfigurableSource {
 
     override val name = "Webnovel Novels"
 
@@ -274,27 +282,53 @@ class WebNovelNovels :
     override fun chapterListParse(response: Response): List<SChapter> {
         val document = Jsoup.parse(response.body.string())
         val chapters = mutableListOf<SChapter>()
-        document.select(".volume-item").forEach volumeLoop@{ volumeItem ->
-            val volumeName = volumeItem.ownText().trim().let { text ->
-                val match = Regex("Volume\\s(\\d+)").find(text)
-                if (match != null) "Volume ${match.groupValues[1]}" else "Unknown Volume"
-            }
+        document.select(".volume-item").forEach { volumeItem ->
+            val originalVolumeName = volumeItem.first().text().trim()
+            val volumeNameMatch = Regex("Volume\\s(\\d+)").find(originalVolumeName)
+            val volumeName = volumeNameMatch?.let { "Volume ${it.groupValues[1]}" } ?: "Unknown Volume"
 
-            volumeItem.select("li").forEach chapterLoop@{ li ->
-                val a = li.selectFirst("a") ?: return@chapterLoop
+            volumeItem.select("li").forEach { li ->
+                val a = li.selectFirst("a") ?: return@forEach
+                val chapterName = a.attr("title").trim().ifEmpty { "No Title Found" }
+
+                val isLocked = li.select("svg").isNotEmpty()
+                if (isLocked && excludeLocked) return@forEach
+
                 val chapter = SChapter.create().apply {
-                    val rawName = a.attr("title").trim()
-                    name = "$volumeName: $rawName"
+                    name = if (isLocked) "$volumeName: $chapterName 🔒" else "$volumeName: $chapterName"
                     setUrlWithoutDomain(a.attr("href"))
-                    // Locked check
-                    if (li.select("svg").isNotEmpty()) {
-                        name += " \uD83D\uDD12" // Lock emoji
-                    }
+                    chapter_number = (chapters.size + 1).toFloat()
                 }
                 chapters.add(chapter)
             }
         }
-        return chapters.reversed()
+
+        return chapters.asReversed().mapIndexed { index, chapter ->
+            chapter.apply {
+                chapter_number = (chapters.size - index).toFloat()
+            }
+        }
+    }
+
+    // Preferences - hide locked chapters
+    private val preferences: SharedPreferences by lazy {
+        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+    }
+
+    private val excludeLocked: Boolean
+        get() = preferences.getBoolean(PREF_EXCLUDE_LOCKED, false)
+
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        CheckBoxPreference(screen.context).apply {
+            key = PREF_EXCLUDE_LOCKED
+            title = "Exclude locked chapters"
+            summary = "Hide chapters that are locked or paid"
+            setDefaultValue(false)
+        }.also(screen::addPreference)
+    }
+
+    companion object {
+        private const val PREF_EXCLUDE_LOCKED = "webnovel_exclude_locked"
     }
 
     // Pages - novel content - return single page with chapter URL for text fetching
