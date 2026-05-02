@@ -1,0 +1,8 @@
+ext {
+    extName = 'Bright Novels'
+    extClass = '.BrightNovels'
+    extVersionCode = 2
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"
