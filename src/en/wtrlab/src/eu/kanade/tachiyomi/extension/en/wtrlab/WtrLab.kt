@@ -586,6 +586,46 @@ class WtrLab :
             manga.genre = genres.filter { it.isNotEmpty() }.joinToString(", ")
         }
 
+        // Extract tags from JSON response or HTML structure
+        val allTags = mutableListOf<String>()
+
+        // Try to extract tags from JSON data
+        if (nextDataText != null) {
+            try {
+                val jsonData = json.parseToJsonElement(nextDataText).jsonObject
+                val pageProps = jsonData["props"]?.jsonObject?.get("pageProps")?.jsonObject
+                val tagsArray = pageProps?.get("tags")?.jsonArray
+
+                if (tagsArray != null) {
+                    tagsArray.forEach { element ->
+                        element.jsonObject["title"]?.jsonPrimitive?.contentOrNull?.let { title ->
+                            allTags.add(title.trim())
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+            }
+        }
+
+        // If no tags from JSON, try to extract from HTML structure
+        if (allTags.isEmpty()) {
+            val tagGroups = doc.select("div.tags-grouped div.tag-category-tags")
+            tagGroups.forEach { group ->
+                // Extract all tag links from each category
+                group.select("a.tag").forEach { link ->
+                    link.text().trim().takeIf { it.isNotEmpty() }?.let { tagText ->
+                        allTags.add(tagText)
+                    }
+                }
+            }
+        }
+
+        // Combine genres and tags into the genre field
+        if (allTags.isNotEmpty()) {
+            val combinedGenres = (genres + allTags).filter { it.isNotEmpty() }.distinctBy { it.lowercase() }
+            manga.genre = combinedGenres.joinToString(", ")
+        }
+
         return manga
     }
 
