@@ -376,7 +376,7 @@ class NovelUpdates :
                 url = fullUrl
                 date_upload = 0L
             }
-        }.reversed()
+        }
     }
 
     override fun pageListRequest(chapter: SChapter): Request = GET(chapter.url, headers)
