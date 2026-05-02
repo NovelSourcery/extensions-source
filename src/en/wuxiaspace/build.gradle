@@ -3,8 +3,9 @@ ext {
     extClass = '.WuxiaSpace'
     themePkg = 'readwn'
     baseUrl = 'https://www.wuxiaspot.com'
-    overrideVersionCode = 1
+    overrideVersionCode = 2
     isNsfw = false
+    isNovel = true
 }
 
 apply from: "$rootDir/common.gradle"

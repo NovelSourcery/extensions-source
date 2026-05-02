@@ -3,7 +3,7 @@ ext {
     extClass = '.FansMTL'
     themePkg = 'readwn'
     baseUrl = 'https://www.fanmtl.com'
-    overrideVersionCode = 1
+    overrideVersionCode = 2
     isNsfw = false
     isNovel = true
 }
