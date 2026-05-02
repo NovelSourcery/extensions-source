@@ -1,6 +1,7 @@
 ﻿package eu.kanade.tachiyomi.extension.en.novelbin
 
 import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
+import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.util.asJsoup
@@ -14,6 +15,7 @@ class NovelBin :
         lang = "en",
     ) {
     override val latestPage = "sort/latest"
+    override val popularPage = "sort/top-view-novel"
 
     override fun popularMangaSelector() = "div.col-xs-12.col-md-8 div.row[itemscope], div.list-thumb div.col-xs-4, div.list-novel div.row"
 
@@ -42,6 +44,39 @@ class NovelBin :
     override fun searchMangaSelector() = popularMangaSelector()
 
     override fun searchMangaFromElement(element: Element) = popularMangaFromElement(element)
+
+    override fun popularMangaNextPageSelector() = "ul.pagination a[href], li.next:not(.disabled), ul.pagination li.active + li a"
+
+    override fun popularMangaParse(response: okhttp3.Response): MangasPage {
+        val document = response.asJsoup()
+        val mangas = document.select(popularMangaSelector()).map { popularMangaFromElement(it) }
+
+        // Common indicators
+        var hasNext = document.selectFirst("li.next:not(.disabled), ul.pagination li.active + li a") != null
+
+        if (!hasNext) {
+            val currentPage = response.request.url.queryParameter("page")?.toIntOrNull()
+                ?: response.request.url.encodedPath.substringAfterLast('/').toIntOrNull()
+                ?: 1
+
+            val anchors = document.select("ul.pagination a[href]").filter { a ->
+                val href = a.attr("href")
+                href.isNotBlank() && !href.startsWith("javascript", true)
+            }
+
+            hasNext = anchors.any { a ->
+                val text = a.text().trim()
+                val num = text.toIntOrNull()
+                if (num != null) {
+                    num > currentPage
+                } else {
+                    text.contains(">") || a.attr("rel") == "next"
+                }
+            }
+        }
+
+        return MangasPage(mangas, hasNext)
+    }
 
     override fun mangaDetailsParse(document: org.jsoup.nodes.Document): SManga = SManga.create().apply {
         document.selectFirst("div.books, div.book")?.let { info ->
