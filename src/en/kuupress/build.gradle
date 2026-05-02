@@ -1,0 +1,9 @@
+ext {
+    extName = 'KuuPress'
+    extClass = '.KuuPress'
+    extVersionCode = 2
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"
