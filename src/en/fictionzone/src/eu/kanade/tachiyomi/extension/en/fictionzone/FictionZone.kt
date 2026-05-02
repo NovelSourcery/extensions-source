@@ -387,7 +387,45 @@ class FictionZone :
 
         val data = jsonObject["data"]?.jsonObject!!
         val content = data["content"]?.jsonPrimitive?.contentOrNull ?: ""
-        return content
+        return normalizeChapterContent(content)
+    }
+
+    private fun normalizeChapterContent(content: String): String {
+        if (content.isBlank()) return ""
+
+        val normalized = content.replace("\r\n", "\n").replace("\r", "\n")
+        if (looksLikeHtml(normalized)) {
+            return normalized
+        }
+
+        val paragraphs = normalized
+            .split(Regex("\\n\\s*\\n+"))
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+
+        if (paragraphs.isEmpty()) return ""
+
+        return paragraphs.joinToString("\n") { paragraph ->
+            val escaped = escapeHtml(paragraph)
+                .replace("\n", "<br>")
+            "<p>$escaped</p>"
+        }
+    }
+
+    private fun looksLikeHtml(text: String): Boolean = Regex("<\\s*(p|br|div|span|h[1-6]|ul|ol|li|blockquote|img|a)\\b", RegexOption.IGNORE_CASE)
+        .containsMatchIn(text)
+
+    private fun escapeHtml(text: String): String = buildString(text.length + 16) {
+        text.forEach { ch ->
+            when (ch) {
+                '&' -> append("&amp;")
+                '<' -> append("&lt;")
+                '>' -> append("&gt;")
+                '"' -> append("&quot;")
+                '\'' -> append("&#39;")
+                else -> append(ch)
+            }
+        }
     }
 
     override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
