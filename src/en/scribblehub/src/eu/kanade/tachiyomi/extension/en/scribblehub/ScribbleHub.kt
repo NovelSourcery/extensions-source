@@ -180,7 +180,7 @@ class ScribbleHub :
                 url = chapterUrl.removePrefix(baseUrl)
                 date_upload = parseRelativeDate(dateText)
             }
-        }.reversed()
+        }
     }
 
     private fun extractNovelId(doc: Document, urlPath: String): String {
