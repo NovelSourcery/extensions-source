@@ -2,6 +2,7 @@
 
 import android.app.Application
 import android.content.SharedPreferences
+import android.util.Base64
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.GET
@@ -553,6 +554,9 @@ class NovelDex :
         try {
             val rscResponse = client.newCall(GET("$baseUrl$chapterPath", rscHeaders())).execute()
             val rscBody = rscResponse.body.string()
+            val xorContent = extractFromXorEncryption(rscBody)
+            if (!xorContent.isNullOrBlank()) return xorContent
+
             val rscContent = extractFromRscBody(rscBody)
             if (rscContent != null) return rscContent
         } catch (_: Exception) {}
@@ -579,6 +583,9 @@ class NovelDex :
             }
 
             // Try RSC extraction on HTML body (content is inside self.__next_f.push scripts)
+            val xorContent = extractFromXorEncryption(htmlBody)
+            if (!xorContent.isNullOrBlank()) return xorContent
+
             val rscContent = extractFromRscBody(htmlBody)
             if (rscContent != null) return rscContent
         } catch (_: Exception) {}
@@ -631,6 +638,7 @@ class NovelDex :
 
             if (content.isBlank() || content.length < 50) continue
             if (content.trimStart().startsWith("<script") || content.trimStart().startsWith("{")) continue
+            if (looksLikeEncryptedPayload(content)) continue
 
             var score = content.length / 10
             score += Regex("<p[ >]").findAll(content).count() * 50
@@ -645,6 +653,102 @@ class NovelDex :
         }
 
         return bestContent
+    }
+
+    private fun looksLikeEncryptedPayload(content: String): Boolean {
+        val c = content.trim()
+        if (c.contains("\"xorEncryption\"")) return true
+        if (c.contains("\"encryptedBase64\"")) return true
+        if (Regex("""\$[0-9a-fA-F]{1,4}""").containsMatchIn(c) && c.contains("clientNonce")) return true
+        return false
+    }
+
+    /**
+     * NovelDex may ship chapter text via xorEncryption payload instead of plain RSC T-tags.
+     * This reproduces the page-side ev() XOR decryption algorithm.
+     */
+    private fun extractFromXorEncryption(body: String): String? {
+        val xorObject = Regex(
+            """"xorEncryption"\s*:\s*\{(.*?)\}""",
+            RegexOption.DOT_MATCHES_ALL,
+        ).find(body)?.groupValues?.getOrNull(1) ?: return null
+
+        val encryptedField = Regex(""""encryptedBase64"\s*:\s*"([^"]+)"""").find(xorObject)
+            ?.groupValues?.getOrNull(1)
+            ?: return null
+        val partialKeyHint = Regex(""""partialKeyHint"\s*:\s*"([^"]+)"""").find(xorObject)
+            ?.groupValues?.getOrNull(1)
+            ?: return null
+        val timestamp = Regex(""""timestamp"\s*:\s*(\d+)""").find(xorObject)
+            ?.groupValues?.getOrNull(1)
+            ?.toLongOrNull()
+            ?: return null
+        val clientNonce = Regex(""""clientNonce"\s*:\s*"([^"]+)"""").find(xorObject)
+            ?.groupValues?.getOrNull(1)
+            ?: return null
+
+        val encryptedBase64 = resolveEncryptedBase64(body, encryptedField) ?: return null
+        val decrypted = decryptXorContent(encryptedBase64, partialKeyHint, timestamp, clientNonce)
+        if (decrypted.isBlank() || decrypted.length < 20) return null
+        if (looksLikeEncryptedPayload(decrypted)) return null
+
+        return stripWatermark(decrypted)
+    }
+
+    private fun resolveEncryptedBase64(body: String, encryptedField: String): String? {
+        // RSC pointer form: "$5e" points to a string slot like "5e:\"...\""
+        if (encryptedField.startsWith("$") && encryptedField.length > 1) {
+            val key = encryptedField.removePrefix("$")
+
+            // Next.js RSC wire format commonly stores pointer values in T-tags, e.g. d:T3e4c,<payload>
+            // If encryptedBase64 is "$d", resolve the d:T... segment first.
+            val tTagValue = resolveTTag(body, key)
+            if (!tTagValue.isNullOrBlank()) {
+                return tTagValue
+            }
+
+            val patterns = listOf(
+                Regex("""\n$key:\"((?:[^\"\\]|\\.)*)\"""),
+                Regex(""""$key"\s*:\s*"((?:[^\"\\]|\\.)*)"""),
+                Regex("""$key:\"((?:[^\"\\]|\\.)*)\"""),
+            )
+            for (pattern in patterns) {
+                val value = pattern.find(body)?.groupValues?.getOrNull(1)?.unescape()
+                if (!value.isNullOrBlank()) return value
+            }
+            return null
+        }
+        return encryptedField.unescape()
+    }
+
+    private fun decryptXorContent(
+        encryptedBase64: String,
+        partialKeyHint: String,
+        timestamp: Long,
+        clientNonce: String,
+    ): String {
+        val key = deriveXorKey(partialKeyHint, timestamp, clientNonce)
+        val cipherBytes = Base64.decode(encryptedBase64, Base64.DEFAULT)
+        val plainBytes = ByteArray(cipherBytes.size)
+        for (i in cipherBytes.indices) {
+            plainBytes[i] = (cipherBytes[i].toInt() xor key[i % key.size].toInt()).toByte()
+        }
+        return plainBytes.toString(Charsets.UTF_8)
+    }
+
+    private fun deriveXorKey(partialKeyHint: String, timestamp: Long, clientNonce: String): ByteArray {
+        val combined = "$partialKeyHint|$timestamp|$clientNonce"
+        var hash = 0x811c9dc5u
+        for (ch in combined) {
+            hash = (hash xor ch.code.toUInt()) * 0x1000193u
+        }
+
+        val key = ByteArray(32)
+        for (i in 0 until 32) {
+            hash = (hash xor (i.toUInt() * 0x9e3779b9u)) * 0x1000193u
+            key[i] = (hash and 0xffu).toByte()
+        }
+        return key
     }
 
     /**
