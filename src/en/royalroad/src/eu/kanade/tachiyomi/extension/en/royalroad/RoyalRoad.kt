@@ -16,6 +16,7 @@ import eu.kanade.tachiyomi.source.online.HttpSource
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -170,6 +171,12 @@ class RoyalRoad :
         return element.html()
     }
 
+    private fun absoluteUrl(path: String): String = when {
+        path.startsWith("http://") || path.startsWith("https://") -> path
+        path.startsWith("//") -> "https:$path"
+        else -> "$baseUrl/${path.trimStart('/')}"
+    }
+
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         // Add preferences if needed
     }
@@ -292,9 +299,12 @@ class RoyalRoad :
             }
         }
 
-        params["page"] = page.toString()
-        val queryString = params.entries.joinToString("&") { "${it.key}=${it.value}" }
-        return GET("$baseUrl/fictions/search?$queryString", headers)
+        val urlBuilder = "$baseUrl/fictions/search".toHttpUrl().newBuilder()
+        params.forEach { (key, value) ->
+            urlBuilder.addQueryParameter(key, value)
+        }
+
+        return GET(urlBuilder.build().toString(), headers)
     }
 
     private fun MutableMap<String, String>.appendList(key: String, value: String) {
@@ -321,14 +331,11 @@ class RoyalRoad :
             val imgElement = element.selectFirst("img")
 
             SManga.create().apply {
-                title = imgElement?.attr("alt") ?: linkElement.attr("title") ?: "Unknown Title"
+                title = imgElement?.attr("alt")?.takeIf { it.isNotBlank() }
+                    ?: linkElement.attr("title").takeIf { it.isNotBlank() }
+                    ?: "Unknown Title"
                 thumbnail_url = imgElement?.attr("src")?.let { src ->
-                    when {
-                        src.startsWith("http") -> src
-                        src.startsWith("//") -> "https:$src"
-                        src.startsWith("/") -> "$baseUrl$src"
-                        else -> "$baseUrl/$src"
-                    }
+                    absoluteUrl(src)
                 } ?: ""
                 url = if (fictionPath.startsWith("/")) fictionPath else "/$fictionPath"
             }
@@ -344,6 +351,8 @@ class RoyalRoad :
         val cleanUrl = url.replace(Regex("""royalroad\.comfiction/"""), "royalroad.com/fiction/")
         // Extract the fiction/slug part from various URL formats
         val patterns = listOf(
+            Regex("""(?:https?://)?(?:www\.)?royalroad\.com/fiction/(\d+)/([^/?#]+)"""),
+            Regex("""(?:https?://)?(?:www\.)?royalroad\.com/fiction/([^/?#]+)"""),
             Regex("""/fiction/(\d+)/([^/?#]+)"""), // /fiction/12345/slug
             Regex("""/fiction/([^/?#]+)"""), // /fiction/slug
             Regex("""^fiction/(\d+)/([^/?#]+)"""), // fiction/12345/slug
@@ -351,7 +360,7 @@ class RoyalRoad :
         )
 
         for (pattern in patterns) {
-            pattern.find(url)?.let { match ->
+            pattern.find(cleanUrl)?.let { match ->
                 return if (match.groupValues.size >= 3) {
                     "fiction/${match.groupValues[1]}/${match.groupValues[2]}"
                 } else {
@@ -364,7 +373,7 @@ class RoyalRoad :
     }
 
     // Manga details
-    override fun mangaDetailsRequest(manga: SManga): Request = GET("$baseUrl/${manga.url.trimStart('/')}", headers)
+    override fun mangaDetailsRequest(manga: SManga): Request = GET(absoluteUrl(manga.url), headers)
 
     override fun mangaDetailsParse(response: Response): SManga {
         val doc = Jsoup.parse(response.body.string())
@@ -390,11 +399,7 @@ class RoyalRoad :
         } ?: SManga.UNKNOWN
 
         val cover = doc.selectFirst("img.thumbnail, div.cover-art-container img")?.attr("src")?.let { src ->
-            when {
-                src.startsWith("http") -> src
-                src.startsWith("/") -> "$baseUrl$src"
-                else -> "$baseUrl/$src"
-            }
+            absoluteUrl(src)
         } ?: ""
 
         val genres = doc.select("span.tags a, a.fiction-tag").joinToString(", ") { it.text() }
@@ -412,7 +417,7 @@ class RoyalRoad :
     // Chapter list
     override fun chapterListRequest(manga: SManga): Request {
         // We already have the data from manga details
-        return GET("$baseUrl/${manga.url.trimStart('/')}", headers)
+        return GET(absoluteUrl(manga.url), headers)
     }
 
     override fun chapterListParse(response: Response): List<SChapter> {
@@ -438,7 +443,9 @@ class RoyalRoad :
 
         val volumeMap = volumes.associateBy { it.id }
 
-        return chapters.mapNotNull { chapter ->
+        val orderedChapters = chapters.asReversed()
+
+        return orderedChapters.mapNotNull { chapter ->
             val volume = volumeMap[chapter.volumeId]
             // Use the full URL path - RoyalRoad needs the complete URL format
             // URL format: fiction/{id}/{slug}/chapter/{chapterId}/{chapterSlug}
@@ -465,11 +472,11 @@ class RoyalRoad :
     // Page list - return single page with the chapter URL
     override fun pageListRequest(chapter: SChapter): Request {
         // chapter.url already contains 'fiction/' prefix, e.g., 'fiction/137985/chapter/12345678'
-        return GET(baseUrl + chapter.url, headers)
+        return GET(absoluteUrl(chapter.url), headers)
     }
 
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString(), null))
-    override fun getMangaUrl(manga: SManga): String = baseUrl + manga.url
+    override fun getMangaUrl(manga: SManga): String = absoluteUrl(manga.url)
     override fun imageUrlParse(response: Response) = ""
 
     // Filters
