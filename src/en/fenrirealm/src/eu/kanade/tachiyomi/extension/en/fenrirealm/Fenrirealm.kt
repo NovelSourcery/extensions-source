@@ -110,7 +110,22 @@ class Fenrirealm :
 
     override fun mangaDetailsParse(response: Response): SManga {
         val result = json.decodeFromString<SearchResponse>(response.body.string())
-        return result.data.firstOrNull()?.toSManga(baseUrl) ?: SManga.create()
+        result.data.firstOrNull()?.let { return it.toSManga(baseUrl) }
+
+        val searchedSlug = response.request.url.queryParameter("search")
+            ?.trim()
+            ?.removePrefix("/")
+            ?.removeSuffix("/")
+            .orEmpty()
+
+        return SManga.create().apply {
+            url = if (searchedSlug.isNotBlank()) "/$searchedSlug" else "/"
+            title = searchedSlug
+                .substringAfterLast('/')
+                .replace('-', ' ')
+                .trim()
+                .ifBlank { "Unknown Title" }
+        }
     }
 
     override fun chapterListRequest(manga: SManga): Request {
