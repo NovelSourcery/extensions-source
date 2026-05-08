@@ -1,7 +1,7 @@
-ext {
+    ext {
     extName = 'Lnori'
     extClass = '.Lnori'
-    extVersionCode = 1
+    extVersionCode = 3
     isNovel = true
 }
 
