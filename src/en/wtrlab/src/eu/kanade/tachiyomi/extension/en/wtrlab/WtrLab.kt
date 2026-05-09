@@ -351,18 +351,64 @@ class WtrLab :
 
     private fun replaceGlossarySymbols(content: String, terms: JsonArray): String {
         var result = content
-        terms.forEachIndexed { index, term ->
-            val termArray = term.jsonArray
-            val englishTranslations = termArray.getOrNull(0)
-            val english = when (englishTranslations) {
-                is JsonArray -> englishTranslations.firstOrNull()?.jsonPrimitive?.contentOrNull
-                is JsonElement -> englishTranslations.jsonPrimitive.contentOrNull
-                else -> null
-            } ?: return@forEachIndexed
 
-            val symbol = "※$index⛬"
-            result = result.replace(symbol, english)
+        terms.forEachIndexed { index, term ->
+            try {
+                // Safely extract the term array
+                val termArray = when (term) {
+                    is JsonElement -> {
+                        try {
+                            term.jsonArray
+                        } catch (e: Exception) {
+                            Log.w("WtrLab", "Term at index $index is not a JsonArray")
+                            return@forEachIndexed
+                        }
+                    }
+                    else -> return@forEachIndexed
+                }
+
+                // Extract English translation (first element)
+                val englishTranslations = termArray.getOrNull(0)
+                val english = when (englishTranslations) {
+                    is JsonArray -> englishTranslations.firstOrNull()?.jsonPrimitive?.contentOrNull?.trim()
+                    is JsonElement -> englishTranslations.jsonPrimitive.contentOrNull?.trim()
+                    else -> null
+                }
+
+                if (english.isNullOrBlank()) {
+                    return@forEachIndexed
+                }
+
+                // Create pattern to match symbols with BOTH endings: ⛬ and 〓
+                // The regex pattern captures both characters in a character class
+                val symbolPatterns = listOf(
+                    // Direct Unicode variants (⛬ = U+26EC, 〓 = U+3013)
+                    "※$index[⛬〓]", // No whitespace
+                    "※\\s*$index\\s*[⛬〓]", // With optional whitespace
+
+                    // HTML entity encoding for ⛬ (&#x26ec; or &#x26EC;)
+                    "&#x203b;$index&#x26ec;",
+                    "&#x203b;\\s*$index\\s*&#x26ec;",
+                    "&#x203b;$index&#x26EC;",
+                    "&#x203b;\\s*$index\\s*&#x26EC;",
+
+                    // HTML entity encoding for 〓 (&#x3013; or &#x3013;)
+                    "&#x203b;$index&#x3013;",
+                    "&#x203b;\\s*$index\\s*&#x3013;",
+                )
+
+                // Replace all pattern variations
+                for (pattern in symbolPatterns) {
+                    result = result.replace(
+                        Regex(pattern, RegexOption.IGNORE_CASE),
+                        Regex.escapeReplacement(english),
+                    )
+                }
+            } catch (e: Exception) {
+                Log.w("WtrLab", "Error processing glossary term at index $index: ${e.message}")
+            }
         }
+
         return result
     }
 
@@ -753,6 +799,7 @@ class WtrLab :
             summary = "Required for Raw/Web modes. Enter the AES encryption key."
             dialogTitle = "Decryption Key"
             dialogMessage = "Enter the 32-character decryption key for encrypted content."
+            setDefaultValue("IJAFUUxjM25hyzL2AZrn0wl7cESED6Ru")
         }.also(screen::addPreference)
 
         androidx.preference.EditTextPreference(screen.context).apply {
@@ -761,6 +808,7 @@ class WtrLab :
             summary = "Optional. Google Translate API key for future use."
             dialogTitle = "Google API Key"
             dialogMessage = "Enter your Google Translate API key."
+            setDefaultValue("AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520")
         }.also(screen::addPreference)
     }
 
