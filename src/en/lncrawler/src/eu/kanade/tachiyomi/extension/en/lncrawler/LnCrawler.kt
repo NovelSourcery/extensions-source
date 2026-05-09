@@ -171,7 +171,7 @@ class LnCrawler :
         return SManga.create().apply {
             url = "/novels/${novel.slug}/${source?.sourceSlug ?: ""}"
             title = novel.title
-            thumbnail_url = source?.coverUrl ?: novel.preferedSource?.coverUrl
+            thumbnail_url = resolveCover(source?.coverUrl ?: novel.preferedSource?.coverUrl)
             author = source?.authors?.joinToString(", ") ?: novel.preferedSource?.authors?.joinToString(", ")
 
             description = buildString {
@@ -216,9 +216,31 @@ class LnCrawler :
         return if (body.contains("\"chapters\":")) {
             val chapterResponse = json.decodeFromString<ChapterListResponse>(body)
 
-            chapterResponse.chapters.map { chapter ->
+            val allChapters = mutableListOf<ChapterInfo>()
+            allChapters.addAll(chapterResponse.chapters)
+
+            // If there are more pages, fetch them and accumulate chapters
+            if (chapterResponse.totalPages > chapterResponse.currentPage) {
+                for (p in (chapterResponse.currentPage + 1)..chapterResponse.totalPages) {
+                    try {
+                        val moreReq = GET("$apiUrl/novels/${chapterResponse.novelSlug}/${chapterResponse.sourceSlug}/chapters/?page=$p&page_size=1000", headers)
+                        val moreResp = client.newCall(moreReq).execute()
+                        if (moreResp.isSuccessful) {
+                            val moreBody = moreResp.body.string()
+                            val moreChapterResponse = json.decodeFromString<ChapterListResponse>(moreBody)
+                            allChapters.addAll(moreChapterResponse.chapters)
+                        } else {
+                            break
+                        }
+                    } catch (_: Exception) {
+                        break
+                    }
+                }
+            }
+
+            allChapters.map { chapter ->
                 SChapter.create().apply {
-                    url = "/novels/${chapterResponse.novelSlug}/${chapterResponse.sourceSlug}/chapter/${chapter.chapterId}"
+                    url = toWebPath("/novels/${chapterResponse.novelSlug}/${chapterResponse.sourceSlug}/chapter/${chapter.chapterId}")
                     name = buildString {
                         if (chapter.volumeTitle != null) {
                             append("[${chapter.volumeTitle}] ")
@@ -241,6 +263,12 @@ class LnCrawler :
             emptyList()
         }
     }
+
+    // Return web URL for the manga (used by app webview)
+    override fun getMangaUrl(manga: SManga): String = baseUrl + (if (manga.url.startsWith("/")) manga.url else "/${manga.url}")
+
+    // Return web URL for the chapter (used by app webview)
+    override fun getChapterUrl(chapter: SChapter): String = baseUrl + (if (chapter.url.startsWith("/")) chapter.url else "/${chapter.url}")
 
     // ======================== Pages ========================
 
@@ -400,12 +428,61 @@ class LnCrawler :
     // ======================== Helpers ========================
 
     private fun novelToSManga(novel: NovelSearchResult): SManga = SManga.create().apply {
-        url = "/novels/${novel.preferedSource?.novelSlug ?: novel.slug}/${novel.preferedSource?.sourceSlug ?: ""}"
+        url = toWebPath("/novels/${novel.preferedSource?.novelSlug ?: novel.slug}/${novel.preferedSource?.sourceSlug ?: ""}")
         title = novel.title
-        thumbnail_url = novel.preferedSource?.coverMinUrl ?: novel.preferedSource?.coverUrl
+        thumbnail_url = resolveCover(novel.preferedSource?.coverMinUrl ?: novel.preferedSource?.coverUrl)
         author = novel.preferedSource?.authors?.firstOrNull()
         description = novel.preferedSource?.synopsis?.let { Jsoup.parse(it).text() }
         genre = novel.preferedSource?.tags?.take(5)?.joinToString(", ") ?: ""
+    }
+
+    private fun toWebPath(input: String?): String {
+        if (input.isNullOrBlank()) return ""
+        val s = input.trim()
+
+        if (s.startsWith("/")) return s
+
+        if (s.startsWith("http://") || s.startsWith("https://")) {
+            return try {
+                val u = java.net.URL(s)
+                u.path
+            } catch (e: Exception) {
+                val idx = s.indexOf("/novels/")
+                if (idx >= 0) s.substring(idx) else "/${s.trimStart('/') }"
+            }
+        }
+
+        val idx = s.indexOf("/novels/")
+        if (idx >= 0) return s.substring(idx)
+
+        // If it's an api url without scheme, try to locate novels path
+        if (s.contains("api.lncrawler.monster")) {
+            val idx2 = s.indexOf("/novels/")
+            if (idx2 >= 0) return s.substring(idx2)
+        }
+
+        return "/${s.trimStart('/') }"
+    }
+    private fun resolveCover(raw: String?): String? {
+        if (raw.isNullOrBlank()) return "$baseUrl/assets/default-cover-Dooaozbf.jpg"
+
+        if (raw.contains("<img", ignoreCase = true)) {
+            val doc = Jsoup.parse(raw)
+            val img = doc.selectFirst("img")
+            val src = img?.attr("src") ?: return "$baseUrl/assets/default-cover-Dooaozbf.jpg"
+            return resolveSrcToUrl(src)
+        }
+
+        return resolveSrcToUrl(raw)
+    }
+
+    private fun resolveSrcToUrl(src: String): String {
+        val s = src.trim()
+        return when {
+            s.startsWith("http") -> s
+            s.startsWith("/") -> "$baseUrl$s"
+            else -> "$baseUrl/$s"
+        }
     }
 
     private fun getPreferredSource(novel: NovelDetail): SourceInfo? {
