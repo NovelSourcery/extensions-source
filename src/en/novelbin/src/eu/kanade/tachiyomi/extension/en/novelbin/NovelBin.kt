@@ -78,37 +78,20 @@ class NovelBin :
         return MangasPage(mangas, hasNext)
     }
 
-    override fun mangaDetailsParse(document: org.jsoup.nodes.Document): SManga = SManga.create().apply {
-        document.selectFirst("div.books, div.book")?.let { info ->
-            thumbnail_url = info.selectFirst("img")?.let {
-                it.attr("data-src").ifEmpty { it.attr("src") }
-            }
-            title = document.selectFirst("h3.title")?.text()?.trim() ?: ""
+    override fun mangaDetailsParse(document: org.jsoup.nodes.Document): SManga {
+        val manga = super.mangaDetailsParse(document)
+
+        // NovelBin specific customization if needed (fallback to base class parsing)
+        if (manga.title.isNullOrBlank()) {
+            manga.title = document.selectFirst("h3.title")?.text()?.trim() ?: ""
         }
-
-        document.select("div.info div").forEach { element ->
-            val text = element.text()
-            when {
-                text.contains("Author", ignoreCase = true) -> {
-                    author = element.select("a").joinToString { it.text().trim() }
-                        .ifEmpty { text.substringAfter(":").trim() }
-                }
-
-                text.contains("Genre", ignoreCase = true) -> {
-                    genre = element.select("a").joinToString { it.text().trim() }
-                }
-
-                text.contains("Status", ignoreCase = true) -> {
-                    status = when {
-                        text.contains("Ongoing", ignoreCase = true) -> SManga.ONGOING
-                        text.contains("Completed", ignoreCase = true) -> SManga.COMPLETED
-                        else -> SManga.UNKNOWN
-                    }
-                }
+        if (manga.thumbnail_url.isNullOrBlank()) {
+            document.selectFirst("div.books, div.book")?.selectFirst("img")?.let { img ->
+                manga.thumbnail_url = img.attr("data-src").ifEmpty { img.attr("src") }
             }
         }
 
-        description = document.selectFirst("div.desc-text")?.text()?.trim()
+        return manga
     }
 
     override fun chapterListParse(response: Response): List<SChapter> {

@@ -54,12 +54,28 @@ class FreeWebNovel :
         val titleEl = element.selectFirst("h3.tit > a") ?: element.selectFirst(".txt h3.tit a")
         if (titleEl != null) {
             val href = titleEl.attr("abs:href").ifEmpty { titleEl.attr("href") }
-            if (href.isNotBlank()) manga.setUrlWithoutDomain(href)
+            if (href.isNotBlank()) {
+                manga.setUrlWithoutDomain(href)
+            } else {
+                // Fallback: try to find href in parent or sibling elements
+                element.selectFirst("a[href]")?.let {
+                    manga.setUrlWithoutDomain(it.attr("abs:href").ifEmpty { it.attr("href") })
+                }
+            }
             val rawTitle = titleEl.attr("title").ifBlank { titleEl.text() }
             manga.title = rawTitle
                 .substringBefore(" - Free Web Novel")
                 .substringBefore(" - FreeWebNovel")
                 .trim()
+        } else {
+            // Fallback: find first link with title
+            element.selectFirst("a[href]")?.let { link ->
+                manga.setUrlWithoutDomain(link.attr("abs:href").ifEmpty { link.attr("href") })
+                manga.title = link.attr("title").ifEmpty { link.text().trim() }
+                    .substringBefore(" - Free Web Novel")
+                    .substringBefore(" - FreeWebNovel")
+                    .trim()
+            }
         }
 
         // Thumbnail

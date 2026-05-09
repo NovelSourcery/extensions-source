@@ -15,6 +15,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.ParsedHttpSource
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.utils.setAltTitles
 import okhttp3.FormBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
@@ -333,6 +334,9 @@ abstract class ReadNovelFull(
         }
 
         // Parse info section
+        var rating = ""
+        var altNames = listOf<String>()
+        val genresList = mutableListOf<String>()
         document.select("div.info div, ul.info-meta li, div.m-imgtxt div.item").forEach { element ->
             val text = element.text()
             when {
@@ -341,13 +345,50 @@ abstract class ReadNovelFull(
                         .ifEmpty { text.substringAfter(":").trim() }
                 }
 
-                text.contains("Genre", ignoreCase = true) -> {
-                    genre = element.select("a").joinToString { it.text().trim() }
-                        .ifEmpty { text.substringAfter(":").trim() }
+                text.contains("Genre", ignoreCase = true) || element.select("span.glyphicon-th-list").isNotEmpty() -> {
+                    val gs = element.select("a").map { it.text().trim() }.filter { it.isNotBlank() }
+                    if (gs.isNotEmpty()) {
+                        genresList.addAll(gs)
+                    } else {
+                        val raw = text.substringAfter(":").trim()
+                        if (raw.isNotBlank()) {
+                            genresList.addAll(raw.split(",").map { it.trim() }.filter { it.isNotBlank() })
+                        }
+                    }
+                    // Also check for genres in child divs with class 'right' or 's2'/'s3' (LibRead/FreeWebNovel)
+                    element.select("div.right a, span.s2 a, span.s3 a").forEach { link ->
+                        val linkText = link.text().trim()
+                        if (linkText.isNotBlank() && !genresList.contains(linkText)) {
+                            genresList.add(linkText)
+                        }
+                    }
                 }
 
                 text.contains("Status", ignoreCase = true) -> {
                     status = parseStatus(text.substringAfter(":").trim())
+                }
+
+                text.contains("Alternative names", ignoreCase = true) -> {
+                    altNames = text.substringAfter(":").trim()
+                        .split(",")
+                        .map { it.trim() }
+                        .filter { it.isNotBlank() }
+                }
+
+                text.contains("Rating", ignoreCase = true) -> {
+                    // Extract rating value (e.g., "8.8 / 10 from 10587 ratings")
+                    val ratingValue = element.selectFirst("span[itemprop=ratingValue]")
+                        ?.text()
+                        ?.trim()
+                    val reviewCount = element.selectFirst("span[itemprop=reviewCount]")
+                        ?.text()
+                        ?.trim()
+                    if (!ratingValue.isNullOrBlank()) {
+                        rating = "Rating: $ratingValue/10"
+                        if (!reviewCount.isNullOrBlank()) {
+                            rating += " ($reviewCount ratings)"
+                        }
+                    }
                 }
             }
         }
@@ -358,15 +399,152 @@ abstract class ReadNovelFull(
                 document.selectFirst(".status, span.status, li.status, p.status")?.text(),
                 document.selectFirst("meta[property=\"og:novel:status\"]")?.attr("content"),
             )
-            statusCandidates.firstOrNull { !it.isNullOrBlank() }?.let { status = parseStatus(it!!.trim()) }
+            statusCandidates.firstOrNull { !it.isNullOrBlank() }?.let { status = parseStatus(it.trim()) }
         }
 
-        // Try multiple selectors for description
-        description = document.selectFirst(
-            "div.desc-text, div.inner, div.desc, div.m-desc div.txt div.inner, " +
-                "div.summary div.content, div#editdescription, div.desc-text-full, " +
-                "div.novel-detail-body div.summary, div.desc_panel",
-        )?.text()?.trim()
+        // Fallback: Extract rating from multiple possible rating sections (AllNovel, LibRead, NovPub, NovelBin, etc.)
+        if (rating.isBlank()) {
+            // Try microdata aggregateRating first
+            var found: String? = document.selectFirst("div.small[itemprop=aggregateRating] span[itemprop=ratingValue], span[itemprop=ratingValue]")
+                ?.text()
+            var foundCount: String? = document.selectFirst("div.small[itemprop=aggregateRating] span[itemprop=reviewCount], span[itemprop=reviewCount]")
+                ?.text()
+
+            // Try common structures: libread/novpub/freewebnovel have p.vote like "4.6 / 5 ( 260 votes )"
+            if (found.isNullOrBlank()) {
+                val voteText = document.selectFirst("div.score p.vote, div.score .vote, p.vote, div.m-desc .vote, div.score, div.small em, div.small, div.rate-info .small")
+                    ?.text()
+                    ?.trim()
+                if (!voteText.isNullOrBlank()) {
+                    // try to parse patterns like "4.6 / 5 ( 260 votes )" or "Rating: X / Y from Z ratings"
+                    val regex = Regex("([0-9]+(?:\\.[0-9]+)?)\\s*/\\s*([0-9]+(?:\\.[0-9]+)?)(?:\\s*\\(\\s*([0-9,]+)\\s*(?:votes?|ratings)\\s*\\))?")
+                    val m = regex.find(voteText)
+                    if (m != null) {
+                        found = m.groupValues[1]
+                        val scale = m.groupValues[2]
+                        val cnt = m.groupValues.getOrNull(3)?.replace(",", "")
+                        foundCount = cnt?.takeIf { it.isNotBlank() }
+                        // keep original scale for display
+                        if (!found.isNullOrBlank() && scale.isNotBlank()) {
+                            rating = "Rating: $found/$scale"
+                            if (!foundCount.isNullOrBlank()) rating += " ($foundCount votes)"
+                        }
+                    } else {
+                        // fallback: use entire voteText as rating string
+                        found = voteText
+                    }
+                }
+            }
+
+            // If we found microdata rating and haven't formatted rating yet, build string
+            if (!found.isNullOrBlank() && rating.isBlank()) {
+                rating = if (!foundCount.isNullOrBlank()) {
+                    "Rating: $found/${if (found.length <= 2) "10" else "10"} ($foundCount ratings)"
+                } else {
+                    // If found came from span[itemprop=ratingValue], we may not know scale; prefer to show as /10
+                    "Rating: $found/10"
+                }
+            }
+        }
+
+        var descCandidate = document.selectFirst("div.tab-content div#tab-description div.desc-text, div#tab-description div.novel-description-block div.desc-text")
+            ?.let { element ->
+                // Extract all paragraphs or full text, preserving line breaks
+                val paragraphs = element.select("p").map { it.text().trim() }.filter { it.isNotBlank() }
+                if (paragraphs.isNotEmpty()) {
+                    paragraphs.joinToString("\n\n")
+                } else {
+                    // Preserve br tags as line breaks
+                    element.html()
+                        .replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+                        .let { html -> org.jsoup.Jsoup.parse(html).text().trim() }
+                }
+            }
+            ?.takeIf { it.isNotBlank() }
+            .orEmpty()
+
+        if (descCandidate.isBlank()) {
+            descCandidate = document.selectFirst("div.col-xs-12.col-sm-8.col-md-8.desc div.desc-text")
+                ?.let { element ->
+                    val paragraphs = element.select("p").map { it.text().trim() }.filter { it.isNotBlank() }
+                    if (paragraphs.isNotEmpty()) {
+                        paragraphs.joinToString("\n\n")
+                    } else {
+                        // Preserve br tags as line breaks
+                        element.html()
+                            .replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+                            .let { html -> org.jsoup.Jsoup.parse(html).text().trim() }
+                    }
+                }
+                ?.takeIf { it.isNotBlank() }
+                .orEmpty()
+        }
+
+        if (descCandidate.isBlank()) {
+            descCandidate = document.selectFirst(
+                "div.desc-text#novel-description-content, div#novel-description-content, " +
+                    "div.novel-description-block div.desc-text, [itemprop=description], " +
+                    "div.inner, div.desc, div.m-desc div.txt div.inner, " +
+                    "div.summary div.content, div#editdescription, div.desc-text-full, " +
+                    "div.novel-detail-body div.summary, div.desc_panel",
+            )?.let { element ->
+                val paragraphs = element.select("p").map { it.text().trim() }.filter { it.isNotBlank() }
+                if (paragraphs.isNotEmpty()) {
+                    paragraphs.joinToString("\n\n")
+                } else {
+                    element.text().trim()
+                }
+            }
+                ?.takeIf { it.isNotBlank() }
+                .orEmpty()
+        }
+
+        val normalizedTitle = title.trim().lowercase()
+        val normalizedDesc = descCandidate.trim().lowercase()
+        val descLooksLikeTitle = when {
+            normalizedDesc.isBlank() -> true
+            normalizedDesc == normalizedTitle -> true
+            normalizedDesc.startsWith(normalizedTitle) && descCandidate.length < 120 -> true
+            descCandidate.length < 30 -> true
+            else -> false
+        }
+
+        if (descLooksLikeTitle) {
+            descCandidate = document.selectFirst("meta[property=\"og:description\"], meta[name=\"description\"]")
+                ?.attr("content")
+                ?.trim()
+                .orEmpty()
+        }
+
+        description = descCandidate
+
+        // Prepend rating to description (rating should appear at start)
+        if (rating.isNotBlank()) {
+            description = if (!description.isNullOrBlank()) {
+                rating + "\n\n" + description
+            } else {
+                rating
+            }
+        }
+
+        // Extract tags from tag container and add to genres list
+        val tags = document.select("div.tag-container a, div.tags a, div.novel-tags a, div.tag a")
+            .mapNotNull { it.text().trim().takeIf { t -> t.isNotBlank() } }
+        if (tags.isNotEmpty()) {
+            genresList.addAll(tags)
+        }
+
+        // Build final genre string from collected genres and tags, deduplicated
+        val finalGenres = genresList.map { it.trim() }.filter { it.isNotBlank() }.distinct().joinToString(", ")
+        if (finalGenres.isNotBlank()) {
+            genre = finalGenres
+        }
+
+        // Set alternative titles if they differ from main title
+        val filteredAltNames = altNames.filter { it.lowercase() != normalizedTitle }
+        if (filteredAltNames.isNotEmpty()) {
+            setAltTitles(filteredAltNames)
+        }
     }
 
     private fun parseStatus(status: String): Int = when {

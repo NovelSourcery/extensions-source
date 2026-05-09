@@ -193,41 +193,24 @@ class LibRead :
         }
     }
 
-    override fun mangaDetailsParse(document: Document): SManga = SManga.create().apply {
-        document.selectFirst("div.m-imgtxt, div.m-book1")?.let { info ->
-            thumbnail_url = info.selectFirst("img")?.let { img ->
+    override fun mangaDetailsParse(document: Document): SManga {
+        val manga = super.mangaDetailsParse(document)
+
+        // LibRead specific customization if needed (fallback to base class parsing)
+        if (manga.title.isNullOrBlank()) {
+            manga.title = document.selectFirst("div.m-imgtxt h1.tit, div.m-book1 h1.tit")?.text()?.trim() ?: ""
+        }
+        if (manga.thumbnail_url.isNullOrBlank()) {
+            document.selectFirst("div.m-imgtxt img, div.m-book1 img")?.let { img ->
                 val src = img.attr("data-src").ifEmpty { img.attr("src") }
-                if (src.startsWith("/")) "$baseUrl$src" else src
-            }
-            title = info.selectFirst("h1.tit")?.text()?.trim() ?: ""
-        }
-
-        document.select("div.txt div.item, div.m-imgtxt div.item").forEach { element ->
-            val label = element.selectFirst("span.s1")?.text()?.trim()?.removeSuffix(":")?.trim() ?: ""
-            val value = element.selectFirst("span.s2, span.s3")
-
-            when (label.lowercase()) {
-                "author", "authors" -> {
-                    author = value?.text()?.trim() ?: element.select("a").joinToString(", ") { it.text().trim() }
-                }
-
-                "genre", "genres" -> {
-                    genre = element.select("a").joinToString(", ") { it.text().trim() }
-                        .ifEmpty { value?.text()?.trim() }
-                }
-
-                "status" -> {
-                    val statusText = value?.text()?.trim() ?: ""
-                    status = when {
-                        statusText.contains("Ongoing", ignoreCase = true) -> SManga.ONGOING
-                        statusText.contains("Completed", ignoreCase = true) -> SManga.COMPLETED
-                        else -> SManga.UNKNOWN
-                    }
-                }
+                manga.thumbnail_url = if (src.startsWith("/")) "$baseUrl$src" else src
             }
         }
+        if (manga.description.isNullOrBlank()) {
+            manga.description = document.selectFirst("div.m-desc div.txt div.inner, div.desc-text")?.text()?.trim()
+        }
 
-        description = document.selectFirst("div.m-desc div.txt div.inner, div.desc-text")?.text()?.trim()
+        return manga
     }
 
     override fun chapterListParse(response: Response): List<SChapter> {
