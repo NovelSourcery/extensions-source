@@ -16,6 +16,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.setAltTitles
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -576,28 +577,62 @@ class WtrLab :
         val nextDataText = nextDataElement?.data()
 
         val manga = SManga.create()
+        var altTitles = listOf<String>()
 
         if (nextDataText != null) {
             try {
                 val jsonData = json.parseToJsonElement(nextDataText).jsonObject
-                val serieData = jsonData["props"]?.jsonObject
-                    ?.get("pageProps")?.jsonObject
-                    ?.get("serie")?.jsonObject
+                val pageProps = jsonData["props"]?.jsonObject?.get("pageProps")?.jsonObject
+                val serieData = pageProps?.get("serie")?.jsonObject
                     ?.get("serie_data")?.jsonObject
 
                 if (serieData != null) {
                     val data = serieData["data"]?.jsonObject
                     manga.title = data?.get("title")?.jsonPrimitive?.contentOrNull ?: ""
                     manga.thumbnail_url = transformImageUrl(data?.get("image")?.jsonPrimitive?.contentOrNull)
-                    manga.description = data?.get("description")?.jsonPrimitive?.contentOrNull?.let {
-                        Jsoup.parse(it).text()
+
+                    // Preserve paragraph breaks in description
+                    val description = data?.get("description")?.jsonPrimitive?.contentOrNull?.let {
+                        it.replace("\\n", "\n").trim()
+                    } ?: ""
+
+                    // Extract metadata
+                    val rating = serieData["rating"]?.jsonPrimitive?.contentOrNull ?: "N/A"
+                    val charCount = serieData["char_count"]?.jsonPrimitive?.intOrNull ?: 0
+                    val readers = serieData["in_library"]?.jsonPrimitive?.intOrNull ?: 0
+                    val reviewCount = serieData["total_rate"]?.jsonPrimitive?.intOrNull ?: 0
+
+                    // Build metadata section
+                    val metadata = buildString {
+                        append("Rating: $rating\n")
+                        append("Readers: $readers\n")
+                        append("Reviews: $reviewCount")
+                        if (charCount > 0) {
+                            append("\n")
+                            append("Characters: $charCount")
+                        }
                     }
+
+                    manga.description = if (description.isNotEmpty()) {
+                        "$metadata\n\n$description"
+                    } else {
+                        metadata
+                    }
+
                     manga.author = data?.get("author")?.jsonPrimitive?.contentOrNull
 
                     manga.status = when (serieData["status"]?.jsonPrimitive?.intOrNull) {
                         0 -> SManga.ONGOING
                         1 -> SManga.COMPLETED
                         else -> SManga.UNKNOWN
+                    }
+                }
+
+                // Extract alternative titles
+                val names = pageProps?.get("names")?.jsonArray
+                if (names != null && names.size > 1) {
+                    altTitles = names.mapNotNull { nameElem ->
+                        nameElem.jsonObject["raw_title"]?.jsonPrimitive?.contentOrNull
                     }
                 }
             } catch (e: Exception) {
@@ -670,6 +705,11 @@ class WtrLab :
         if (allTags.isNotEmpty()) {
             val combinedGenres = (genres + allTags).filter { it.isNotEmpty() }.distinctBy { it.lowercase() }
             manga.genre = combinedGenres.joinToString(", ")
+        }
+
+        // Set alternative titles if available
+        if (altTitles.isNotEmpty()) {
+            manga.setAltTitles(altTitles)
         }
 
         return manga
