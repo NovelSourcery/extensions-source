@@ -5,7 +5,6 @@ import eu.kanade.tachiyomi.source.SourceFactory
 
 class WebNovelFactory : SourceFactory {
     override fun createSources(): List<Source> = listOf(
-        WebNovelComics(),
         WebNovelNovels(),
     )
 }
