@@ -161,13 +161,41 @@ class Fenrirealm :
 
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
-        val doc = Jsoup.parse(response.body.string())
-        return doc.selectFirst("div[id^=reader-area]")?.html()
-            ?: doc.selectFirst("#reader-area")?.html()
-            ?: doc.selectFirst("div.content-area")?.html()
-            ?: doc.selectFirst("div.epcontent.entry-content")?.html()
-            ?: doc.selectFirst("div.entry-content")?.html()
-            ?: ""
+        val body = response.body.string()
+
+        // Try DOM extraction first (more reliable for rendered HTML)
+        val chapterContent = extractChapterContentFromDOM(body)
+        if (chapterContent.isNotBlank()) {
+            return chapterContent
+        }
+
+        return ""
+    }
+
+    private fun extractChapterContentFromDOM(body: String): String {
+        val doc = Jsoup.parse(body)
+
+        // Find the main chapter reader area
+        val readerArea = doc.selectFirst("div[role=region][id^=reader-area]")
+            ?: doc.selectFirst("div.reader-area")
+            ?: return ""
+
+        // Get all content up to (but not including) the comments/note section
+        val allElements = readerArea.children()
+        val result = StringBuilder()
+
+        for (element in allElements) {
+            val html = element.outerHtml()
+            // Stop before reaching any "What do you think" or comment sections
+            if (html.contains("What do you think", ignoreCase = true) ||
+                html.contains("comment", ignoreCase = true)
+            ) {
+                break
+            }
+            result.append(html)
+        }
+
+        return result.toString()
     }
 
     override fun getFilterList(): FilterList = FilterList(
