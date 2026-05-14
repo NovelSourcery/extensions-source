@@ -1,6 +1,11 @@
-﻿package eu.kanade.tachiyomi.extension.all.lnori
+package eu.kanade.tachiyomi.extension.en.lnori
 
+import android.app.Application
+import android.content.SharedPreferences
+import androidx.preference.PreferenceScreen
+import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -10,6 +15,8 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -23,11 +30,14 @@ import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
+import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
 
 class Lnori :
     HttpSource(),
-    NovelSource {
+    NovelSource,
+    ConfigurableSource {
 
     override val name = "Lnori"
     override val baseUrl = "https://lnori.com"
@@ -39,9 +49,13 @@ class Lnori :
 
     private val json: Json by injectLazy()
 
+    private val preferences: SharedPreferences by lazy {
+        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+    }
+
     private var cachedNovels: List<NovelData>? = null
     private var cacheTimestamp: Long = 0
-    private val cacheLifetime = 10 * 60 * 1000 // 10 minutes
+    private val cacheLifetime = DAY_MILLIS
 
     @Serializable
     data class NovelData(
@@ -72,17 +86,43 @@ class Lnori :
     private fun loadAllNovels(): List<NovelData> {
         val currentTime = System.currentTimeMillis()
         if (cachedNovels != null && currentTime - cacheTimestamp < cacheLifetime) {
+            updateFilterCache(cachedNovels!!)
             return cachedNovels!!
         }
 
-        val response = client.newCall(GET(baseUrl, headers)).execute()
-        val html = response.body.string()
-        val document = Jsoup.parse(html)
+        loadCachedNovels()?.let { cached ->
+            if (currentTime - loadCachedNovelsTimestamp() < cacheLifetime) {
+                cachedNovels = cached
+                cacheTimestamp = loadCachedNovelsTimestamp()
+                updateFilterCache(cached)
+                return cached
+            }
+        }
 
-        // Strategy 1: __NEXT_DATA__ / embedded JSON script with book array
-        val novels = parseFromJsonScript(html, document)
-            .ifEmpty { parseFromArticleElements(document) }
-            .ifEmpty { parseFromLinksAndTitles(document) }
+        val novels = try {
+            // Lnori exposes the entire series catalog at /library — fetch that page
+            val response = client.newCall(GET("$baseUrl/library", headers)).execute()
+            val html = response.body.string()
+            val document = Jsoup.parse(html)
+
+            // Primary parsing: article.card elements with data-* attributes
+            parseFromLibrary(document)
+                .ifEmpty { parseFromJsonScript(html, document) }
+                .ifEmpty { parseFromArticleElements(document) }
+                .ifEmpty { parseFromLinksAndTitles(document) }
+                .also {
+                    if (it.isNotEmpty()) {
+                        saveCachedNovels(it, currentTime)
+                    }
+                }
+        } catch (_: Exception) {
+            cachedNovels ?: loadCachedNovels().orEmpty()
+        }
+
+        // Update cached filters (tags, authors) from results
+        try {
+            updateFilterCache(novels)
+        } catch (_: Exception) {}
 
         cachedNovels = novels
         cacheTimestamp = currentTime
@@ -248,7 +288,7 @@ class Lnori :
             val href = link?.attr("href") ?: ""
 
             val id = dataId.ifEmpty {
-                // derive from href: /series/3336/slug → "3336-slug" or last path segment
+                // derive from href: /series/3336/slug ? "3336-slug" or last path segment
                 href.trimEnd('/').split("/").filter { it.isNotEmpty() }.takeLast(2)
                     .joinToString("-").ifEmpty { return@mapNotNull null }
             }
@@ -294,7 +334,7 @@ class Lnori :
                     ?: link.attr("title").trim().takeIf { it.length > 2 }
                     ?: link.text().trim().takeIf { it.length > 3 }
                     ?: return@mapNotNull null
-                // Extract ID from href: /series/3336/slug → "3336-slug"
+                // Extract ID from href: /series/3336/slug ? "3336-slug"
                 val pathParts = href.trimEnd('/').split("/").filter { it.isNotEmpty() }
                 val slug = pathParts.takeLast(2).joinToString("-").ifEmpty { href.trimEnd('/').substringAfterLast('/') }
                 val img = link.selectFirst("img")
@@ -366,26 +406,41 @@ class Lnori :
         filters.forEach { filter ->
             when (filter) {
                 is TagFilter -> {
-                    if (filter.state.isNotBlank()) {
-                        val tags = filter.state.split(",")
-                            .map { it.trim().lowercase() }
-                            .filter { it.isNotEmpty() }
+                    // Collect include/exclude lists from tri-state tags
+                    val includes = filter.state.filterIsInstance<TagTriState>().filter { it.state == Filter.TriState.STATE_INCLUDE }.map { it.name.lowercase() }
+                    val excludes = filter.state.filterIsInstance<TagTriState>().filter { it.state == Filter.TriState.STATE_EXCLUDE }.map { it.name.lowercase() }
+
+                    if (includes.isNotEmpty()) {
                         novels = novels.filter { novel ->
                             val novelTags = novel.tags.map { it.lowercase() }
-                            tags.all { tag -> novelTags.any { it.contains(tag) } }
+                            includes.all { inc -> novelTags.any { it.contains(inc) } }
+                        }
+                    }
+
+                    if (excludes.isNotEmpty()) {
+                        novels = novels.filter { novel ->
+                            val novelTags = novel.tags.map { it.lowercase() }
+                            excludes.none { ex -> novelTags.any { it.contains(ex) } }
                         }
                     }
                 }
 
-                is AuthorFilter -> {
-                    if (filter.state.isNotBlank()) {
-                        val authorQuery = filter.state.lowercase()
-                        novels = novels.filter { it.author.lowercase().contains(authorQuery) }
+                is AuthorSelect -> {
+                    val idx = filter.state
+                    if (idx != null && idx > 0) {
+                        val author = filter.values[idx]
+                        novels = novels.filter { it.author.equals(author, ignoreCase = true) }
                     }
                 }
 
-                is MinVolumesFilter -> {
-                    if (filter.state.isNotBlank()) {
+                is Filter.Text -> {
+                    // Keep text inputs as quick alternatives. We look for the author text field specifically.
+                    if (filter.name == "Author (text)" && filter.state.isNotBlank()) {
+                        val authorQuery = filter.state.lowercase()
+                        novels = novels.filter { it.author.lowercase().contains(authorQuery) || it.title.lowercase().contains(authorQuery) }
+                    }
+
+                    if (filter.name == "Minimum Volumes" && filter.state.isNotBlank()) {
                         val minVols = filter.state.toIntOrNull() ?: 0
                         novels = novels.filter { it.volumes >= minVols }
                     }
@@ -394,23 +449,11 @@ class Lnori :
                 is SortFilter -> {
                     novels = when (filter.state) {
                         0 -> novels.sortedByDescending { it.rel }
-
-                        // Popular
                         1 -> novels.sortedByDescending { it.date }
-
-                        // Newest
                         2 -> novels.sortedBy { it.date }
-
-                        // Oldest
                         3 -> novels.sortedBy { it.title }
-
-                        // A-Z
                         4 -> novels.sortedByDescending { it.title }
-
-                        // Z-A
                         5 -> novels.sortedByDescending { it.volumes }
-
-                        // Most volumes
                         else -> novels
                     }
                 }
@@ -438,12 +481,10 @@ class Lnori :
                 "h1.s-title, h1.series-title, h1[class*=title], h1[class*=series], h1",
             )?.text()?.trim() ?: ""
 
-            // Author — may be in a <p class="author"> or adjacent to an "Author:" label
             author = document.selectFirst("p.author, .author, [itemprop='author'], [class*=author]")
                 ?.text()?.trim()
                 ?.removePrefix("Author:")?.trim()
 
-            // Cover image — Astro sites often use <picture> or <img> with srcset
             val imgEl = document.selectFirst(
                 "figure.cover-wrap img, figure img, picture img, " +
                     ".cover img, img[class*=cover], img[alt*=cover i], " +
@@ -455,7 +496,6 @@ class Lnori :
                     ?: img.attr("src").ifEmpty { null }
             }?.let { resolveImageUrl(it) }
 
-            // Description — look for synopsis, description, or longest paragraph
             description = document.selectFirst(
                 "p.description, .series-description, .synopsis, [itemprop='description'], " +
                     ".desc, .summary, [class*=description], [class*=synopsis]",
@@ -487,6 +527,140 @@ class Lnori :
         }
     }
 
+    /** Parse the Lnori /library page which contains all series as <article class="card"> */
+    private fun parseFromLibrary(document: Document): List<NovelData> {
+        val cards = document.select("article.card")
+        return cards.mapNotNull { card ->
+            val id = card.attr("data-id").ifEmpty { return@mapNotNull null }
+
+            val title = card.attr("data-t").ifEmpty {
+                card.selectFirst(".card-title span, .card-title, .card-title a")?.text()?.trim()
+                    ?: return@mapNotNull null
+            }
+
+            val author = card.attr("data-a").ifEmpty {
+                card.selectFirst(".popup-author, .author")?.text()?.trim()?.split("(")?.firstOrNull() ?: ""
+            }
+
+            val year = card.attr("data-d").ifEmpty { card.selectFirst(".card-meta .year-badge")?.text()?.trim() ?: "" }
+
+            val volumes = card.attr("data-v").toIntOrNull()
+                ?: card.selectFirst(".card-meta span")?.text()?.filter { it.isDigit() }?.toIntOrNull()
+                ?: 1
+
+            val tags = card.attr("data-tags").ifEmpty {
+                card.select(".popup-tag").map { it.text().trim() }.joinToString(",")
+            }
+                .split(",")
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+
+            val rel = card.attr("data-rel").toIntOrNull() ?: 0
+
+            val href = card.selectFirst(".stretched-link, .card-cover a, .card-title a")?.attr("href")
+                ?: "/series/$id/"
+
+            val imgEl = card.selectFirst(".card-cover img, img")
+            val cover = imgEl?.let { img ->
+                img.attr("data-src").ifEmpty {
+                    img.attr("srcset").split(",").firstOrNull()?.trim()?.split(" ")?.firstOrNull()
+                        ?: img.attr("src")
+                }
+            } ?: ""
+
+            val desc = card.selectFirst(".popup-description")?.text()?.trim() ?: ""
+
+            NovelData(
+                id = id,
+                title = title,
+                author = author,
+                tags = tags,
+                rel = rel,
+                date = year,
+                volumes = volumes,
+                url = if (href.startsWith("http")) {
+                    href.removePrefix(baseUrl)
+                } else if (href.startsWith("/")) {
+                    href
+                } else {
+                    "/$href"
+                },
+                coverUrl = resolveImageUrl(cover),
+                description = desc,
+            )
+        }
+    }
+
+    private fun updateFilterCache(novels: List<NovelData>) {
+        val allTags = novels.flatMap { it.tags }.map { it.trim() }.filter { it.isNotEmpty() }.map { it.lowercase() }.distinct().sorted()
+        val allAuthors = novels.map { it.author.trim() }.filter { it.isNotEmpty() }.distinct().sorted()
+
+        val cachedTags = loadCachedTags()
+        val cachedAuthors = loadCachedAuthors()
+
+        if (allTags != cachedTags || allAuthors != cachedAuthors) {
+            try {
+                preferences.edit()
+                    .putString(FILTERS_TAGS_KEY, json.encodeToString(allTags))
+                    .putString(FILTERS_AUTHORS_KEY, json.encodeToString(allAuthors))
+                    .putLong(FILTERS_CACHE_TIME_KEY, System.currentTimeMillis())
+                    .apply()
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun loadCachedNovels(): List<NovelData>? {
+        val raw = preferences.getString(LIBRARY_CACHE_KEY, null) ?: return null
+        return try {
+            json.decodeFromString(raw)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun loadCachedNovelsTimestamp(): Long = preferences.getLong(LIBRARY_CACHE_TIME_KEY, 0L)
+
+    private fun saveCachedNovels(novels: List<NovelData>, timestamp: Long) {
+        try {
+            preferences.edit()
+                .putString(LIBRARY_CACHE_KEY, json.encodeToString(novels))
+                .putLong(LIBRARY_CACHE_TIME_KEY, timestamp)
+                .apply()
+        } catch (_: Exception) {}
+    }
+
+    private fun clearLibraryCache() {
+        try {
+            preferences.edit()
+                .remove(LIBRARY_CACHE_KEY)
+                .remove(LIBRARY_CACHE_TIME_KEY)
+                .remove(FILTERS_TAGS_KEY)
+                .remove(FILTERS_AUTHORS_KEY)
+                .remove(FILTERS_CACHE_TIME_KEY)
+                .apply()
+        } catch (_: Exception) {}
+        cachedNovels = null
+        cacheTimestamp = 0
+    }
+
+    private fun loadCachedTags(): List<String> {
+        val raw = preferences.getString(FILTERS_TAGS_KEY, null) ?: return emptyList()
+        return try {
+            json.decodeFromString(raw)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun loadCachedAuthors(): List<String> {
+        val raw = preferences.getString(FILTERS_AUTHORS_KEY, null) ?: return emptyList()
+        return try {
+            json.decodeFromString(raw)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
     // ======================== Chapters (Volumes) ========================
 
     override fun chapterListRequest(manga: SManga): Request {
@@ -505,7 +679,7 @@ class Lnori :
         val novelSlug = pathSegments.lastOrNull() ?: novelId
         val basePath = response.request.url.encodedPath.trimEnd('/')
 
-        // STRATEGY 1: Volume/chapter cards — broad selector
+        // STRATEGY 1: Volume/chapter cards � broad selector
         val cards = document.select(
             "div.vol-grid article, " +
                 ".volumes-list article, " +
@@ -626,93 +800,76 @@ class Lnori :
         val html = response.body.string()
         val document = Jsoup.parse(html)
 
-        val content = StringBuilder()
+        // Extract the main content container and return its HTML directly
+        val mainContent = document.selectFirst("main#main-content, main, article.content-body, .reader-content, .content")
 
-        // Try structured JSON-LD data first
-        val jsonLdScript = document.selectFirst("script#app-data[type='application/ld+json']")
-        if (jsonLdScript != null) {
-            try {
-                val jsonText = jsonLdScript.html()
-                val chapterMatches = Regex(""""name"\s*:\s*"([^"]+)"\s*,\s*"url"\s*:\s*"([^"]+)"""")
-                    .findAll(jsonText)
-
-                for (match in chapterMatches) {
-                    val chapterName = match.groupValues[1]
-                    val pageId = match.groupValues[2].removePrefix("#")
-
-                    val section = document.selectFirst("section.chapter#$pageId") ?: continue
-
-                    val images = section.select("picture img")
-                    if (images.isNotEmpty() && section.select("p").isEmpty()) {
-                        images.forEach { img ->
-                            val imgUrl = resolveImageUrl(img.attr("src"))
-                            content.append("<img src=\"$imgUrl\" alt=\"$chapterName\">\n")
-                        }
-                    } else {
-                        content.append("<h2>$chapterName</h2>\n")
-                        section.select("p").forEach { p ->
-                            val text = p.text().trim()
-                            if (text.isNotEmpty()) content.append("<p>$text</p>\n")
-                        }
-                        section.select("picture img").forEach { img ->
-                            val imgUrl = resolveImageUrl(img.attr("src"))
-                            content.append("<img src=\"$imgUrl\">\n")
-                        }
-                    }
-                    content.append("\n<hr>\n\n")
-                }
-            } catch (_: Exception) { }
+        return if (mainContent != null) {
+            mainContent.html()
+        } else {
+            // Fallback: extract all chapter sections
+            val sections = document.select("section.chapter, .chapter-section, article.chapter")
+            sections.html()
         }
-
-        // Fallback: iterate sections directly
-        if (content.isEmpty()) {
-            document.select("section.chapter, .chapter-section, article.chapter").forEach { section ->
-                val chTitle = section.selectFirst("h2.chapter-title, h2, h3")?.text()?.trim()
-                if (!chTitle.isNullOrEmpty()) content.append("<h2>$chTitle</h2>\n")
-
-                section.select("picture img, img.chapter-img").forEach { img ->
-                    val imgUrl = resolveImageUrl(img.attr("src").ifEmpty { img.attr("data-src") })
-                    if (imgUrl.isNotEmpty()) content.append("<img src=\"$imgUrl\">\n")
-                }
-
-                section.select("p").forEach { p ->
-                    val text = p.text().trim()
-                    if (text.isNotEmpty()) content.append("<p>$text</p>\n")
-                }
-                content.append("\n")
-            }
-        }
-
-        // Final fallback: main content area
-        if (content.isEmpty()) {
-            document.selectFirst("main#main-content, main, .reader-content, .content")
-                ?.select("p")
-                ?.forEach { p ->
-                    val text = p.text().trim()
-                    if (text.isNotEmpty()) content.append("<p>$text</p>\n")
-                }
-        }
-
-        return content.toString()
     }
 
     override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
 
     // ======================== Filters ========================
 
-    override fun getFilterList(): FilterList = FilterList(
-        Filter.Header("Search is performed locally from homepage data"),
-        Filter.Separator(),
-        TagFilter("Tags (comma separated)"),
-        AuthorFilter("Author"),
-        MinVolumesFilter("Minimum Volumes"),
-        SortFilter("Sort By", sortOptions),
-    )
+    override fun getFilterList(): FilterList {
+        val header = Filter.Header("Search is performed locally from homepage data")
+        val separator = Filter.Separator()
 
-    class TagFilter(name: String) : Filter.Text(name)
-    class AuthorFilter(name: String) : Filter.Text(name)
-    class MinVolumesFilter(name: String) : Filter.Text(name)
-    class SortFilter(name: String, values: Array<String>) : Filter.Select<String>(name, values)
+        var cachedTags = loadCachedTags()
+        var cachedAuthors = loadCachedAuthors()
+
+        if (cachedTags.isEmpty() || cachedAuthors.isEmpty()) {
+            try {
+                loadAllNovels()
+            } catch (_: Exception) {
+                // Keep fallback filters below if the priming request fails.
+            }
+            cachedTags = loadCachedTags()
+            cachedAuthors = loadCachedAuthors()
+        }
+
+        val tagGroup: Filter<*> = if (cachedTags.isNotEmpty()) TagFilter("Tags", cachedTags) else SimpleText("Tags (comma separated)")
+
+        val authorSelect: Filter<*> = if (cachedAuthors.isNotEmpty()) {
+            val values = arrayOf("Any") + cachedAuthors.toTypedArray()
+            AuthorSelect("Author", values)
+        } else {
+            SimpleText("Author")
+        }
+
+        // Keep free-text author input as quick alternative
+        val authorText = SimpleText("Author (text)")
+
+        val minVolumes = MinVolumesFilter("Minimum Volumes")
+        val sort = SortFilter("Sort By", sortOptions)
+
+        return FilterList(
+            header,
+            separator,
+            tagGroup,
+            authorSelect,
+            authorText,
+            minVolumes,
+            sort,
+        )
+    }
+
+    private class TagTriState(name: String, val value: String) : Filter.TriState(name)
+
+    private class TagFilter(name: String, tags: List<String>) : Filter.Group<TagTriState>(name, tags.map { TagTriState(it, it) })
+
+    private class SimpleText(name: String) : Filter.Text(name)
+
+    private class AuthorSelect(name: String, values: Array<String>) : Filter.Select<String>(name, values)
+
+    private class MinVolumesFilter(name: String) : Filter.Text(name)
+
+    private class SortFilter(name: String, values: Array<String>) : Filter.Select<String>(name, values)
 
     private val sortOptions = arrayOf(
         "Popularity",
@@ -722,4 +879,26 @@ class Lnori :
         "Title Z-A",
         "Most Volumes",
     )
+
+    companion object {
+        private const val DAY_MILLIS = 24 * 60 * 60 * 1000L
+        private const val LIBRARY_CACHE_KEY = "lnori_library_cache"
+        private const val LIBRARY_CACHE_TIME_KEY = "lnori_library_cache_time"
+        private const val FILTERS_TAGS_KEY = "lnori_tags_cache"
+        private const val FILTERS_AUTHORS_KEY = "lnori_authors_cache"
+        private const val FILTERS_CACHE_TIME_KEY = "lnori_filters_cache_time"
+    }
+
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        SwitchPreferenceCompat(screen.context).apply {
+            key = "lnori_clear_cache"
+            title = "Clear cached library data"
+            summary = "Toggle to clear cached series, tags, and authors. They will be rebuilt from the next library load."
+            setDefaultValue(false)
+            setOnPreferenceChangeListener { _, _ ->
+                clearLibraryCache()
+                true
+            }
+        }.also(screen::addPreference)
+    }
 }
