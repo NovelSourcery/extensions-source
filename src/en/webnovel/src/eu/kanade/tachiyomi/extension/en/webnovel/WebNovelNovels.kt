@@ -265,13 +265,74 @@ class WebNovelNovels :
         return SManga.create().apply {
             title = document.selectFirst(".g_thumb > img")?.attr("alt") ?: "No Title"
             thumbnail_url = "https:" + document.selectFirst(".g_thumb > img")?.attr("src")
-            description = document.select(".j_synopsis > p").joinToString("\n") { it.text() }
+            // Parse synopsis with Jsoup and preserve paragraph spacing as plain text.
+            val synopsisEl = document.selectFirst(".j_synopsis")
+            val synopsisText = synopsisEl?.select("p")?.map { p ->
+                val raw = p.html()
+                val withBr = raw.replace(Regex("(?i)<br\\s*/?>"), "\n")
+                val cleaned = withBr.replace(Regex("<[^>]+>"), "")
+                cleaned.lines().joinToString("\n") { it.trim() }.trim()
+            }?.filter { it.isNotBlank() }?.joinToString("\n\n")
+                ?: document.select(".j_synopsis > p").map { p ->
+                    val raw = p.html()
+                    val withBr = raw.replace(Regex("(?i)<br\\s*/?>"), "\n")
+                    val cleaned = withBr.replace(Regex("<[^>]+>"), "")
+                    cleaned.lines().joinToString("\n") { it.trim() }.trim()
+                }.filter { it.isNotBlank() }.joinToString("\n\n")
+            // Fallback to whole element text if no paragraphs found
+            description = synopsisText.ifBlank { synopsisEl?.text()?.trim().orEmpty() }
             author = document.select(".det-info .c_s").firstOrNull { it.text().contains("Author") }?.nextElementSibling()?.text()
-            genre = document.select(".det-hd-detail > .det-hd-tag").attr("title")
+            // Prefer tag list under .j_tagWrap (site's tag block). Fallback to older selector.
+            val tags = document.select(".j_tagWrap .m-tags a")
+                .map { it.text().trim().replace("#", "").trim() }
+                .filter { it.isNotEmpty() }
+
+            genre = if (tags.isNotEmpty()) {
+                tags.joinToString(", ")
+            } else {
+                document.select(".det-hd-detail > .det-hd-tag").attr("title")
+            }
             status = when (document.select(".det-hd-detail svg").firstOrNull { it.attr("title") == "Status" }?.nextElementSibling()?.text()?.trim()) {
                 "Completed" -> SManga.COMPLETED
                 "Ongoing" -> SManga.ONGOING
                 else -> SManga.UNKNOWN
+            }
+
+            // --- Extra metadata: rating, ratings count, views, review scores ---
+            val extras = mutableListOf<String>()
+
+            // Rating and number of ratings (e.g. 4.65 (5,977 ratings))
+            val ratingValue = document.selectFirst("p._score strong")?.text()?.trim()
+            val ratingsCount = document.selectFirst("p._score small")?.text()?.trim()?.removePrefix("(")?.removeSuffix(")")
+            if (!ratingValue.isNullOrEmpty()) {
+                extras.add("Rating: ${ratingValue}${if (!ratingsCount.isNullOrEmpty()) " ($ratingsCount)" else ""}")
+            }
+
+            // Views (look for svg title="View")
+            val views = document.select(".det-hd-detail svg").firstOrNull { it.attr("title") == "View" }?.nextElementSibling()?.text()?.trim()
+            if (!views.isNullOrEmpty()) extras.add("Views: $views")
+
+            // Review score breakdown (Translation Quality, Stability of Updates, ...)
+            val reviewScoreElements = document.select(".rev-score-list li")
+            if (reviewScoreElements.isNotEmpty()) {
+                val scoreLines = reviewScoreElements.mapNotNull { li ->
+                    val name = li.selectFirst("strong")?.text()?.trim() ?: return@mapNotNull null
+                    val full = li.select(".g_star svg._on").size
+                    val half = li.select(".g_star svg._half").size
+                    val score = full + half * 0.5
+                    "$name: $score/5"
+                }
+                if (scoreLines.isNotEmpty()) {
+                    extras.add("Review Scores:\n" + scoreLines.joinToString("; "))
+                }
+            }
+
+            // Append extras to description. If synopsis was HTML, append extras as HTML <p> blocks,
+            // otherwise append as plain text paragraphs.
+            if (extras.isNotEmpty()) {
+                // Append extras as plain text paragraphs
+                val extraText = extras.joinToString("\n\n")
+                description = listOf(description, extraText).filter { !it.isNullOrBlank() }.joinToString("\n\n")
             }
         }
     }
@@ -283,7 +344,7 @@ class WebNovelNovels :
         val document = Jsoup.parse(response.body.string())
         val chapters = mutableListOf<SChapter>()
         document.select(".volume-item").forEach { volumeItem ->
-            val originalVolumeName = volumeItem.first().text().trim()
+            val originalVolumeName = volumeItem.first()?.text()?.trim().orEmpty()
             val volumeNameMatch = Regex("Volume\\s(\\d+)").find(originalVolumeName)
             val volumeName = volumeNameMatch?.let { "Volume ${it.groupValues[1]}" } ?: "Unknown Volume"
 
