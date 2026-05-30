@@ -8,6 +8,7 @@ import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
+import eu.kanade.tachiyomi.source.SourceTracker
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -30,7 +31,8 @@ import uy.kohesive.injekt.api.get
 class NovelUpdates :
     HttpSource(),
     NovelSource,
-    ConfigurableSource {
+    ConfigurableSource,
+    SourceTracker {
 
     override val name = "Novel Updates"
     override val baseUrl = "https://www.novelupdates.com"
@@ -84,10 +86,283 @@ class NovelUpdates :
             setDefaultValue(false)
         }
         screen.addPreference(fullHtmlPref)
+
+        val enableTrackingPref = SwitchPreferenceCompat(screen.context).apply {
+            key = PREF_ENABLE_TRACKING
+            title = "Enable NovelUpdates tracking"
+            summary = "Master switch. When on, the source pushes events to your NovelUpdates reading list. Sub-toggles below pick what to push."
+            setDefaultValue(false)
+        }
+        screen.addPreference(enableTrackingPref)
+
+        val trackLastReadPref = SwitchPreferenceCompat(screen.context).apply {
+            key = PREF_TRACK_LAST_READ
+            title = "Sync last-read chapter"
+            summary = "Tick the latest read chapter."
+            setDefaultValue(true)
+        }
+        screen.addPreference(trackLastReadPref)
+
+        val trackNotesPref = SwitchPreferenceCompat(screen.context).apply {
+            key = PREF_TRACK_NOTES
+            title = "Sync \"total chapters read\" notes"
+            summary = "Also write \"total chapters read: N\" into the entry's notes field. Useful if you read off-list."
+            setDefaultValue(false)
+        }
+        screen.addPreference(trackNotesPref)
+
+        val markUnreadPref = SwitchPreferenceCompat(screen.context).apply {
+            key = PREF_TRACK_UNREAD
+            title = "Push unread events"
+            summary = "Also un-tick chapters on NovelUpdates when you mark them unread locally."
+            setDefaultValue(false)
+        }
+        screen.addPreference(markUnreadPref)
+
+        val protectHighestPref = SwitchPreferenceCompat(screen.context).apply {
+            key = PREF_PROTECT_HIGHEST
+            title = "Don't override highest tracked chapter"
+            summary = "Skip pushing a chapter that's lower than the highest chapter already tracked for this novel."
+            setDefaultValue(true)
+        }
+        screen.addPreference(protectHighestPref)
+
+        val resetCachePref = SwitchPreferenceCompat(screen.context).apply {
+            key = PREF_RESET_CACHE_TOGGLE
+            title = "Reset tracking cache"
+            summary = "Toggle on then off to clear cached novel IDs and highest-tracked-chapter records."
+            setDefaultValue(false)
+            setOnPreferenceChangeListener { _, newValue ->
+                if (newValue as Boolean) {
+                    preferences.edit()
+                        .remove(PREF_NOVEL_ID_CACHE)
+                        .remove(PREF_HIGHEST_CACHE)
+                        .putBoolean(PREF_RESET_CACHE_TOGGLE, false)
+                        .apply()
+                    synchronized(novelIdCache) { novelIdCache.clear() }
+                    false
+                } else {
+                    true
+                }
+            }
+        }
+        screen.addPreference(resetCachePref)
     }
+
+    override val supportsChapterTracking: Boolean
+        get() = preferences.getBoolean(PREF_ENABLE_TRACKING, false)
+
+    override val supportsFavoritesTracking: Boolean
+        get() = false
+
+    override suspend fun onChaptersRead(
+        manga: SManga,
+        changedChapters: List<SChapter>,
+        allChapters: List<SChapter>,
+        categories: List<String>,
+    ) {
+        if (!preferences.getBoolean(PREF_ENABLE_TRACKING, false)) return
+        val target = changedChapters
+            .filter { it.chapter_number > 0f }
+            .maxByOrNull { it.chapter_number }
+            ?: changedChapters.lastOrNull()
+            ?: return
+
+        if (preferences.getBoolean(PREF_PROTECT_HIGHEST, true)) {
+            val cached = highestTrackedNumber(cacheKey(manga.url))
+            if (cached != null && target.chapter_number <= cached) return
+        }
+
+        val novelId = resolveNovelId(manga) ?: return
+
+        var anySuccess = false
+
+        if (preferences.getBoolean(PREF_TRACK_LAST_READ, true)) {
+            anySuccess = syncChapter(novelId, target, checked = "yes") || anySuccess
+        }
+
+        if (preferences.getBoolean(PREF_TRACK_NOTES, false)) {
+            val chapterCount = target.chapter_number.toInt().coerceAtLeast(1)
+            anySuccess = updateNotesProgress(novelId, chapterCount) || anySuccess
+        }
+
+        if (anySuccess) {
+            recordHighestTracked(cacheKey(manga.url), target.chapter_number)
+        }
+    }
+
+    override suspend fun onChaptersUnread(
+        manga: SManga,
+        changedChapters: List<SChapter>,
+        allChapters: List<SChapter>,
+        categories: List<String>,
+    ) {
+        if (!preferences.getBoolean(PREF_ENABLE_TRACKING, false)) return
+        if (!preferences.getBoolean(PREF_TRACK_UNREAD, false)) return
+        val target = changedChapters
+            .filter { it.chapter_number > 0f }
+            .minByOrNull { it.chapter_number }
+            ?: changedChapters.firstOrNull()
+            ?: return
+        val novelId = resolveNovelId(manga) ?: return
+
+        if (preferences.getBoolean(PREF_TRACK_LAST_READ, true)) {
+            if (syncChapter(novelId, target, checked = "no")) {
+                forgetHighestTracked(cacheKey(manga.url))
+            }
+        }
+    }
+
+    override suspend fun onFavorited(manga: SManga, categories: List<String>) = Unit
+
+    override suspend fun onUnfavorited(manga: SManga, categories: List<String>) = Unit
+
+    private fun syncChapter(novelId: String, chapter: SChapter, checked: String): Boolean {
+        val chapterId = Regex("/(\\d+)/").find(chapter.url)?.groupValues?.get(1) ?: return false
+        val url = "$baseUrl/readinglist_update.php?rid=$chapterId&sid=$novelId&checked=$checked"
+        return try {
+            client.newCall(GET(url, headers)).execute().use { resp -> resp.isSuccessful }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun updateNotesProgress(novelId: String, chapters: Int): Boolean = try {
+        val getBody = FormBody.Builder()
+            .add("action", "wi_notestagsfic")
+            .add("strSID", novelId)
+            .build()
+        val getResponse = client.newCall(
+            POST("$baseUrl/wp-admin/admin-ajax.php", headers, getBody),
+        ).execute()
+        val responseText = getResponse.use { it.body.string() }
+        val cleaned = responseText.trim().replace(Regex("\\}\\s*0+$"), "}")
+        val existingNotes = Regex("\"notes\"\\s*:\\s*\"([^\"]*)\"").find(cleaned)?.groupValues?.get(1) ?: ""
+        val existingTags = Regex("\"tags\"\\s*:\\s*\"([^\"]*)\"").find(cleaned)?.groupValues?.get(1) ?: ""
+
+        val pattern = Regex("total\\s+chapters\\s+read:\\s*\\d+", RegexOption.IGNORE_CASE)
+        val replacement = "total chapters read: $chapters"
+        val updatedNotes = when {
+            pattern.containsMatchIn(existingNotes) -> existingNotes.replace(pattern, replacement)
+            existingNotes.isEmpty() -> replacement
+            else -> "$existingNotes<br/>$replacement"
+        }
+
+        val updateBody = FormBody.Builder()
+            .add("action", "wi_rlnotes")
+            .add("strSID", novelId)
+            .add("strNotes", updatedNotes)
+            .add("strTags", existingTags)
+            .build()
+        client.newCall(
+            POST("$baseUrl/wp-admin/admin-ajax.php", headers, updateBody),
+        ).execute().use { resp -> resp.isSuccessful }
+    } catch (e: Exception) {
+        false
+    }
+
+    private fun resolveNovelId(manga: SManga): String? {
+        val key = cacheKey(manga.url)
+        loadNovelIdCache()[key]?.let { return it }
+        synchronized(novelIdCache) {
+            novelIdCache[key]?.let { return it }
+        }
+
+        val url = if (manga.url.startsWith("http")) manga.url else baseUrl + manga.url
+        val resolved: String? = try {
+            val response = client.newCall(GET(url)).execute()
+            val doc = Jsoup.parse(response.use { it.body.string() }, url)
+            val shortlink: String = doc.select("link[rel=shortlink]").attr("href")
+            val shortlinkId: String? = Regex("\\?p=(\\d+)").find(shortlink)?.groupValues?.get(1)
+            val fallbackId: String? = doc.select("input#mypostid").attr("value")
+                .takeIf { value -> value.isNotEmpty() }
+            shortlinkId ?: fallbackId
+        } catch (e: Exception) {
+            null
+        }
+        if (resolved != null) {
+            persistNovelId(key, resolved)
+        }
+        return resolved
+    }
+
+    private fun cacheKey(url: String): String =
+        url.removePrefix(baseUrl).substringBefore('?').trimEnd('/')
+
+    private fun loadNovelIdCache(): Map<String, String> {
+        synchronized(novelIdCache) {
+            if (novelIdCache.isEmpty()) {
+                val raw = preferences.getString(PREF_NOVEL_ID_CACHE, "") ?: ""
+                raw.split('\n').forEach { line ->
+                    val sep = line.indexOf('|')
+                    if (sep > 0) novelIdCache[line.substring(0, sep)] = line.substring(sep + 1)
+                }
+            }
+            return novelIdCache.toMap()
+        }
+    }
+
+    private fun persistNovelId(url: String, id: String) {
+        synchronized(novelIdCache) {
+            novelIdCache[url] = id
+            val serialized = novelIdCache.entries.joinToString("\n") { "${it.key}|${it.value}" }
+            preferences.edit().putString(PREF_NOVEL_ID_CACHE, serialized).apply()
+        }
+    }
+
+    private fun highestTrackedNumber(mangaUrl: String): Float? {
+        val raw = preferences.getString(PREF_HIGHEST_CACHE, "") ?: ""
+        raw.split('\n').forEach { line ->
+            val sep = line.indexOf('|')
+            if (sep > 0 && line.substring(0, sep) == mangaUrl) {
+                return line.substring(sep + 1).toFloatOrNull()
+            }
+        }
+        return null
+    }
+
+    private fun recordHighestTracked(mangaUrl: String, value: Float) {
+        val raw = preferences.getString(PREF_HIGHEST_CACHE, "") ?: ""
+        val rebuilt = StringBuilder()
+        var replaced = false
+        raw.split('\n').filter { it.isNotEmpty() }.forEach { line ->
+            val sep = line.indexOf('|')
+            if (sep > 0 && line.substring(0, sep) == mangaUrl) {
+                if (!replaced) {
+                    rebuilt.append(mangaUrl).append('|').append(value).append('\n')
+                    replaced = true
+                }
+            } else {
+                rebuilt.append(line).append('\n')
+            }
+        }
+        if (!replaced) rebuilt.append(mangaUrl).append('|').append(value).append('\n')
+        preferences.edit().putString(PREF_HIGHEST_CACHE, rebuilt.toString()).apply()
+    }
+
+    private fun forgetHighestTracked(mangaUrl: String) {
+        val raw = preferences.getString(PREF_HIGHEST_CACHE, "") ?: return
+        val rebuilt = raw.split('\n')
+            .filter { line ->
+                val sep = line.indexOf('|')
+                sep <= 0 || line.substring(0, sep) != mangaUrl
+            }
+            .joinToString("\n")
+        preferences.edit().putString(PREF_HIGHEST_CACHE, rebuilt).apply()
+    }
+
+    private val novelIdCache = mutableMapOf<String, String>()
 
     companion object {
         private const val PREF_RETURN_FULL_HTML = "pref_return_full_html"
+        private const val PREF_ENABLE_TRACKING = "pref_enable_tracking"
+        private const val PREF_TRACK_LAST_READ = "pref_track_last_read"
+        private const val PREF_TRACK_NOTES = "pref_track_notes"
+        private const val PREF_TRACK_UNREAD = "pref_track_unread"
+        private const val PREF_PROTECT_HIGHEST = "pref_protect_highest"
+        private const val PREF_RESET_CACHE_TOGGLE = "pref_reset_cache_toggle"
+        private const val PREF_NOVEL_ID_CACHE = "pref_novel_id_cache"
+        private const val PREF_HIGHEST_CACHE = "pref_highest_tracked_cache"
     }
 
     private fun getChapterBody(doc: Document, domain: List<String>, chapterUrl: String): String {
@@ -916,6 +1191,17 @@ class NovelUpdates :
 
     override fun mangaDetailsParse(response: Response): SManga {
         val doc = Jsoup.parse(response.body.string())
+
+        runCatching {
+            val mangaPath = cacheKey(response.request.url.encodedPath)
+            val shortlink = doc.select("link[rel=shortlink]").attr("href")
+            val novelId = Regex("\\?p=(\\d+)").find(shortlink)?.groupValues?.get(1)
+                ?: doc.select("input#mypostid").attr("value").takeIf { it.isNotEmpty() }
+            if (!novelId.isNullOrEmpty()) {
+                persistNovelId(mangaPath, novelId)
+            }
+        }
+
         return SManga.create().apply {
             title = doc.select(".seriestitlenu").text().ifEmpty { "Untitled or invalid" }
             thumbnail_url = doc.select(".wpb_wrapper img").attr("src")
@@ -959,6 +1245,10 @@ class NovelUpdates :
 
         val novelId = doc.select("input#mypostid").attr("value")
         if (novelId.isEmpty()) return emptyList()
+
+        runCatching {
+            persistNovelId(cacheKey(response.request.url.encodedPath), novelId)
+        }
 
         val formBody = FormBody.Builder()
             .add("action", "nd_getchapters")
