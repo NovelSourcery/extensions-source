@@ -157,7 +157,7 @@ class NovelUpdates :
             val content: List<String>,
         )
 
-        val PLATFORM_CONFIG = mapOf(
+        val platformConfig = mapOf(
             "wordpress" to PlatformConfig(
                 bloat = listOf(
                     ".ad", ".author-avatar", ".chapter-warning", ".entry-meta",
@@ -774,7 +774,7 @@ class NovelUpdates :
                 }
             }
         } else {
-            val config = if (isWordPress) PLATFORM_CONFIG["wordpress"]!! else PLATFORM_CONFIG["blogspot"]!!
+            val config = if (isWordPress) platformConfig["wordpress"]!! else platformConfig["blogspot"]!!
 
             // Remove platform-specific bloat
             config.bloat.forEach { doc.select(it).remove() }
