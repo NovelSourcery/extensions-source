@@ -16,7 +16,10 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import okhttp3.FormBody
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
@@ -61,6 +64,10 @@ class NovelUpdates :
             throw Exception("Captcha detected, please open in webview.")
         }
 
+        if (!response.isSuccessful) {
+            throw Exception("Failed to fetch ${response.request.url}: ${response.code} ${response.message}")
+        }
+
         if (preferences.getBoolean(PREF_RETURN_FULL_HTML, false)) {
             return body
         }
@@ -82,168 +89,748 @@ class NovelUpdates :
         private const val PREF_RETURN_FULL_HTML = "pref_return_full_html"
     }
 
-    private fun getChapterBody(doc: Document, domain: List<String>, url: String): String {
+    private fun getLocation(href: String): String {
+        val regex = Regex("""^(https?:)//([^/?#]*)""")
+        val match = regex.find(href)
+        return if (match != null) "${match.groupValues[1]}//${match.groupValues[2]}" else ""
+    }
+
+    private fun getChapterBody(doc: Document, domain: List<String>, chapterUrl: String): String {
         val unwanted = listOf("app", "blogspot", "casper", "wordpress", "www")
         val targetDomain = domain.find { !unwanted.contains(it) }
 
         var chapterTitle = ""
         var chapterContent = ""
+        var chapterText = ""
 
-        when (targetDomain) {
-            "scribblehub" -> {
-                doc.select(".wi_authornotes").remove()
-                chapterTitle = doc.select(".chapter-title").first()?.text() ?: ""
-                chapterContent = doc.select(".chp_raw").html()
-            }
-
-            "webnovel" -> {
-                chapterTitle = doc.select(".cha-tit .pr .dib").first()?.text() ?: ""
-                chapterContent = doc.select(".cha-words").html().ifEmpty {
-                    doc.select("._content").html()
-                }
-            }
-
-            "wuxiaworld" -> {
-                doc.select(".MuiLink-root").remove()
-                chapterTitle = doc.select("h4 span").first()?.text() ?: ""
-                chapterContent = doc.select(".chapter-content").html()
-            }
-
-            "hostednovel" -> {
-                chapterTitle = doc.select("#chapter-title").first()?.text() ?: ""
-                chapterContent = doc.select("#chapter-content").html()
-            }
-
-            "royalroad" -> {
-                chapterTitle = doc.select("h1").first()?.text() ?: ""
-                chapterContent = doc.select(".chapter-content").html()
-            }
-
-            "akutranslations" -> {
-                chapterTitle = doc.select(".entry-title").first()?.text() ?: ""
-                chapterContent = doc.select(".entry-content").html()
-                doc.selectFirst(".entry-content")?.select("nav, .sharedaddy, .wp-block-separator")?.remove()
-            }
-
-            "brightnovels" -> {
-                chapterTitle = doc.select(".entry-title").first()?.text() ?: ""
-                chapterContent = doc.select(".entry-content").html()
-                doc.selectFirst(".entry-content")?.select(".code-block, script, .adsbygoogle")?.remove()
-            }
-
-            "chrysanthemumgarden" -> {
-                chapterTitle = doc.select(".entry-title").first()?.text() ?: ""
-                chapterContent = doc.select(".entry-content").html()
-                doc.selectFirst(".entry-content")?.select(".jum")?.remove()
-            }
-
-            "crickets" -> {
-                chapterTitle = doc.select(".entry-title").first()?.text() ?: ""
-                chapterContent = doc.select(".entry-content").html()
-            }
-
-            "rainofsnow" -> {
-                chapterTitle = doc.select("h1.entry-title").first()?.text() ?: ""
-                chapterContent = doc.select("div.entry-content").html()
-                doc.selectFirst("div.entry-content")?.select(".sharedaddy, .wpcnt")?.remove()
-            }
-
-            "scribblehubvn" -> {
-                chapterTitle = doc.select(".entry-title").first()?.text() ?: ""
-                chapterContent = doc.select(".entry-content").html()
-            }
-
-            "opentl", "opentranslate" -> {
-                chapterTitle = doc.select(".entry-title").first()?.text() ?: ""
-                chapterContent = doc.select(".entry-content").html()
-            }
-
-            "volare" -> {
-                chapterTitle = doc.select(".entry-title").first()?.text() ?: ""
-                chapterContent = doc.select(".entry-content, .chapter-content").html()
-                doc.selectFirst(".entry-content")?.select(".announcements")?.remove()
-            }
-
-            "4slashfour", "fourslashfour" -> {
-                chapterTitle = doc.select("h1.entry-title").first()?.text() ?: ""
-                chapterContent = doc.select(".entry-content").html()
-            }
-
-            "flyinglines" -> {
-                chapterTitle = doc.select(".entry-title").first()?.text() ?: ""
-                chapterContent = doc.select(".text_story, .entry-content").html()
-            }
-
-            "isekaisoul" -> {
-                chapterTitle = doc.select(".entry-title").first()?.text() ?: ""
-                chapterContent = doc.select(".entry-content").html()
-                doc.selectFirst(".entry-content")?.select(".code-block, .adsbygoogle, ins")?.remove()
-            }
-
-            "woopread" -> {
-                chapterTitle = doc.select(".chapter__title, h1").first()?.text() ?: ""
-                chapterContent = doc.select(".chapter__content, .text_story").html()
-            }
-
-            "firstkissnovel" -> {
-                chapterTitle = doc.select(".chr-title, .chapter-title").first()?.text() ?: ""
-                chapterContent = doc.select(".chr-content, .chapter-content").html()
-            }
-
-            "foxteller" -> {
-                chapterTitle = doc.select(".entry-title, .chapter-title").first()?.text() ?: ""
-                chapterContent = doc.select(".entry-content, .chapter-content").html()
-                doc.selectFirst(".entry-content")?.select(".wp-block-separator, script")?.remove()
-            }
-
-            else -> {
-                // Generic fallback - try common selectors
-                val contentSelectors = listOf(
-                    ".chapter-content",
-                    ".entry-content",
-                    ".post-content",
-                    ".content",
-                    "#content",
-                    ".chapter__content",
-                    ".text_story",
-                    "article",
-                )
-
-                for (selector in contentSelectors) {
-                    val content = doc.select(selector).html()
-                    if (content.isNotEmpty() && content.length > 100) {
-                        chapterContent = content
-                        break
-                    }
-                }
-
-                val titleSelectors = listOf(
-                    ".chapter-title",
-                    ".entry-title",
-                    "h1",
-                    "h2",
-                    ".title",
-                )
-                for (selector in titleSelectors) {
-                    val title = doc.select(selector).first()?.text()
-                    if (!title.isNullOrEmpty()) {
-                        chapterTitle = title
-                        break
-                    }
-                }
+        // --- WordPress Detection ---
+        val matches = { selector: String, attr: String?, regex: Regex ->
+            doc.select(selector).any { el ->
+                val value = if (attr != null) el.attr(attr) else (el.html().ifEmpty { el.text() })
+                regex.containsMatchIn(value.lowercase())
             }
         }
 
-        if (chapterContent.isEmpty()) {
-            doc.select("nav, header, footer, .hidden, script, style").remove()
-            chapterContent = doc.select("body").html()
+        var isWordPress = listOf(
+            matches("meta[name=\"generator\"]", "content", Regex("wordpress|site kit")),
+            matches("link, script, img", "src", Regex("/wp-content/|/wp-includes/")),
+            matches("link", "href", Regex("/wp-content/|/wp-includes/")),
+            matches("link[rel=\"https://api.w.org/\"]", "href", Regex(".*")),
+            matches("link[rel=\"EditURI\"]", "href", Regex("xmlrpc\\.php")),
+            matches("body", "class", Regex("wp-admin|wp-custom-logo|logged-in")),
+            matches("script", null, Regex("wp-embed|wp-emoji|wp-block")),
+        ).any { it }
+
+        var isBlogspot = listOf(
+            matches("meta[name=\"generator\"]", "content", Regex("blogger")),
+            matches("meta[name=\"google-adsense-platform-domain\"]", "content", Regex("blogspot")),
+            matches("link[rel=\"alternate\"]", "href", Regex("blogger\\.com/feeds|blogspot\\.com/feeds")),
+            matches("link", "href", Regex("www\\.blogger\\.com/static|www\\.blogger\\.com/dyn-css")),
+            matches("script", null, Regex("_WidgetManager\\._Init|_WidgetManager\\._RegisterWidget")),
+        ).any { it }
+
+        // Outlier sites that should NOT use the platform auto-detection path
+        // Last edited in 0.9.6 - 16/01/2026
+        val outliers = listOf(
+            "asuratls",
+            "fictionread",
+            "hiraethtranslation",
+            "infinitenoveltranslations",
+            "leafstudio",
+            "machineslicedbread",
+            "mirilu",
+            "novelworldtranslations",
+            "sacredtexttranslations",
+            "stabbingwithasyringe",
+            "tinytranslation",
+            "vampiramtl",
+        )
+        if (domain.any { outliers.contains(it) }) {
+            isWordPress = false
+            isBlogspot = false
         }
 
-        return if (chapterTitle.isNotEmpty()) {
-            "<h2>$chapterTitle</h2><hr><br>$chapterContent"
+        // Platform-specific bloat/title/content config
+        data class PlatformConfig(
+            val bloat: List<String>,
+            val title: List<String>,
+            val content: List<String>,
+        )
+
+        val PLATFORM_CONFIG = mapOf(
+            "wordpress" to PlatformConfig(
+                bloat = listOf(
+                    ".ad", ".author-avatar", ".chapter-warning", ".entry-meta",
+                    ".ezoic-ad", ".mb-center", ".modern-footnotes-footnote__note",
+                    ".patreon-widget", ".post-cats", ".pre-bar", ".sharedaddy",
+                    ".sidebar", ".swg-button-v2-light", ".wp-block-buttons",
+                    ".wp-dark-mode-switcher", ".wp-next-post-navi",
+                    "#hpk", "#jp-post-flair", "#textbox",
+                ),
+                title = listOf(
+                    ".entry-title", ".chapter__title", ".title-content",
+                    ".wp-block-post-title", ".title_story", "#chapter-heading",
+                    ".chapter-title", "head title", "h1:first-of-type",
+                    "h2:first-of-type", ".active",
+                ),
+                content = listOf(
+                    ".chapter__content", ".entry-content", ".text_story",
+                    ".post-content", ".contenta", ".single_post",
+                    ".main-content", ".reader-content", "#content",
+                    "#the-content", "article.post", ".chp_raw",
+                ),
+            ),
+            "blogspot" to PlatformConfig(
+                bloat = listOf(".button-container", ".ChapterNav", ".ch-bottom", ".separator"),
+                title = listOf(".entry-title", ".post-title", "head title"),
+                content = listOf(".content-post", ".entry-content", ".post-body"),
+            ),
+        )
+
+        if (!isWordPress && !isBlogspot) {
+            // Per-site extraction
+            when (targetDomain) {
+                // Last edited in 0.9.4 by Batorian - 15/10/2025
+                "akutranslations" -> {
+                    val apiUrl = chapterUrl.replace("/novel", "/api/novel")
+                    val response = client.newCall(GET(apiUrl, headers)).execute()
+                    val json = response.body.string()
+                    val contentMatch = Regex(""""content"\s*:\s*"([\s\S]*?)(?<!\\)"""").find(json)
+                    val rawContent = contentMatch?.groupValues?.get(1)
+                        ?: throw Exception("Invalid API response structure.")
+                    chapterContent = rawContent
+                        .replace("\\n", "\n").replace("\\\"", "\"")
+                        .trim().split(Regex("\n+"))
+                        .map { it.trim() }.filter { it.isNotEmpty() }
+                        .joinToString("\n") { "<p>$it</p>" }
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "asuratls" -> {
+                    val titleElement = doc.select(".post-body div b").first()
+                    chapterTitle = titleElement?.text() ?: ""
+                    titleElement?.remove()
+                    chapterContent = doc.select(".post-body").html()
+                }
+
+                // Last edited in 0.9.2 by Batorian - 08/09/2025
+                "brightnovels" -> {
+                    val dataPage = doc.select("#app").attr("data-page")
+                    if (dataPage.isNullOrEmpty()) throw Exception("data-page attribute not found on Bright Novels.")
+                    // Extract title and content from JSON
+                    val titleMatch = Regex(""""title"\s*:\s*"([^"]+)"""").find(dataPage)
+                    val contentMatch = Regex(""""content"\s*:\s*"([\s\S]*?)(?<!\\)",""").find(dataPage)
+                    val extractedTitle = titleMatch?.groupValues?.get(1) ?: ""
+                    val extractedContent = contentMatch?.groupValues?.get(1)
+                        ?.replace("\\u003c", "<")?.replace("\\u003e", ">")
+                        ?.replace("\\n", "\n")?.replace("\\\"", "\"") ?: ""
+                    val cleaned = Jsoup.parse(extractedContent).also { it.select("script, style").remove() }.html()
+                    chapterText = "<h2>$extractedTitle</h2><hr><br>$cleaned"
+                }
+
+                // Last edited in 0.9.2 by Batorian - 08/09/2025
+                "canonstory" -> {
+                    val parts = chapterUrl.split("/")
+                    if (parts.size < 7) throw Exception("Invalid chapter URL structure")
+                    val novelSlug = parts[4]
+                    val chapterSlug = parts[6]
+                    val apiUrl = "${parts[0]}//${parts[2]}/api/public/chapter-by-slug/$novelSlug/$chapterSlug"
+                    val response = client.newCall(GET(apiUrl, headers)).execute()
+                    val json = response.body.string()
+                    val chapterNumberMatch = Regex(""""chapterNumber"\s*:\s*(\d+)""").find(json)
+                    val titleMatch = Regex(""""title"\s*:\s*"([^"]+)"""").find(json)
+                    val contentMatch = Regex(""""content"\s*:\s*"([\s\S]*?)(?<!\\)"""").find(json)
+                    val chapterNumber = chapterNumberMatch?.groupValues?.get(1) ?: ""
+                    val title = titleMatch?.groupValues?.get(1) ?: ""
+                    val content = contentMatch?.groupValues?.get(1)?.replace("\\n", "\n") ?: ""
+                    chapterTitle = if (title.isNotEmpty()) "Chapter $chapterNumber - $title" else "Chapter $chapterNumber"
+                    chapterContent = content.replace("\n", "<br>")
+                }
+
+                // Last edited in 0.9.3 by Batorian - 09/09/2025
+                "daoist" -> {
+                    chapterTitle = doc.select(".chapter__title").first()?.text() ?: ""
+                    doc.select("span.patreon-lock-icon").remove()
+                    doc.select("img[data-src]").forEach { el ->
+                        val dataSrc = el.attr("data-src")
+                        if (dataSrc.isNotEmpty()) {
+                            el.attr("src", dataSrc)
+                            el.removeAttr("data-src")
+                        }
+                    }
+                    chapterContent = doc.select(".chapter__content").html()
+                }
+
+                // Last edited in 0.9.6 by Batorian - 16/01/2026
+                "dreamy-translations" -> {
+                    chapterTitle = doc.select("h1 > span").first()?.text() ?: ""
+                    val content = doc.select(".chapter-content > div").first()
+                    content?.select("em")?.forEach { em -> em.wrap("<p></p>") }
+                    chapterContent = content?.html() ?: ""
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "fictionread" -> {
+                    listOf(".content > style", ".highlight-ad-container", ".meaning", ".word")
+                        .forEach { doc.select(it).remove() }
+                    chapterTitle = doc.select(".title-image span").first()?.text() ?: ""
+                    doc.select(".content").first()?.children()?.forEach { el ->
+                        if (el.attr("id").contains("Chaptertitle-info")) {
+                            el.remove()
+                            return@forEach
+                        }
+                    }
+                    chapterContent = doc.select(".content").html()
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // remove any typing in 0.9.9 by K1ngfish3r - 04/05/2026, remove this comment if no issues
+                "genesistudio" -> {
+                    val apiUrl = "$chapterUrl/__data.json?x-sveltekit-invalidated=001"
+                    val response = client.newCall(GET(apiUrl, headers)).execute()
+                    val json = response.body.string()
+                    // Parse nodes array and look for the data node with content/notes/footnotes
+                    val dataNodeMatch = Regex(""""type":"data","data":\{([^}]+)\}""").find(json)
+                    // Simplified: look for the content key mapping in the JSON
+                    // The structure is complex; extract the full content as-is
+                    val contentMatch = Regex(""""content":"([\s\S]*?)","notes"""").find(json)
+                    val notesMatch = Regex(""""notes":"([\s\S]*?)","footnotes"""").find(json)
+                    val footnotesMatch = Regex(""""footnotes":"([\s\S]*?)"""").find(json)
+                    val content = contentMatch?.groupValues?.get(1)?.replace("\\n", "\n")?.replace("\\\"", "\"") ?: ""
+                    val notes = notesMatch?.groupValues?.get(1)?.replace("\\n", "\n")?.replace("\\\"", "\"") ?: ""
+                    val footnotes = footnotesMatch?.groupValues?.get(1)?.replace("\\n", "\n")?.replace("\\\"", "\"") ?: ""
+                    chapterText = content +
+                        (if (notes.isNotEmpty()) "<h2>Notes</h2><br>$notes" else "") +
+                        footnotes
+                }
+
+                // Last edited in 0.9.6 by Batorian - 16/01/2026
+                "greenz" -> {
+                    val chapterSlug = chapterUrl.split("/").last()
+                    val apiUrl = "https://greenz.com/api/chapters/slug/$chapterSlug"
+                    val response = client.newCall(GET(apiUrl, headers)).execute()
+                    val json = response.body.string()
+                    val nameMatch = Regex(""""name"\s*:\s*"([^"]+)"""").find(json)
+                    val numMatch = Regex(""""chapterNumber"\s*:\s*(\d+)""").find(json)
+                    val contentMatch = Regex(""""content"\s*:\s*"([\s\S]*?)(?<!\\)"""").find(json)
+                    val chapterName = nameMatch?.groupValues?.get(1) ?: ""
+                    val chapterNumber = numMatch?.groupValues?.get(1) ?: ""
+                    val rawContent = contentMatch?.groupValues?.get(1)
+                        ?.replace("\\n", "\n")?.replace("\\\"", "\"") ?: ""
+                    chapterTitle = "Chapter $chapterNumber - $chapterName"
+                    chapterContent = Jsoup.parse(rawContent).html()
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "hiraethtranslation" -> {
+                    chapterTitle = doc.select("li.active").first()?.text() ?: ""
+                    chapterContent = doc.select(".text-left").html()
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "hostednovel" -> {
+                    chapterTitle = doc.select("#chapter-title").first()?.text() ?: ""
+                    chapterContent = doc.select("#chapter-content").html()
+                }
+
+                // Last edited in 0.9.5 by Batorian - 26/12/2025
+                "infinitenoveltranslations" -> {
+                    val redirectUrl = doc.select("article > p > a").first()?.attr("href") ?: ""
+                    val targetDoc = if (redirectUrl.isNotEmpty()) {
+                        val resp = client.newCall(GET(redirectUrl, headers)).execute()
+                        Jsoup.parse(resp.body.string(), redirectUrl)
+                    } else doc
+                    chapterContent = targetDoc.select(".entry-content").html()
+                    chapterTitle = targetDoc.select(".entry-title").text()
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "inoveltranslation" -> {
+                    listOf("header", "section").forEach { doc.select(it).remove() }
+                    chapterText = doc.select(".styles_content__JHK8G").html()
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // mii translates
+                "isotls" -> {
+                    listOf("footer", "header", "nav", ".ezoic-ad", ".ezoic-adpicker-ad", ".ezoic-videopicker-video")
+                        .forEach { doc.select(it).remove() }
+                    chapterTitle = doc.select("head title").first()?.text() ?: ""
+                    chapterContent = doc.select("main article").html()
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "ko-fi" -> {
+                    val scriptHtml = doc.select("script:containsData(shadowDom.innerHTML)").html()
+                    val match = Regex("""shadowDom\.innerHTML \+= '(<div.*?)';""").find(scriptHtml)
+                    if (match != null) chapterText = match.groupValues[1]
+                }
+
+                // Last edited in 0.9.6 by Batorian - 16/01/2026
+                "leafstudio" -> {
+                    chapterTitle = doc.select(".title").first()?.text() ?: ""
+                    chapterContent = doc.select(".chapter_content").joinToString("") { it.outerHtml() }
+                }
+
+                // Last edited in 0.9.2 by Batorian - 08/09/2025
+                "machineslicedbread" -> {
+                    val urlParts = chapterUrl.split("/").filter { it.isNotEmpty() }
+                    val pathSegments = urlParts.drop(2)
+                    val targetDoc = if (pathSegments.size == 1) {
+                        val redirectPath = doc.select(".entry-content a").first()?.attr("href")
+                            ?: throw Exception("Chapter path not found.")
+                        val resp = client.newCall(GET(redirectPath, headers)).execute()
+                        Jsoup.parse(resp.body.string(), redirectPath)
+                    } else doc
+                    chapterText = targetDoc.select(".entry-content").html()
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "mirilu" -> {
+                    doc.select("#jp-post-flair").remove()
+                    val titleElement = doc.select(".entry-content p strong").first()
+                    chapterTitle = titleElement?.text() ?: ""
+                    titleElement?.remove()
+                    chapterContent = doc.select(".entry-content").html()
+                }
+
+                // Last edited in 0.9.9 by Batorian - 09/05/2026
+                "mythoriatales" -> {
+                    // Fetch script-2 to get the Next.js Server Action hash
+                    val scriptHtml = doc.select("script:containsData(script-2)").html()
+                        ?: throw Exception("Failed to find script-2")
+                    val matches2 = Regex(""""script-2.*?[^_]+([^\\]+)""").findAll(scriptHtml).toList()
+                    val scriptPath = matches2.getOrNull(1)?.groupValues?.get(1)
+                        ?: throw Exception("Failed to extract script-2 URL")
+                    val scriptUrl = chapterUrl.toHttpUrl().newBuilder().encodedPath("/$scriptPath").build().toString()
+                    val scriptText = client.newCall(GET(scriptUrl, headers)).execute().body.string()
+                    val actionHash = Regex("[a-f0-9]{42}").find(scriptText)?.value
+                        ?: throw Exception("Failed to extract ACTION_HASH")
+
+                    val urlParts2 = chapterUrl.split("/")
+                    val slug = urlParts2[4]
+                    val chapterNum = urlParts2[6].toIntOrNull() ?: 0
+
+                    val rscHeaders = headers.newBuilder()
+                        .set("Accept", "text/x-component")
+                        .set("Content-Type", "text/plain;charset=UTF-8")
+                        .set("next-action", actionHash)
+                        .build()
+                    val rscBody = """["$slug",$chapterNum]""".toRequestBody("text/plain;charset=UTF-8".toMediaType())
+                    val rscResponse = client.newCall(
+                        okhttp3.Request.Builder().url(chapterUrl).headers(rscHeaders).post(rscBody).build(),
+                    ).execute()
+                    if (!rscResponse.isSuccessful) throw Exception("Failed to fetch chapter: ${rscResponse.code}")
+
+                    val rscText = rscResponse.body.string().replace(Regex("""(\d+:[{TE])"""), "\n$1")
+                    val segments = rscText.split(Regex("""\n(?=\d+:[{TE])"""))
+
+                    val contentSegment = segments
+                        .filter { Regex("""^\d+:T""").containsMatchIn(it) && !it.startsWith("0:") }
+                        .joinToString("") { it.replace(Regex("""^\d+:T[0-9a-f]+,"""), "") }
+
+                    if (contentSegment.isEmpty()) throw Exception("Could not find chapter content segment in stream.")
+
+                    val lines = contentSegment.trim()
+                        .split(Regex("""(?:\r?\n|\\n)+"""))
+                        .map { it.trim() }.filter { it.isNotEmpty() }
+
+                    if (lines.isEmpty()) throw Exception("Parsed content is empty.")
+
+                    val metaSegment = segments.find { it.startsWith("1:") }
+                    if (metaSegment != null) {
+                        try {
+                            val metaJson = metaSegment.substring(2)
+                            val titleMatch2 = Regex(""""title"\s*:\s*"([^"]+)"""").find(metaJson)
+                            val numMatch2 = Regex(""""chapterNumber"\s*:\s*(\d+)""").find(metaJson)
+                            val t = titleMatch2?.groupValues?.get(1)
+                            val n = numMatch2?.groupValues?.get(1)?.toIntOrNull() ?: chapterNum
+                            if (t != null) chapterTitle = "Chapter $n: $t"
+                        } catch (_: Exception) { }
+                    }
+                    if (chapterTitle.isEmpty()) chapterTitle = "Chapter $chapterNum"
+
+                    chapterContent = lines.joinToString("\n") { "<p>$it</p>" }
+                        .replace(Regex("""\[dialogue\s+speaker="([^"]*)"\](.*?)\[/dialogue\]""", RegexOption.IGNORE_CASE), "$1: $2")
+                        .replace(Regex("""\[sfx\].*?\[/sfx\]""", RegexOption.IGNORE_CASE), "")
+                        .replace(Regex("""\[/?(dialogue|sfx)[^\]]*\]""", RegexOption.IGNORE_CASE), "")
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "novelplex" -> {
+                    doc.select(".passingthrough_adreminder").remove()
+                    chapterTitle = doc.select(".halChap--jud").first()?.text() ?: ""
+                    chapterContent = doc.select(".halChap--kontenInner").html()
+                }
+
+                "novelshub" -> {
+                    val segments2 = chapterUrl.split("/")
+                    val novelSlug = segments2[segments2.size - 2]
+                    val chapterSlug2 = segments2.last()
+                    val apiUrl = "https://api.novelshub.org/api/chapter?mangaslug=$novelSlug&chapterslug=$chapterSlug2"
+                    val response = client.newCall(GET(apiUrl, headers)).execute()
+                    val json = response.body.string()
+                    val numMatch = Regex(""""number"\s*:\s*(\d+)""").find(json)
+                    val contentMatch = Regex(""""content"\s*:\s*"([\s\S]*?)(?<!\\)"""").find(json)
+                    val chapterNumber = numMatch?.groupValues?.get(1) ?: ""
+                    val rawContent = contentMatch?.groupValues?.get(1)
+                        ?.replace("\\n", "\n")?.replace("\\\"", "\"") ?: ""
+                    chapterTitle = "Chapter $chapterNumber"
+                    val contentDoc = Jsoup.parse(rawContent)
+                    contentDoc.select("div").forEach { el ->
+                        val style = el.attr("style")
+                        if (style.isEmpty()) return@forEach
+                        when {
+                            Regex("border:.*#ff6b00").containsMatchIn(style) ->
+                                el.removeAttr("style").addClass("novels-hub_box_orange")
+                            Regex("color:.*#ff6b00.*text-transform:.*uppercase").containsMatchIn(style) ->
+                                el.removeAttr("style").addClass("novels-hub_box-title_orange")
+                            Regex("color:.*white.*border-top:.*#ff6b00").containsMatchIn(style) ->
+                                el.removeAttr("style").addClass("novels-hub_box-text_orange")
+                            Regex("border:.*#00ff88").containsMatchIn(style) ->
+                                el.removeAttr("style").addClass("novels-hub_box_green")
+                            Regex("color:.*#00ff88.*text-transform:.*uppercase").containsMatchIn(style) ->
+                                el.removeAttr("style").addClass("novels-hub_box-title_green")
+                            Regex("border-left:.*#00ff88").containsMatchIn(style) ->
+                                el.removeAttr("style").addClass("novels-hub_comment_green")
+                            Regex("border:.*#0066ff").containsMatchIn(style) ->
+                                el.removeAttr("style").addClass("novels-hub_box_blue")
+                            Regex("color:.*#0099ff.*text-transform:.*uppercase").containsMatchIn(style) ->
+                                el.removeAttr("style").addClass("novels-hub_box-title_blue")
+                            Regex("color:.*#d0d0d0").containsMatchIn(style) ->
+                                el.removeAttr("style").addClass("novels-hub_box-text_blue")
+                        }
+                    }
+                    contentDoc.select("span").forEach { el ->
+                        val style = el.attr("style")
+                        if (style.isEmpty()) return@forEach
+                        when {
+                            Regex("color:.*#ff6b6b").containsMatchIn(style) ->
+                                el.removeAttr("style").addClass("novels-hub_text_red")
+                            Regex("color:.*#4d9fff").containsMatchIn(style) ->
+                                el.removeAttr("style").addClass("novels-hub_text_blue")
+                            Regex("color:.*#a78bfa").containsMatchIn(style) ->
+                                el.removeAttr("style").addClass("novels-hub_text_purple")
+                        }
+                    }
+                    chapterContent = contentDoc.html()
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "novelworldtranslations" -> {
+                    doc.select(".separator img").remove()
+                    doc.select(".entry-content a").filter { el ->
+                        el.attr("href").contains("https://novelworldtranslations.blogspot.com")
+                    }.forEach { it.parent()?.remove() }
+                    chapterTitle = doc.select(".entry-title").first()?.text() ?: ""
+                    val rawContent = doc.select(".entry-content").html()
+                        .replace("&nbsp;", "").replace("\n", "<br>")
+                    val contentDoc = Jsoup.parse(rawContent)
+                    contentDoc.select("span, p, div").forEach { el ->
+                        if (el.text().trim().isEmpty()) el.remove()
+                    }
+                    chapterContent = contentDoc.html()
+                }
+
+                // Last edited in 0.9.8 by K1ngfish3r - 04/04/2026
+                "patreon" -> {
+                    doc.select("#track-click, [class*=\"hidden \"]").remove()
+                    chapterTitle = doc.select("h1[data-tag=\"post-title\"]").text()
+                    chapterContent = doc.select("[data-tag=\"post-card\"] [class*=\"PaddingTop\"]").html()
+                }
+
+                // Last edited in 0.9.7 by Batorian - 18/03/2026
+                "r-p-d" -> {
+                    val parts = chapterUrl.split("/")
+                    val resolveUrl = "${parts[0]}//${parts[2]}/resolve?p=/${parts.drop(3).joinToString("/")}"
+                    val resolveResponse = client.newCall(GET(resolveUrl, headers)).execute()
+                    val resolveJson = resolveResponse.body.string()
+                    val locationMatch = Regex(""""location"\s*:\s*"([^"]+)"""").find(resolveJson)
+                    val location = locationMatch?.groupValues?.get(1) ?: chapterUrl
+                    val parts2 = location.split("/")
+                    val base = "${parts2[0]}//${parts2[2]}"
+
+                    val metaResponse = client.newCall(
+                        GET("$base/api/chapter-meta?seriesSlug=${parts2[4]}&chapterSlug=${parts2[5]}", headers),
+                    ).execute()
+                    val metaJson = metaResponse.body.string()
+                    val idMatch = Regex(""""id"\s*:\s*(\d+)""").find(metaJson)
+                    val id = idMatch?.groupValues?.get(1) ?: throw Exception("Failed to get chapter id")
+
+                    val tokenResponse = client.newCall(GET("$base/api/chapters/$id/parts-token", headers)).execute()
+                    val tokenJson = tokenResponse.body.string()
+                    val tokenMatch = Regex(""""token"\s*:\s*"([^"]+)"""").find(tokenJson)
+                    val token = tokenMatch?.groupValues?.get(1) ?: throw Exception("Failed to get token")
+
+                    var total = 1
+                    var i = 1
+                    while (i <= total) {
+                        val partResponse = client.newCall(
+                            GET("$base/api/chapters/$id/parts?index=$i&token=$token", headers),
+                        ).execute()
+                        val partJson = partResponse.body.string()
+                        val markdownMatch = Regex(""""markdown"\s*:\s*"([\s\S]*?)(?<!\\)"""").find(partJson)
+                        val totalMatch = Regex(""""total"\s*:\s*(\d+)""").find(partJson)
+                        val markdown = markdownMatch?.groupValues?.get(1)?.replace("\\n", "\n")?.replace("\\\"", "\"") ?: ""
+                        total = totalMatch?.groupValues?.get(1)?.toIntOrNull() ?: 1
+                        chapterText += "<p>" + markdown.replace("\n\n", "</p><p>") + "</p>"
+                        i++
+                    }
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "raeitranslations" -> {
+                    val parts = chapterUrl.split("/")
+                    val apiUrl = "${parts[0]}//api.${parts[2]}/api/chapters/single?id=${parts[3]}&num=${parts[4]}"
+                    val response = client.newCall(GET(apiUrl, headers)).execute()
+                    val json = response.body.string()
+                    val chapTagMatch = Regex(""""chapTag"\s*:\s*"([^"]+)"""").find(json)
+                    val chapTitleMatch = Regex(""""chapTitle"\s*:\s*"([^"]+)"""").find(json)
+                    val bodyMatch = Regex(""""body"\s*:\s*"([\s\S]*?)(?<!\\)"""").find(json)
+                    val noteMatch = Regex(""""note"\s*:\s*"([\s\S]*?)(?<!\\)"""").find(json)
+                    val novelHeadMatch = Regex(""""novelHead"\s*:\s*"([\s\S]*?)(?<!\\)"""").find(json)
+                    val chapTag = chapTagMatch?.groupValues?.get(1) ?: ""
+                    val chapTitle = chapTitleMatch?.groupValues?.get(1) ?: ""
+                    val body = bodyMatch?.groupValues?.get(1)?.replace("\\n", "\n")?.replace("\\\"", "\"") ?: ""
+                    val note = noteMatch?.groupValues?.get(1)?.replace("\\n", "\n")?.replace("\\\"", "\"") ?: ""
+                    val novelHead = novelHeadMatch?.groupValues?.get(1)?.replace("\\n", "\n")?.replace("\\\"", "\"") ?: ""
+                    val titleElement = "Chapter $chapTag"
+                    chapterTitle = if (chapTitle.isNotEmpty()) "$titleElement - $chapTitle" else titleElement
+                    chapterContent = listOf(novelHead, "<br><hr><br>", body, "<br><hr><br>Translator's Note:<br>", note)
+                        .joinToString("").replace("\n", "<br>")
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "rainofsnow" -> {
+                    val displayedDiv = doc.select(".bb-item").firstOrNull { el ->
+                        el.attr("style").contains("display: block") || el.attr("style").contains("display:block")
+                    }
+                    val snowDoc = Jsoup.parse(displayedDiv?.html() ?: "")
+                    listOf(".responsivevoice-button", ".zoomdesc-cont p img", ".zoomdesc-cont p noscript")
+                        .forEach { snowDoc.select(it).remove() }
+                    val titleElement2 = snowDoc.select(".scroller h2").first()
+                    if (titleElement2 != null) {
+                        chapterTitle = titleElement2.text()
+                        titleElement2.remove()
+                    }
+                    chapterContent = snowDoc.select(".zoomdesc-cont").html()
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "readingpia" -> {
+                    listOf(".ezoic-ad", ".ezoic-adpicker-ad", ".ez-video-wrap").forEach { doc.select(it).remove() }
+                    chapterText = doc.select(".chapter-body").html()
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "redoxtranslation" -> {
+                    val chapterId = chapterUrl.split("/").last()
+                    chapterTitle = "Chapter $chapterId"
+                    val txtUrl = "${chapterUrl.split("chapter")[0]}txt/$chapterId.txt"
+                    val text = client.newCall(GET(txtUrl, headers)).execute().body.string()
+                    chapterContent = text.split("\n").joinToString("<br>") { sentence ->
+                        when {
+                            sentence.contains("{break}") -> "<br> <p>****</p>"
+                            else -> sentence
+                                .replace(Regex("""\*\*(.*?)\*\*"""), "<strong>$1</strong>")
+                                .replace(Regex("""\+\+(.*?)\+\+"""), "<em>$1</em>")
+                        }
+                    }
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "sacredtexttranslations" -> {
+                    listOf(".entry-content blockquote", ".entry-content div", ".reaction-buttons")
+                        .forEach { doc.select(it).remove() }
+                    chapterTitle = doc.select(".entry-title").first()?.text() ?: ""
+                    chapterContent = doc.select(".entry-content").html()
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "scribblehub" -> {
+                    doc.select(".wi_authornotes").remove()
+                    chapterTitle = doc.select(".chapter-title").first()?.text() ?: ""
+                    chapterContent = doc.select(".chp_raw").html()
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "skydemonorder" -> {
+                    val ageCheck = doc.select("main").text().lowercase()
+                    if (ageCheck.contains("age verification required")) {
+                        throw Exception("Age verification required, please open in webview.")
+                    }
+                    chapterTitle = doc.select("header .font-medium.text-sm").first()?.text()?.trim() ?: ""
+                    chapterContent = doc.select("#chapter-body").html()
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "stabbingwithasyringe" -> {
+                    val redirectUrl2 = doc.select(".entry-content a").first()?.attr("href") ?: ""
+                    val targetDoc2 = if (redirectUrl2.isNotEmpty()) {
+                        val resp = client.newCall(GET(redirectUrl2, headers)).execute()
+                        Jsoup.parse(resp.body.string(), redirectUrl2)
+                    } else doc
+                    listOf(".has-inline-color", ".wp-block-buttons", ".wpcnt", "#jp-post-flair")
+                        .forEach { targetDoc2.select(it).remove() }
+                    val titleElement3 = targetDoc2.select(".entry-content h3").first()
+                    if (titleElement3 != null) {
+                        chapterTitle = titleElement3.text()
+                        titleElement3.remove()
+                    }
+                    chapterContent = targetDoc2.select(".entry-content").html()
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "tinytranslation" -> {
+                    listOf(".content noscript", ".google_translate_element", ".navigate", ".post-views", "br")
+                        .forEach { doc.select(it).remove() }
+                    val titleEl = doc.select(".title-content").first()
+                    chapterTitle = titleEl?.text() ?: ""
+                    titleEl?.remove()
+                    chapterContent = doc.select(".content").html()
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "tumblr" -> {
+                    chapterText = doc.select(".post").html()
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "vampiramtl" -> {
+                    val redirectUrl3 = doc.select(".entry-content a").first()?.attr("href") ?: ""
+                    val targetDoc3 = if (redirectUrl3.isNotEmpty()) {
+                        val resp = client.newCall(GET(chapterUrl + redirectUrl3, headers)).execute()
+                        Jsoup.parse(resp.body.string(), chapterUrl + redirectUrl3)
+                    } else doc
+                    chapterTitle = targetDoc3.select(".entry-title").first()?.text() ?: ""
+                    chapterContent = targetDoc3.select(".entry-content").html()
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "wattpad" -> {
+                    chapterTitle = doc.select(".h2").first()?.text() ?: ""
+                    chapterContent = doc.select(".part-content pre").html()
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "webnovel" -> {
+                    chapterTitle = doc.select(".cha-tit .pr .dib").first()?.text() ?: ""
+                    chapterContent = doc.select(".cha-words").html().ifEmpty {
+                        doc.select("._content").html()
+                    }
+                }
+
+                "wetriedtls" -> {
+                    val scriptContent = doc.select("script:containsData(p dir=)").html().ifEmpty {
+                        doc.select("script:containsData(u003c)").html()
+                    }
+                    if (scriptContent.isNotEmpty()) {
+                        val pushIdx = scriptContent.indexOf(".push(") + ".push(".length
+                        val lastParen = scriptContent.lastIndexOf(")")
+                        if (pushIdx in 1 until lastParen) {
+                            // The second element of the pushed array is the HTML
+                            val jsonStr = scriptContent.substring(pushIdx, lastParen)
+                            val secondElemMatch = Regex("""^\[.*?,([\s\S]*)\]$""").find(jsonStr.trim())
+                            chapterText = secondElemMatch?.groupValues?.get(1)?.trim()?.removeSurrounding("\"") ?: ""
+                        }
+                    }
+                }
+
+                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                "wuxiaworld" -> {
+                    doc.select(".MuiLink-root").remove()
+                    chapterTitle = doc.select("h4 span").first()?.text() ?: ""
+                    chapterContent = doc.select(".chapter-content").html()
+                }
+
+                "yoru" -> {
+                    val chapterId = chapterUrl.split("/").last()
+                    val apiUrl = "https://pxp-main-531j.onrender.com/api/v1/book_chapters/$chapterId/content"
+                    val jsonUrl = client.newCall(GET(apiUrl, headers)).execute().body.string().trim().removeSurrounding("\"")
+                    chapterText = client.newCall(GET(jsonUrl, headers)).execute().body.string()
+                }
+
+                else -> {
+                    // Generic fallback - try common selectors
+                    val contentSelectors = listOf(
+                        ".chapter-content", ".entry-content", ".post-content", ".content",
+                        "#content", ".chapter__content", ".text_story", "article",
+                    )
+                    for (selector in contentSelectors) {
+                        val content = doc.select(selector).html()
+                        if (content.isNotEmpty() && content.length > 100) {
+                            chapterContent = content
+                            break
+                        }
+                    }
+                    val titleSelectors = listOf(".chapter-title", ".entry-title", "h1", "h2", ".title")
+                    for (selector in titleSelectors) {
+                        val t = doc.select(selector).first()?.text()
+                        if (!t.isNullOrEmpty()) {
+                            chapterTitle = t
+                            break
+                        }
+                    }
+                }
+            }
         } else {
-            chapterContent
+            val config = if (isWordPress) PLATFORM_CONFIG["wordpress"]!! else PLATFORM_CONFIG["blogspot"]!!
+
+            // Remove platform-specific bloat
+            config.bloat.forEach { doc.select(it).remove() }
+
+            // Extract Title
+            var resolvedTitle = config.title
+                .map { doc.select(it).first()?.text()?.trim() ?: "" }
+                .firstOrNull { it.isNotEmpty() }
+
+            // Handle Subtitles
+            val chapterSubtitle = doc.select(".cat-series").first()?.text()
+                ?: doc.select("h1.leading-none ~ span").first()?.text()
+                ?: doc.select(".breadcrumb .active").first()?.text()
+                ?: ""
+            if (chapterSubtitle.isNotEmpty()) resolvedTitle = chapterSubtitle
+
+            chapterTitle = resolvedTitle ?: ""
+
+            // Extract Content
+            chapterContent = config.content
+                .mapNotNull { sel ->
+                    val el = doc.select(sel).first()
+                    el?.html()?.takeIf { el.text().trim().length > 50 }
+                }
+                .firstOrNull() ?: ""
         }
+
+        if (chapterText.isEmpty()) {
+            chapterText = if (chapterTitle.isNotEmpty()) {
+                "<h2>$chapterTitle</h2><hr><br>$chapterContent"
+            } else {
+                chapterContent
+            }
+        }
+
+        // Fallback content extraction
+        if (chapterText.isEmpty()) {
+            doc.select("nav, header, footer, .hidden").remove()
+            chapterText = doc.select("body").html()
+        }
+
+        // Convert relative URLs to absolute
+        chapterText = chapterText.replace("href=\"/", "href=\"${getLocation(chapterUrl)}/")
+
+        // Process images — replace lazy-load attributes and strip noscript
+        val processedDoc = Jsoup.parse(chapterText)
+        processedDoc.select("noscript").remove()
+        processedDoc.select("img").forEach { el ->
+            val lazySrc = el.attr("data-lazy-src")
+            if (lazySrc.isNotEmpty()) el.attr("src", lazySrc)
+            val lazySrcset = el.attr("data-lazy-srcset")
+            if (lazySrcset.isNotEmpty()) el.attr("srcset", lazySrcset)
+            if (el.hasClass("lazyloaded")) el.removeClass("lazyloaded")
+        }
+
+        return processedDoc.html()
     }
 
     override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/series-ranking/?rank=popmonth&pg=$page", headers)
@@ -262,7 +849,9 @@ class NovelUpdates :
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val url = if (query.isNotEmpty()) {
-            val searchTerm = query.replace(Regex("[''']"), "'").replace(Regex("\\s+"), "+")
+            // Split on '*' and use the longest segment, matching TS behaviour
+            val longestTerm = query.split("*").maxByOrNull { it.length } ?: query
+            val searchTerm = longestTerm.replace(Regex("[''']"), "'").replace(Regex("\\s+"), "+")
             "$baseUrl/series-finder/?sf=1&sh=$searchTerm&sort=srank&order=asc&pg=$page"
         } else {
             buildFilterUrl(page, filters)
@@ -314,6 +903,10 @@ class NovelUpdates :
             val type = doc.select("#showtype").text().trim()
             val summary = doc.select("#editdescription").text().trim()
 
+            val ratingText = doc.select(".seriesother .uvotes").text()
+            val ratingMatch = Regex("""(\d+\.\d+) / \d+\.\d+""").find(ratingText)
+            val rating = ratingMatch?.groupValues?.get(1)?.toFloatOrNull()
+
             val tags = doc.select("#showtags a.genre").joinToString(", ") { it.text() }
 
             // Append tags to genre
@@ -325,6 +918,9 @@ class NovelUpdates :
                 append(summary)
                 if (type.isNotEmpty()) {
                     append("\n\nType: $type")
+                }
+                if (rating != null) {
+                    append("\n\nRating: $rating")
                 }
                 if (tags.isNotEmpty()) {
                     append("\n\nTags: $tags")
