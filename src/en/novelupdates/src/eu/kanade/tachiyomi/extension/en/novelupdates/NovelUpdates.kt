@@ -339,7 +339,9 @@ class NovelUpdates :
                     val targetDoc = if (redirectUrl.isNotEmpty()) {
                         val resp = client.newCall(GET(redirectUrl, headers)).execute()
                         Jsoup.parse(resp.body.string(), redirectUrl)
-                    } else doc
+                    } else {
+                        doc
+                    }
                     chapterContent = targetDoc.select(".entry-content").html()
                     chapterTitle = targetDoc.select(".entry-title").text()
                 }
@@ -381,7 +383,9 @@ class NovelUpdates :
                             ?: throw Exception("Chapter path not found.")
                         val resp = client.newCall(GET(redirectPath, headers)).execute()
                         Jsoup.parse(resp.body.string(), redirectPath)
-                    } else doc
+                    } else {
+                        doc
+                    }
                     chapterText = targetDoc.select(".entry-content").html()
                 }
 
@@ -631,9 +635,10 @@ class NovelUpdates :
                     chapterContent = text.split("\n").joinToString("<br>") { sentence ->
                         when {
                             sentence.contains("{break}") -> "<br> <p>****</p>"
-                            else -> sentence
-                                .replace(Regex("""\*\*(.*?)\*\*"""), "<strong>$1</strong>")
-                                .replace(Regex("""\+\+(.*?)\+\+"""), "<em>$1</em>")
+                            else ->
+                                sentence
+                                    .replace(Regex("""\*\*(.*?)\*\*"""), "<strong>$1</strong>")
+                                    .replace(Regex("""\+\+(.*?)\+\+"""), "<em>$1</em>")
                         }
                     }
                 }
@@ -669,7 +674,9 @@ class NovelUpdates :
                     val targetDoc2 = if (redirectUrl2.isNotEmpty()) {
                         val resp = client.newCall(GET(redirectUrl2, headers)).execute()
                         Jsoup.parse(resp.body.string(), redirectUrl2)
-                    } else doc
+                    } else {
+                        doc
+                    }
                     listOf(".has-inline-color", ".wp-block-buttons", ".wpcnt", "#jp-post-flair")
                         .forEach { targetDoc2.select(it).remove() }
                     val titleElement3 = targetDoc2.select(".entry-content h3").first()
@@ -701,7 +708,9 @@ class NovelUpdates :
                     val targetDoc3 = if (redirectUrl3.isNotEmpty()) {
                         val resp = client.newCall(GET(chapterUrl + redirectUrl3, headers)).execute()
                         Jsoup.parse(resp.body.string(), chapterUrl + redirectUrl3)
-                    } else doc
+                    } else {
+                        doc
+                    }
                     chapterTitle = targetDoc3.select(".entry-title").first()?.text() ?: ""
                     chapterContent = targetDoc3.select(".entry-content").html()
                 }
@@ -753,8 +762,14 @@ class NovelUpdates :
                 else -> {
                     // Generic fallback - try common selectors
                     val contentSelectors = listOf(
-                        ".chapter-content", ".entry-content", ".post-content", ".content",
-                        "#content", ".chapter__content", ".text_story", "article",
+                        ".chapter-content",
+                        ".entry-content",
+                        ".post-content",
+                        ".content",
+                        "#content",
+                        ".chapter__content",
+                        ".text_story",
+                        "article",
                     )
                     for (selector in contentSelectors) {
                         val content = doc.select(selector).html()
