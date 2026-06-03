@@ -436,7 +436,7 @@ class NovelUpdates :
                         .build()
 
                     // Next.js expects arguments prefixed with their array position index '0='
-                    val rscBody = """0=["$slug",$chapterNum]""".toRequestBody("text/plain;charset=UTF-8".toMediaType())
+                    val rscBody = """["$slug",$chapterNum]""".toRequestBody("text/plain;charset=UTF-8".toMediaType())
 
                     val rscResponse = client.newCall(
                         okhttp3.Request.Builder().url(chapterUrl).headers(rscHeaders).post(rscBody).build(),
