@@ -339,7 +339,9 @@ class NovelUpdates :
                     val targetDoc = if (redirectUrl.isNotEmpty()) {
                         val resp = client.newCall(GET(redirectUrl, headers)).execute()
                         Jsoup.parse(resp.body.string(), redirectUrl)
-                    } else doc
+                    } else {
+                        doc
+                    }
                     chapterContent = targetDoc.select(".entry-content").html()
                     chapterTitle = targetDoc.select(".entry-title").text()
                 }
@@ -381,7 +383,9 @@ class NovelUpdates :
                             ?: throw Exception("Chapter path not found.")
                         val resp = client.newCall(GET(redirectPath, headers)).execute()
                         Jsoup.parse(resp.body.string(), redirectPath)
-                    } else doc
+                    } else {
+                        doc
+                    }
                     chapterText = targetDoc.select(".entry-content").html()
                 }
 
@@ -397,19 +401,23 @@ class NovelUpdates :
                 // Last edited in 0.9.9 by Batorian - 09/05/2026
                 "mythoriatales" -> {
                     // Fetch script-2 to get the Next.js Server Action hash
-                    // TS uses loadedCheerio('script:contains("script-2")').html() which
-                    // returns the first matched element only, then matchAll finds ALL occurrences
-                    // of the pattern within that single script's text, taking index [1].
-                    // In practice the page has one large __next_f.push script containing all routes.
                     val scriptHtml = doc.select("script:containsData(script-2)").joinToString("") { it.html() }
                     if (scriptHtml.isEmpty()) throw Exception("Failed to find script-2")
-                    val matches2 = Regex(""""script-2.*?[^_]+([^\\]+)""").findAll(scriptHtml).toList()
-                    val scriptPath = matches2.getOrNull(1)?.groupValues?.get(1)
+
+                    // Match all instances of the script-2 pattern
+                    val matches2 = Regex(""""script-2.*?[^_]+([^"\\]+)""").findAll(scriptHtml).toList()
+
+                    // Emulate JS `matches[1]?.[1]`: get the second match, then grab its capture group
+                    val rawScriptPath = matches2.getOrNull(1)?.groupValues?.get(1)
                         ?: throw Exception("Failed to extract script-2 URL")
-                    val scriptUrl = chapterUrl.toHttpUrl().newBuilder()
-                        .encodedPath(scriptPath.substringBefore("?"))
-                        .encodedQuery(scriptPath.substringAfter("?", "").ifEmpty { null })
-                        .build().toString()
+
+                    // Clean up any remaining escaped slashes from NextJS payload formatting
+                    val scriptPath = rawScriptPath.replace("\\/", "/").trimStart('/')
+
+                    // Build URL safely via resolve()
+                    val scriptUrl = chapterUrl.toHttpUrl().resolve("/$scriptPath")?.toString()
+                        ?: throw Exception("Failed to build valid script URL")
+
                     val scriptText = client.newCall(GET(scriptUrl, headers)).execute().body.string()
                     val actionHash = Regex("[a-f0-9]{42}").find(scriptText)?.value
                         ?: throw Exception("Failed to extract ACTION_HASH")
@@ -418,15 +426,22 @@ class NovelUpdates :
                     val slug = urlParts2[4]
                     val chapterNum = urlParts2[6].toIntOrNull() ?: 0
 
+                    // Essential headers to prevent NextJS from dropping/blocking the action pipeline
                     val rscHeaders = headers.newBuilder()
                         .set("Accept", "text/x-component")
                         .set("Content-Type", "text/plain;charset=UTF-8")
                         .set("next-action", actionHash)
+                        .set("Origin", "https://" + chapterUrl.toHttpUrl().host)
+                        .set("Referer", chapterUrl)
                         .build()
-                    val rscBody = """["$slug",$chapterNum]""".toRequestBody("text/plain;charset=UTF-8".toMediaType())
+
+                    // Next.js expects arguments prefixed with their array position index '0='
+                    val rscBody = """0=["$slug",$chapterNum]""".toRequestBody("text/plain;charset=UTF-8".toMediaType())
+
                     val rscResponse = client.newCall(
                         okhttp3.Request.Builder().url(chapterUrl).headers(rscHeaders).post(rscBody).build(),
                     ).execute()
+
                     if (!rscResponse.isSuccessful) throw Exception("Failed to fetch chapter: ${rscResponse.code}")
 
                     val rscText = rscResponse.body.string().replace(Regex("""(\d+:[{TE])"""), "\n$1")
@@ -638,9 +653,10 @@ class NovelUpdates :
                     chapterContent = text.split("\n").joinToString("<br>") { sentence ->
                         when {
                             sentence.contains("{break}") -> "<br> <p>****</p>"
-                            else -> sentence
-                                .replace(Regex("""\*\*(.*?)\*\*"""), "<strong>$1</strong>")
-                                .replace(Regex("""\+\+(.*?)\+\+"""), "<em>$1</em>")
+                            else ->
+                                sentence
+                                    .replace(Regex("""\*\*(.*?)\*\*"""), "<strong>$1</strong>")
+                                    .replace(Regex("""\+\+(.*?)\+\+"""), "<em>$1</em>")
                         }
                     }
                 }
@@ -676,7 +692,9 @@ class NovelUpdates :
                     val targetDoc2 = if (redirectUrl2.isNotEmpty()) {
                         val resp = client.newCall(GET(redirectUrl2, headers)).execute()
                         Jsoup.parse(resp.body.string(), redirectUrl2)
-                    } else doc
+                    } else {
+                        doc
+                    }
                     listOf(".has-inline-color", ".wp-block-buttons", ".wpcnt", "#jp-post-flair")
                         .forEach { targetDoc2.select(it).remove() }
                     val titleElement3 = targetDoc2.select(".entry-content h3").first()
@@ -708,7 +726,9 @@ class NovelUpdates :
                     val targetDoc3 = if (redirectUrl3.isNotEmpty()) {
                         val resp = client.newCall(GET(chapterUrl + redirectUrl3, headers)).execute()
                         Jsoup.parse(resp.body.string(), chapterUrl + redirectUrl3)
-                    } else doc
+                    } else {
+                        doc
+                    }
                     chapterTitle = targetDoc3.select(".entry-title").first()?.text() ?: ""
                     chapterContent = targetDoc3.select(".entry-content").html()
                 }
@@ -760,8 +780,14 @@ class NovelUpdates :
                 else -> {
                     // Generic fallback - try common selectors
                     val contentSelectors = listOf(
-                        ".chapter-content", ".entry-content", ".post-content", ".content",
-                        "#content", ".chapter__content", ".text_story", "article",
+                        ".chapter-content",
+                        ".entry-content",
+                        ".post-content",
+                        ".content",
+                        "#content",
+                        ".chapter__content",
+                        ".text_story",
+                        "article",
                     )
                     for (selector in contentSelectors) {
                         val content = doc.select(selector).html()
