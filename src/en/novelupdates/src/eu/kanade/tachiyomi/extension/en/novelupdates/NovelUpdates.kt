@@ -125,7 +125,7 @@ class NovelUpdates :
         ).any { it }
 
         // Outlier sites that should NOT use the platform auto-detection path
-        // Last edited in 0.9.6 - 16/01/2026
+        // Last edited in version 3 by Batorian - 03/06/2026
         val outliers = listOf(
             "asuratls",
             "fictionread",
@@ -185,7 +185,7 @@ class NovelUpdates :
         if (!isWordPress && !isBlogspot) {
             // Per-site extraction
             when (targetDomain) {
-                // Last edited in 0.9.4 by Batorian - 15/10/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "akutranslations" -> {
                     val apiUrl = chapterUrl.replace("/novel", "/api/novel")
                     val response = client.newCall(GET(apiUrl, headers)).execute()
@@ -200,7 +200,7 @@ class NovelUpdates :
                         .joinToString("\n") { "<p>$it</p>" }
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "asuratls" -> {
                     val titleElement = doc.select(".post-body div b").first()
                     chapterTitle = titleElement?.text() ?: ""
@@ -208,7 +208,7 @@ class NovelUpdates :
                     chapterContent = doc.select(".post-body").html()
                 }
 
-                // Last edited in 0.9.2 by Batorian - 08/09/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "brightnovels" -> {
                     val dataPage = doc.select("#app").attr("data-page")
                     if (dataPage.isNullOrEmpty()) throw Exception("data-page attribute not found on Bright Novels.")
@@ -223,7 +223,7 @@ class NovelUpdates :
                     chapterText = "<h2>$extractedTitle</h2><hr><br>$cleaned"
                 }
 
-                // Last edited in 0.9.2 by Batorian - 08/09/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "canonstory" -> {
                     val parts = chapterUrl.split("/")
                     if (parts.size < 7) throw Exception("Invalid chapter URL structure")
@@ -242,7 +242,7 @@ class NovelUpdates :
                     chapterContent = content.replace("\n", "<br>")
                 }
 
-                // Last edited in 0.9.3 by Batorian - 09/09/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "daoist" -> {
                     chapterTitle = doc.select(".chapter__title").first()?.text() ?: ""
                     doc.select("span.patreon-lock-icon").remove()
@@ -256,7 +256,7 @@ class NovelUpdates :
                     chapterContent = doc.select(".chapter__content").html()
                 }
 
-                // Last edited in 0.9.6 by Batorian - 16/01/2026
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "dreamy-translations" -> {
                     chapterTitle = doc.select("h1 > span").first()?.text() ?: ""
                     val content = doc.select(".chapter-content > div").first()
@@ -264,7 +264,7 @@ class NovelUpdates :
                     chapterContent = content?.html() ?: ""
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "fictionread" -> {
                     listOf(".content > style", ".highlight-ad-container", ".meaning", ".word")
                         .forEach { doc.select(it).remove() }
@@ -278,8 +278,7 @@ class NovelUpdates :
                     chapterContent = doc.select(".content").html()
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
-                // remove any typing in 0.9.9 by K1ngfish3r - 04/05/2026, remove this comment if no issues
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "genesistudio" -> {
                     val apiUrl = "$chapterUrl/__data.json?x-sveltekit-invalidated=001"
                     val response = client.newCall(GET(apiUrl, headers)).execute()
@@ -299,7 +298,7 @@ class NovelUpdates :
                         footnotes
                 }
 
-                // Last edited in 0.9.6 by Batorian - 16/01/2026
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "greenz" -> {
                     val chapterSlug = chapterUrl.split("/").last()
                     val apiUrl = "https://greenz.com/api/chapters/slug/$chapterSlug"
@@ -316,19 +315,19 @@ class NovelUpdates :
                     chapterContent = Jsoup.parse(rawContent).html()
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "hiraethtranslation" -> {
                     chapterTitle = doc.select("li.active").first()?.text() ?: ""
                     chapterContent = doc.select(".text-left").html()
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "hostednovel" -> {
                     chapterTitle = doc.select("#chapter-title").first()?.text() ?: ""
                     chapterContent = doc.select("#chapter-content").html()
                 }
 
-                // Last edited in 0.9.5 by Batorian - 26/12/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "infinitenoveltranslations" -> {
                     val redirectUrl = doc.select("article > p > a").first()?.attr("href") ?: ""
                     val targetDoc = if (redirectUrl.isNotEmpty()) {
@@ -341,13 +340,13 @@ class NovelUpdates :
                     chapterTitle = targetDoc.select(".entry-title").text()
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "inoveltranslation" -> {
                     listOf("header", "section").forEach { doc.select(it).remove() }
                     chapterText = doc.select(".styles_content__JHK8G").html()
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 // mii translates
                 "isotls" -> {
                     listOf("footer", "header", "nav", ".ezoic-ad", ".ezoic-adpicker-ad", ".ezoic-videopicker-video")
@@ -356,20 +355,20 @@ class NovelUpdates :
                     chapterContent = doc.select("main article").html()
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "ko-fi" -> {
                     val scriptHtml = doc.select("script:containsData(shadowDom.innerHTML)").html()
                     val match = Regex("""shadowDom\.innerHTML \+= '(<div.*?)';""").find(scriptHtml)
                     if (match != null) chapterText = match.groupValues[1]
                 }
 
-                // Last edited in 0.9.6 by Batorian - 16/01/2026
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "leafstudio" -> {
                     chapterTitle = doc.select(".title").first()?.text() ?: ""
                     chapterContent = doc.select(".chapter_content").joinToString("") { it.outerHtml() }
                 }
 
-                // Last edited in 0.9.2 by Batorian - 08/09/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "machineslicedbread" -> {
                     val urlParts = chapterUrl.split("/").filter { it.isNotEmpty() }
                     val pathSegments = urlParts.drop(2)
@@ -384,7 +383,7 @@ class NovelUpdates :
                     chapterText = targetDoc.select(".entry-content").html()
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "mirilu" -> {
                     doc.select("#jp-post-flair").remove()
                     val titleElement = doc.select(".entry-content p strong").first()
@@ -393,7 +392,7 @@ class NovelUpdates :
                     chapterContent = doc.select(".entry-content").html()
                 }
 
-                // Last edited in 0.9.9 by Batorian - 09/05/2026
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "mythoriatales" -> {
                     // Fetch script-2 to get the Next.js Server Action hash
                     val scriptHtml = doc.select("script:containsData(script-2)").joinToString("") { it.html() }
@@ -470,13 +469,14 @@ class NovelUpdates :
                         .replace(Regex("""\[/?(dialogue|sfx)[^\]]*\]""", RegexOption.IGNORE_CASE), "")
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "novelplex" -> {
                     doc.select(".passingthrough_adreminder").remove()
                     chapterTitle = doc.select(".halChap--jud").first()?.text() ?: ""
                     chapterContent = doc.select(".halChap--kontenInner").html()
                 }
 
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "novelshub" -> {
                     val segments2 = chapterUrl.split("/")
                     val novelSlug = segments2[segments2.size - 2]
@@ -530,7 +530,7 @@ class NovelUpdates :
                     chapterContent = contentDoc.html()
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "novelworldtranslations" -> {
                     doc.select(".separator img").remove()
                     doc.select(".entry-content a").filter { el ->
@@ -546,14 +546,14 @@ class NovelUpdates :
                     chapterContent = contentDoc.html()
                 }
 
-                // Last edited in 0.9.8 by K1ngfish3r - 04/04/2026
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "patreon" -> {
                     doc.select("#track-click, [class*=\"hidden \"]").remove()
                     chapterTitle = doc.select("h1[data-tag=\"post-title\"]").text()
                     chapterContent = doc.select("[data-tag=\"post-card\"] [class*=\"PaddingTop\"]").html()
                 }
 
-                // Last edited in 0.9.7 by Batorian - 18/03/2026
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "r-p-d" -> {
                     val parts = chapterUrl.split("/")
                     val resolveUrl = "${parts[0]}//${parts[2]}/resolve?p=/${parts.drop(3).joinToString("/")}"
@@ -592,7 +592,7 @@ class NovelUpdates :
                     }
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "raeitranslations" -> {
                     val parts = chapterUrl.split("/")
                     val apiUrl = "${parts[0]}//api.${parts[2]}/api/chapters/single?id=${parts[3]}&num=${parts[4]}"
@@ -614,7 +614,7 @@ class NovelUpdates :
                         .joinToString("").replace("\n", "<br>")
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "rainofsnow" -> {
                     val displayedDiv = doc.select(".bb-item").firstOrNull { el ->
                         el.attr("style").contains("display: block") || el.attr("style").contains("display:block")
@@ -630,13 +630,13 @@ class NovelUpdates :
                     chapterContent = snowDoc.select(".zoomdesc-cont").html()
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "readingpia" -> {
                     listOf(".ezoic-ad", ".ezoic-adpicker-ad", ".ez-video-wrap").forEach { doc.select(it).remove() }
                     chapterText = doc.select(".chapter-body").html()
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "redoxtranslation" -> {
                     val chapterId = chapterUrl.split("/").last()
                     chapterTitle = "Chapter $chapterId"
@@ -653,7 +653,7 @@ class NovelUpdates :
                     }
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "sacredtexttranslations" -> {
                     listOf(".entry-content blockquote", ".entry-content div", ".reaction-buttons")
                         .forEach { doc.select(it).remove() }
@@ -661,14 +661,14 @@ class NovelUpdates :
                     chapterContent = doc.select(".entry-content").html()
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "scribblehub" -> {
                     doc.select(".wi_authornotes").remove()
                     chapterTitle = doc.select(".chapter-title").first()?.text() ?: ""
                     chapterContent = doc.select(".chp_raw").html()
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "skydemonorder" -> {
                     val ageCheck = doc.select("main").text().lowercase()
                     if (ageCheck.contains("age verification required")) {
@@ -678,7 +678,7 @@ class NovelUpdates :
                     chapterContent = doc.select("#chapter-body").html()
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "stabbingwithasyringe" -> {
                     val redirectUrl2 = doc.select(".entry-content a").first()?.attr("href") ?: ""
                     val targetDoc2 = if (redirectUrl2.isNotEmpty()) {
@@ -697,7 +697,7 @@ class NovelUpdates :
                     chapterContent = targetDoc2.select(".entry-content").html()
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "tinytranslation" -> {
                     listOf(".content noscript", ".google_translate_element", ".navigate", ".post-views", "br")
                         .forEach { doc.select(it).remove() }
@@ -707,12 +707,12 @@ class NovelUpdates :
                     chapterContent = doc.select(".content").html()
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "tumblr" -> {
                     chapterText = doc.select(".post").html()
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "vampiramtl" -> {
                     val redirectUrl3 = doc.select(".entry-content a").first()?.attr("href") ?: ""
                     val targetDoc3 = if (redirectUrl3.isNotEmpty()) {
@@ -725,13 +725,13 @@ class NovelUpdates :
                     chapterContent = targetDoc3.select(".entry-content").html()
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "wattpad" -> {
                     chapterTitle = doc.select(".h2").first()?.text() ?: ""
                     chapterContent = doc.select(".part-content pre").html()
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "webnovel" -> {
                     chapterTitle = doc.select(".cha-tit .pr .dib").first()?.text() ?: ""
                     chapterContent = doc.select(".cha-words").html().ifEmpty {
@@ -739,6 +739,7 @@ class NovelUpdates :
                     }
                 }
 
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "wetriedtls" -> {
                     val scriptContent = doc.select("script:containsData(p dir=)").html().ifEmpty {
                         doc.select("script:containsData(u003c)").html()
@@ -755,13 +756,14 @@ class NovelUpdates :
                     }
                 }
 
-                // Last edited in 0.9.0 by Batorian - 19/03/2025
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "wuxiaworld" -> {
                     doc.select(".MuiLink-root").remove()
                     chapterTitle = doc.select("h4 span").first()?.text() ?: ""
                     chapterContent = doc.select(".chapter-content").html()
                 }
 
+                // Last edited in version 3 by Batorian - 03/06/2026
                 "yoru" -> {
                     val chapterId = chapterUrl.split("/").last()
                     val apiUrl = "https://pxp-main-531j.onrender.com/api/v1/book_chapters/$chapterId/content"
