@@ -397,12 +397,19 @@ class NovelUpdates :
                 // Last edited in 0.9.9 by Batorian - 09/05/2026
                 "mythoriatales" -> {
                     // Fetch script-2 to get the Next.js Server Action hash
-                    val scriptHtml = doc.select("script:containsData(script-2)").first()?.html() ?: ""
+                    // TS uses loadedCheerio('script:contains("script-2")').html() which
+                    // returns the first matched element only, then matchAll finds ALL occurrences
+                    // of the pattern within that single script's text, taking index [1].
+                    // In practice the page has one large __next_f.push script containing all routes.
+                    val scriptHtml = doc.select("script:containsData(script-2)").joinToString("") { it.html() }
                     if (scriptHtml.isEmpty()) throw Exception("Failed to find script-2")
                     val matches2 = Regex(""""script-2.*?[^_]+([^\\]+)""").findAll(scriptHtml).toList()
                     val scriptPath = matches2.getOrNull(1)?.groupValues?.get(1)
                         ?: throw Exception("Failed to extract script-2 URL")
-                    val scriptUrl = chapterUrl.toHttpUrl().newBuilder().encodedPath("/$scriptPath").build().toString()
+                    val scriptUrl = chapterUrl.toHttpUrl().newBuilder()
+                        .encodedPath(scriptPath.substringBefore("?"))
+                        .encodedQuery(scriptPath.substringAfter("?", "").ifEmpty { null })
+                        .build().toString()
                     val scriptText = client.newCall(GET(scriptUrl, headers)).execute().body.string()
                     val actionHash = Regex("[a-f0-9]{42}").find(scriptText)?.value
                         ?: throw Exception("Failed to extract ACTION_HASH")
