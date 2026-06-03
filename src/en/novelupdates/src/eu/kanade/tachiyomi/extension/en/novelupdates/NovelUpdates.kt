@@ -16,6 +16,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import okhttp3.FormBody
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
@@ -87,12 +88,6 @@ class NovelUpdates :
 
     companion object {
         private const val PREF_RETURN_FULL_HTML = "pref_return_full_html"
-    }
-
-    private fun getLocation(href: String): String {
-        val regex = Regex("""^(https?:)//([^/?#]*)""")
-        val match = regex.find(href)
-        return if (match != null) "${match.groupValues[1]}//${match.groupValues[2]}" else ""
     }
 
     private fun getChapterBody(doc: Document, domain: List<String>, chapterUrl: String): String {
@@ -453,12 +448,6 @@ class NovelUpdates :
 
                     if (contentSegment.isEmpty()) throw Exception("Could not find chapter content segment in stream.")
 
-                    val lines = contentSegment.trim()
-                        .split(Regex("""(?:\r?\n|\\n)+"""))
-                        .map { it.trim() }.filter { it.isNotEmpty() }
-
-                    if (lines.isEmpty()) throw Exception("Parsed content is empty.")
-
                     val metaSegment = segments.find { it.startsWith("1:") }
                     if (metaSegment != null) {
                         try {
@@ -472,7 +461,10 @@ class NovelUpdates :
                     }
                     if (chapterTitle.isEmpty()) chapterTitle = "Chapter $chapterNum"
 
-                    chapterContent = lines.joinToString("\n") { "<p>$it</p>" }
+                    chapterContent = contentSegment.lineSequence()
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .joinToString("\n") { "<p>$it</p>" }
                         .replace(Regex("""\[dialogue\s+speaker="([^"]*)"\](.*?)\[/dialogue\]""", RegexOption.IGNORE_CASE), "$1: $2")
                         .replace(Regex("""\[sfx\].*?\[/sfx\]""", RegexOption.IGNORE_CASE), "")
                         .replace(Regex("""\[/?(dialogue|sfx)[^\]]*\]""", RegexOption.IGNORE_CASE), "")
@@ -850,7 +842,10 @@ class NovelUpdates :
         }
 
         // Convert relative URLs to absolute
-        chapterText = chapterText.replace("href=\"/", "href=\"${getLocation(chapterUrl)}/")
+        val url = chapterUrl.toHttpUrl()
+        val baseOrigin = "${url.scheme}://${url.host}${if (url.port != HttpUrl.defaultPort(url.scheme)) ":${url.port}" else ""}"
+
+        chapterText = chapterText.replace("href=\"/", "href=\"$baseOrigin/")
 
         // Process images — replace lazy-load attributes and strip noscript
         val processedDoc = Jsoup.parse(chapterText)
@@ -936,10 +931,6 @@ class NovelUpdates :
             val type = doc.select("#showtype").text().trim()
             val summary = doc.select("#editdescription").text().trim()
 
-            val ratingText = doc.select(".seriesother .uvotes").text()
-            val ratingMatch = Regex("""(\d+\.\d+) / \d+\.\d+""").find(ratingText)
-            val rating = ratingMatch?.groupValues?.get(1)?.toFloatOrNull()
-
             val tags = doc.select("#showtags a.genre").joinToString(", ") { it.text() }
 
             // Append tags to genre
@@ -951,9 +942,6 @@ class NovelUpdates :
                 append(summary)
                 if (type.isNotEmpty()) {
                     append("\n\nType: $type")
-                }
-                if (rating != null) {
-                    append("\n\nRating: $rating")
                 }
                 if (tags.isNotEmpty()) {
                     append("\n\nTags: $tags")
