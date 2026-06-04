@@ -286,8 +286,7 @@ class NovelUpdates :
         return resolved
     }
 
-    private fun cacheKey(url: String): String =
-        url.removePrefix(baseUrl).substringBefore('?').trimEnd('/')
+    private fun cacheKey(url: String): String = url.removePrefix(baseUrl).substringBefore('?').trimEnd('/')
 
     private fun loadNovelIdCache(): Map<String, String> {
         synchronized(novelIdCache) {
