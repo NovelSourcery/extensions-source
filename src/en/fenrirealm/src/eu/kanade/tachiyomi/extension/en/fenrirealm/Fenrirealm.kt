@@ -309,19 +309,16 @@ class Fenrirealm :
             ?: doc.selectFirst("div[role=region][id^=reader-area]")
             ?: return ""
 
-        val result = StringBuilder()
-
-        for (element in readerArea.children()) {
-            val html = element.outerHtml()
-            if (html.contains("What do you think", ignoreCase = true) ||
-                html.contains("comment", ignoreCase = true)
-            ) {
-                break
-            }
-            result.append(html)
+        // Strip real comment/reaction sections structurally. Never match on prose
+        // text: a chapter sentence containing the word "comment" used to cut the
+        // rest of the chapter off.
+        readerArea.select("#comments").forEach { it.remove() }
+        readerArea.select("h3:containsOwn(What do you think)").forEach { heading ->
+            val section = heading.parents().firstOrNull { it.parent() === readerArea }
+            (section ?: heading).remove()
         }
 
-        return result.toString()
+        return readerArea.children().joinToString("") { it.outerHtml() }
     }
 
     override fun getFilterList(): FilterList = FilterList(
