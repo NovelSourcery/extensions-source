@@ -48,7 +48,7 @@ open class Fictioneer(
                 thumbnail_url = element.selectFirst("a.cell-img:has(img)")?.attr("href")
             }
         }
-        val hasNext = doc.selectFirst(".page-numbers .next") != null
+        val hasNext = doc.selectFirst("a.next.page-numbers") != null
         return MangasPage(novels, hasNext)
     }
 
@@ -116,7 +116,7 @@ open class Fictioneer(
                     this.url = url.replace(baseUrl, "").trimEnd('/')
                     name = linkEl.text().trim()
                 }
-            }
+            }.reversed()
     }
 
     // -- Pages --
