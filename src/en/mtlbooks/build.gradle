@@ -1,7 +1,7 @@
 ext {
     extName = 'MtlBooks'
     extClass = '.MtlBooks'
-    extVersionCode = 1
+    extVersionCode = 2
     isNovel = true
 }
 

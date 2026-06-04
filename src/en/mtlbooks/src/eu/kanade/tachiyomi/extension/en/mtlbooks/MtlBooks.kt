@@ -76,6 +76,17 @@ class MtlBooks :
     // ======================== Search ========================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+        if (query.startsWith("http")) {
+            val slug = query.substringAfter("/novel/", "")
+                .substringBefore('?')
+                .substringBefore('#')
+                .trim('/')
+                .substringBefore('/')
+            if (slug.isNotBlank()) {
+                return GET("$apiUrl/novels/$slug", headers)
+            }
+        }
+
         val params = mutableListOf<String>()
         params.add("page=$page")
 
@@ -164,13 +175,29 @@ class MtlBooks :
         return GET(url, headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
+    override fun searchMangaParse(response: Response): MangasPage {
+        // Single-novel lookup from a URL search
+        if (response.request.url.encodedPath.contains("/novels/")) {
+            return try {
+                MangasPage(listOf(mangaDetailsParse(response)), false)
+            } catch (_: Exception) {
+                MangasPage(emptyList(), false)
+            }
+        }
+        return popularMangaParse(response)
+    }
     // ======================== Details ========================
 
     override fun mangaDetailsRequest(manga: SManga): Request {
         val slug = manga.url.substringAfter("/novel/")
         return GET("$apiUrl/novels/$slug", headers)
     }
+
+    // Webview should open the site page, not the JSON API endpoint
+    override fun getMangaUrl(manga: SManga): String = baseUrl + manga.url
+
+    // chapter.url is the site path; strip the "/chapter/" segment of legacy entries
+    override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapter.url.replace("/chapter/", "/")
 
     override fun mangaDetailsParse(response: Response): SManga {
         val apiResponse = json.decodeFromString<NovelDetailResponse>(response.body.string())
@@ -214,7 +241,7 @@ class MtlBooks :
         firstPage.result.chapterLists.forEach { ch ->
             chapters.add(
                 SChapter.create().apply {
-                    url = "/novel/$novelSlug/chapter/${ch.chapterSlug}"
+                    url = "/novel/$novelSlug/${ch.chapterSlug}"
                     name = ch.chapterTitle
                     chapter_number = ch.chapterNumber.toFloat()
                 },
@@ -234,7 +261,7 @@ class MtlBooks :
                 pageData.result.chapterLists.forEach { ch ->
                     chapters.add(
                         SChapter.create().apply {
-                            url = "/novel/$novelSlug/chapter/${ch.chapterSlug}"
+                            url = "/novel/$novelSlug/${ch.chapterSlug}"
                             name = ch.chapterTitle
                             chapter_number = ch.chapterNumber.toFloat()
                         },
@@ -250,9 +277,10 @@ class MtlBooks :
     // ======================== Pages ========================
 
     override fun pageListRequest(chapter: SChapter): Request {
-        val parts = chapter.url.split("/")
-        val novelSlug = parts.getOrNull(2) ?: ""
-        val chapterSlug = parts.getOrNull(4) ?: ""
+        // "/novel/<slug>/<chapterSlug>" (current) or "/novel/<slug>/chapter/<chapterSlug>" (legacy)
+        val parts = chapter.url.trim('/').split("/")
+        val novelSlug = parts.getOrNull(1) ?: ""
+        val chapterSlug = parts.lastOrNull() ?: ""
 
         val body = json.encodeToString(
             ChapterReadRequest.serializer(),
