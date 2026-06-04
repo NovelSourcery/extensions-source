@@ -1,7 +1,7 @@
 ext {
     extName = 'NovelHall'
     extClass = '.NovelHall'
-    extVersionCode = 1
+    extVersionCode = 2
     isNovel = true
 }
 

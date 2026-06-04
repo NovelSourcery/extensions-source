@@ -163,7 +163,19 @@ class NovelHall :
 
             thumbnail_url = document.selectFirst("meta[property=og:image]")?.attr("content")
 
-            description = document.selectFirst(".intro")?.text()?.trim()
+            // The full untruncated synopsis lives in the hidden js-close-wrap span
+            description = (
+                document.selectFirst("span.js-close-wrap")
+                    ?: document.selectFirst(".intro")
+                )?.let { el ->
+                el.select("br").forEach { it.after("\\n") }
+                el.select("p").forEach { it.after("\\n\\n") }
+                el.text()
+                    .replace("\\n", "\n")
+                    .replace(Regex(" *\n *"), "\n")
+                    .replace(Regex("\n{3,}"), "\n\n")
+                    .trim()
+            }
 
             // Parse author - remove "Author：" prefix
             val totalSection = document.selectFirst(".total")
@@ -209,7 +221,7 @@ class NovelHall :
 
         // Chapters on NovelHall are in ascending order (oldest first)
         // Return in descending order (newest first) for consistency
-        return chapters
+        return chapters.reversed()
     }
 
     // ======================== Pages ========================
