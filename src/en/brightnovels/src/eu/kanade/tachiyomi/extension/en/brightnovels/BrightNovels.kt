@@ -51,7 +51,30 @@ class BrightNovels :
         isLenient = true
     }
 
-    override val client = network.cloudflareClient
+    override val client = network.cloudflareClient.newBuilder()
+        .addInterceptor { chain ->
+            val request = chain.request()
+            val response = chain.proceed(request)
+
+            // Inertia returns 409 Conflict when the cached asset version is stale
+            // (site got redeployed). Drop the stale version and retry as a plain
+            // HTML request.
+            if (response.code == 409 && request.header("X-Inertia") != null) {
+                response.close()
+                preferences.edit().remove(PREF_INERTIA_VERSION).apply()
+                val htmlRequest = request.newBuilder()
+                    .removeHeader("X-Inertia")
+                    .removeHeader("X-Inertia-Version")
+                    .removeHeader("X-Inertia-Partial-Component")
+                    .removeHeader("X-Inertia-Partial-Data")
+                    .removeHeader("X-Requested-With")
+                    .build()
+                chain.proceed(htmlRequest)
+            } else {
+                response
+            }
+        }
+        .build()
 
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
