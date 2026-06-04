@@ -15,9 +15,11 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.setAltTitles
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonArray
@@ -33,6 +35,8 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import org.jsoup.Jsoup
+import org.jsoup.parser.Parser
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
@@ -83,7 +87,7 @@ class FictionZone :
         return preferences.getString("fz_access_token", null)
     }
 
-    private fun apiRequest(path: String, method: String = "GET", includeAuth: Boolean = true): Request {
+    private fun apiRequest(path: String, method: String = "GET", includeAuth: Boolean = true, bodyJson: JsonObject? = null): Request {
         val timestamp = java.time.Instant.now().toString()
         val headers = buildJsonArray {
             add(
@@ -115,6 +119,9 @@ class FictionZone :
             put("path", JsonPrimitive(path))
             put("headers", headers)
             put("method", JsonPrimitive(method))
+            if (bodyJson != null) {
+                put("body", bodyJson)
+            }
         }
 
         val requestBody = body.toString().toRequestBody("application/json".toMediaType())
@@ -127,6 +134,10 @@ class FictionZone :
         val jsonString = response.body.string()
         val jsonObject = json.parseToJsonElement(jsonString).jsonObject
         val data = jsonObject["data"]?.jsonObject ?: return MangasPage(emptyList(), false)
+        return parseBrowseData(data)
+    }
+
+    private fun parseBrowseData(data: JsonObject): MangasPage {
         val novels = data["novels"]?.jsonArray ?: return MangasPage(emptyList(), false)
 
         val mangas = novels.mapNotNull { element ->
@@ -146,8 +157,14 @@ class FictionZone :
                         "/novel/unknown"
                     }
 
+                    // Omniportal entries keep this as the only synopsis source
+                    obj["synopsis"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }?.let {
+                        description = formatDescription(it)
+                    }
+
                     thumbnail_url = try {
-                        val img = obj["image"]?.jsonPrimitive?.contentOrNull ?: obj["cover_image"]?.jsonPrimitive?.contentOrNull
+                        val img = obj["image"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                            ?: obj["cover_image"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
                         if (img != null) {
                             if (img.startsWith("http")) img else "https://cdn.fictionzone.net/insecure/rs:fill:165:250/$img.webp"
                         } else {
@@ -162,8 +179,15 @@ class FictionZone :
             }
         }
 
+        // Platform responses carry has_next; omniportal ones only page/total_pages
+        // (their has_more field is unreliable)
         val pagination = data["pagination"]?.jsonObject
-        val hasNext = pagination?.get("has_next")?.jsonPrimitive?.boolean ?: false
+        val hasNext = pagination?.get("has_next")?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
+            ?: run {
+                val page = pagination?.get("page")?.jsonPrimitive?.int
+                val totalPages = pagination?.get("total_pages")?.jsonPrimitive?.int
+                page != null && totalPages != null && page < totalPages
+            }
 
         return MangasPage(mangas, hasNext)
     }
@@ -173,6 +197,17 @@ class FictionZone :
     override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+        // AI semantic search — text query only, other filters don't apply
+        val aiSearch = filters.find { it is AiSearchFilter } as? AiSearchFilter
+        if (aiSearch?.state == true && query.isNotBlank()) {
+            val body = buildJsonObject {
+                put("query", JsonPrimitive(query))
+                put("limit", JsonPrimitive(20))
+                put("offset", JsonPrimitive((page - 1) * 20))
+            }
+            return apiRequest("/ai/search", "POST", includeAuth = false, bodyJson = body)
+        }
+
         val sourceFilter = filters.find { it is SourceFilter } as? SourceFilter
         val sourceId = sourceFilter?.toUriPart() ?: "fictionzone"
 
@@ -181,9 +216,9 @@ class FictionZone :
 
             else -> {
                 if (query.isNotEmpty()) {
-                    apiRequest("/omniportal/search?source_id=$sourceId&query=${java.net.URLEncoder.encode(query, "UTF-8")}&page=$page&translate=en", "GET", includeAuth = true)
+                    apiRequest("/omniportal/search?source_id=$sourceId&query=${java.net.URLEncoder.encode(query, "UTF-8")}&page=$page&translate=en&engine=google-trans", "GET", includeAuth = true)
                 } else {
-                    apiRequest("/omniportal/browse?source_id=$sourceId&page=$page&translate=en", "GET", includeAuth = true)
+                    apiRequest("/omniportal/browse/genre?source_id=$sourceId&genre=all&page=$page&translate=en&engine=google-trans", "GET", includeAuth = true)
                 }
             }
         }
@@ -194,6 +229,7 @@ class FictionZone :
         params.add("page=$page")
         params.add("page_size=20")
         params.add("include_genres=true")
+        params.add("include_tags=true")
 
         if (query.isNotEmpty()) {
             params.add("search=${java.net.URLEncoder.encode(query, "UTF-8")}")
@@ -206,6 +242,18 @@ class FictionZone :
                     val sort = filter.toUriPart()
                     params.add("sort_by=${sort.first}")
                     params.add("sort_order=${sort.second}")
+                }
+
+                is StatusSelectFilter -> {
+                    filter.toUriPart()?.let { params.add("status_filter=$it") }
+                }
+
+                is WordCountMinFilter -> {
+                    filter.state.trim().toIntOrNull()?.let { params.add("word_count_min=$it") }
+                }
+
+                is WordCountMaxFilter -> {
+                    filter.state.trim().toIntOrNull()?.let { params.add("word_count_max=$it") }
                 }
 
                 is GenreFilter -> {
@@ -226,7 +274,35 @@ class FictionZone :
         return apiRequest("/platform/browse?${params.joinToString("&")}")
     }
 
-    override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
+    override fun searchMangaParse(response: Response): MangasPage {
+        val jsonString = response.body.string()
+        val jsonObject = json.parseToJsonElement(jsonString).jsonObject
+        val data = jsonObject["data"]?.jsonObject ?: return MangasPage(emptyList(), false)
+
+        // AI search responses carry data.results instead of data.novels
+        data["results"]?.jsonArray?.let { results ->
+            val mangas = results.mapNotNull { element ->
+                try {
+                    val obj = element.jsonObject
+                    val slug = obj["slug"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                    SManga.create().apply {
+                        title = obj["title"]?.jsonPrimitive?.contentOrNull ?: slug
+                        url = "/novel/$slug"
+                        description = obj["synopsis"]?.jsonPrimitive?.contentOrNull
+                            ?.let { formatDescription(it) }
+                        thumbnail_url = obj["cover_image_url"]?.jsonPrimitive?.contentOrNull
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { "https://cdn.fictionzone.net/insecure/rs:fill:165:250/$it.webp" }
+                    }
+                } catch (_: Exception) {
+                    null
+                }
+            }
+            return MangasPage(mangas, mangas.size >= 20)
+        }
+
+        return parseBrowseData(data)
+    }
     override fun getMangaUrl(manga: SManga): String = baseUrl + manga.url
     override fun mangaDetailsRequest(manga: SManga): Request {
         if (manga.url.startsWith("/omniportal/")) {
@@ -259,11 +335,10 @@ class FictionZone :
                 ?.filter { it.isNotBlank() && it != title }
                 ?: emptyList()
 
-            val synopsis = data["synopsis"]?.jsonPrimitive?.contentOrNull
-            description = if (altTitlesList.isNotEmpty()) {
-                "Alternative Titles: ${altTitlesList.joinToString(", ")}\n\n$synopsis"
-            } else {
-                synopsis ?: ""
+            val synopsis = formatDescription(data["synopsis"]?.jsonPrimitive?.contentOrNull.orEmpty())
+            description = synopsis
+            if (altTitlesList.isNotEmpty()) {
+                setAltTitles(altTitlesList)
             }
 
             val genresList = data["genres"]?.jsonArray?.mapNotNull { element ->
@@ -294,7 +369,8 @@ class FictionZone :
                 }
             }
 
-            val img = data["image"]?.jsonPrimitive?.contentOrNull ?: data["cover_image"]?.jsonPrimitive?.contentOrNull
+            val img = data["image"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                ?: data["cover_image"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
             if (img != null) {
                 thumbnail_url = if (img.startsWith("http")) img else "https://cdn.fictionzone.net/insecure/rs:fill:165:250/$img.webp"
             }
@@ -312,7 +388,7 @@ class FictionZone :
                 val parts = manga.url.removePrefix("/omniportal/").split("/")
                 val srcId = parts[0]
                 val srcKey = parts[1]
-                val req = apiRequest("/omniportal/novels/chapters?source_id=$srcId&source_key=$srcKey&translate=en")
+                val req = apiRequest("/omniportal/novels/chapters?source_id=$srcId&source_key=$srcKey&translate=en&engine=google-trans")
                 Quadruple(req, "", srcId, srcKey)
             } else {
                 val detailsRequest = mangaDetailsRequest(manga)
@@ -327,7 +403,24 @@ class FictionZone :
             val jsonString = response.body.string()
             val jsonObject = json.parseToJsonElement(jsonString).jsonObject
             val data = jsonObject["data"]?.jsonObject ?: return@fromCallable emptyList<SChapter>()
-            val chapters = data["chapters"]?.jsonArray ?: return@fromCallable emptyList<SChapter>()
+            val chapters = data["chapters"]?.jsonArray?.toMutableList() ?: return@fromCallable emptyList<SChapter>()
+
+            // Omniportal chapter lists are paginated
+            if (isOmniportal) {
+                val totalPages = data["pagination"]?.jsonObject?.get("total_pages")?.jsonPrimitive?.int ?: 1
+                for (p in 2..totalPages) {
+                    try {
+                        val pageReq = apiRequest(
+                            "/omniportal/novels/chapters?source_id=$sourceId&source_key=$sourceKey&translate=en&engine=google-trans&page=$p",
+                        )
+                        val pageRes = client.newCall(pageReq).execute()
+                        val pageData = json.parseToJsonElement(pageRes.body.string()).jsonObject["data"]?.jsonObject
+                        pageData?.get("chapters")?.jsonArray?.let { chapters.addAll(it) }
+                    } catch (_: Exception) {
+                        break
+                    }
+                }
+            }
 
             chapters.map { element ->
                 val obj = element.jsonObject
@@ -335,12 +428,15 @@ class FictionZone :
                     name = obj["title"]!!.jsonPrimitive.content
                     val chapterId = obj["chapter_id"]!!.jsonPrimitive.content
 
+                    // Site chapter paths, so webview works; fetchPageText maps
+                    // them back onto the API endpoints
                     url = if (isOmniportal) {
                         val respSourceId = data["source_id"]?.jsonPrimitive?.contentOrNull ?: sourceId
                         val respSourceKey = data["source_key"]?.jsonPrimitive?.contentOrNull ?: sourceKey
-                        "/omniportal/chapters/content?source_id=$respSourceId&source_key=$respSourceKey&chapter_id=$chapterId&translate=en"
+                        "/omniportal/$respSourceId/$respSourceKey/$chapterId"
                     } else {
-                        "/platform/chapter-content?novel_id=$novelId&chapter_id=$chapterId"
+                        val slug = manga.url.removePrefix("/novel/").trim('/')
+                        "/novel/$slug/$chapterId?novel_id=$novelId"
                     }
 
                     date_upload = try {
@@ -367,10 +463,35 @@ class FictionZone :
 
     override fun fetchPageList(chapter: SChapter): rx.Observable<List<Page>> = rx.Observable.just(listOf(Page(0, chapter.url)))
 
+    // chapter.url is the site path; strip the helper novel_id query for webview
+    override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapter.url.substringBefore('?')
+
     override suspend fun fetchPageText(page: Page): String {
-        // Platform: "/platform/chapter-content?novel_id=15752&chapter_id=1136402"
-        // Omniportal: "/omniportal/chapters/content?source_id=fq&source_key=123&chapter_id=456&translate=en"
-        val apiPath = page.url
+        // Current formats (site paths):
+        //   Platform:   "/novel/<slug>/<chapter_id>?novel_id=<id>"
+        //   Omniportal: "/omniportal/<source_id>/<source_key>/<chapter_id>"
+        // Legacy formats (raw API paths) pass through untouched.
+        val raw = page.url
+        val apiPath = when {
+            raw.startsWith("/platform/") -> raw
+
+            // Legacy raw API paths: make sure the engine param is present
+            raw.startsWith("/omniportal/chapters/") ->
+                if (raw.contains("engine=")) raw else "$raw&engine=google-trans"
+
+            raw.startsWith("/omniportal/") -> {
+                val parts = raw.substringBefore('?').trim('/').split("/")
+                "/omniportal/chapters/content?source_id=${parts[1]}&source_key=${parts[2]}&chapter_id=${parts[3]}&translate=en&engine=google-trans"
+            }
+
+            raw.startsWith("/novel/") -> {
+                val novelId = raw.substringAfter("novel_id=", "").substringBefore('&')
+                val chapterId = raw.substringBefore('?').trimEnd('/').substringAfterLast('/')
+                "/platform/chapter-content?novel_id=$novelId&chapter_id=$chapterId"
+            }
+
+            else -> raw
+        }
 
         val requiresAuth = apiPath.contains("/platform/")
         val request = apiRequest(apiPath, "GET", includeAuth = requiresAuth)
@@ -415,6 +536,42 @@ class FictionZone :
     private fun looksLikeHtml(text: String): Boolean = Regex("<\\s*(p|br|div|span|h[1-6]|ul|ol|li|blockquote|img|a)\\b", RegexOption.IGNORE_CASE)
         .containsMatchIn(text)
 
+    /**
+     * Converts a synopsis into plain text while preserving paragraph breaks:
+     * handles raw HTML (<p>, <br>, <div>, <li>), escaped "\n" sequences and
+     * plain-text line breaks.
+     */
+    private fun formatDescription(raw: String): String {
+        if (raw.isBlank()) return ""
+
+        val normalized = raw
+            .replace("\\r\\n", "\n")
+            .replace("\\n", "\n")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+
+        if (!normalized.contains('<')) {
+            // Plain text — keep its own line breaks
+            return normalized
+                .replace(Regex(" *\n *"), "\n")
+                .replace(Regex("\n{3,}"), "\n\n")
+                .trim()
+        }
+
+        val breakToken = "__FZ_BR__"
+        val paragraphToken = "__FZ_P__"
+        val doc = Jsoup.parseBodyFragment(Parser.unescapeEntities(normalized, false))
+        doc.select("br").forEach { it.after(breakToken) }
+        doc.select("p, div, li").forEach { it.after(paragraphToken) }
+
+        return doc.text()
+            .replace(' ', ' ')
+            .replace(Regex("\\s*$paragraphToken\\s*"), "\n\n")
+            .replace(Regex("\\s*$breakToken\\s*"), "\n")
+            .replace(Regex("\n{3,}"), "\n\n")
+            .trim()
+    }
+
     private fun escapeHtml(text: String): String = buildString(text.length + 16) {
         text.forEach { ch ->
             when (ch) {
@@ -432,26 +589,39 @@ class FictionZone :
     override fun getFilterList(): FilterList {
         val filters = mutableListOf<Filter<*>>()
 
+        filters.add(AiSearchFilter())
+        filters.add(Filter.Separator())
         filters.add(SortFilter())
+        filters.add(StatusSelectFilter())
+        filters.add(WordCountMinFilter())
+        filters.add(WordCountMaxFilter())
 
+        val sources = getSources()
+        val genres = getGenres()
+        val tags = getTags()
+
+        // Populate the caches on first use, or every time when the pref is on
         val alwaysRefresh = preferences.getBoolean("always_refresh_metadata", false)
-        if (alwaysRefresh) {
+        if (alwaysRefresh || sources.isEmpty() || genres.isEmpty() || tags.isEmpty()) {
             Thread { refreshMetadata() }.start()
         }
 
-        val sources = getSources()
         if (sources.isNotEmpty()) {
+            filters.add(Filter.Separator())
+            filters.add(Filter.Header("Omniportal sections (browse external portals)"))
             filters.add(SourceFilter(sources))
         }
 
-        val genres = getGenres()
         if (genres.isNotEmpty()) {
             filters.add(GenreFilter(genres))
         }
 
-        val tags = getTags()
         if (tags.isNotEmpty()) {
             filters.add(TagFilter(tags))
+        }
+
+        if (sources.isEmpty() && genres.isEmpty() && tags.isEmpty()) {
+            filters.add(Filter.Header("Filter data is downloading, reopen filters shortly"))
         }
 
         return FilterList(filters)
@@ -548,6 +718,25 @@ class FictionZone :
             summary = "When enabled, fetches latest sources, genres, and tags each time filters are loaded. When disabled, uses cached data."
             setDefaultValue(false)
         }.also(screen::addPreference)
+
+        SwitchPreferenceCompat(screen.context).apply {
+            key = "reset_metadata_cache"
+            title = "Reset filter cache"
+            summary = "Toggle to clear cached omniportal sources, genres and tags. They re-download the next time filters open."
+            setDefaultValue(false)
+            setOnPreferenceChangeListener { _, newValue ->
+                if (newValue as Boolean) {
+                    preferences.edit()
+                        .remove("sources_cache")
+                        .remove("genres_cache")
+                        .remove("tags_cache")
+                        .apply()
+                    false
+                } else {
+                    true
+                }
+            }
+        }.also(screen::addPreference)
     }
 
     class SortFilter :
@@ -567,7 +756,7 @@ class FictionZone :
         ) {
         fun toUriPart(): Pair<String, String> = when (state?.index) {
             0 -> "bookmark_count" to "desc"
-            1 -> "updated_at" to "desc"
+            1 -> "chapter_last_created_at" to "desc"
             2 -> "created_at" to "desc"
             3 -> "chapter_count" to "desc"
             4 -> "rating" to "desc"
@@ -577,6 +766,19 @@ class FictionZone :
             else -> "bookmark_count" to "desc"
         }
     }
+
+    class AiSearchFilter : Filter.CheckBox("AI search (semantic, uses the text query only)", false)
+
+    class StatusSelectFilter : Filter.Select<String>("Status", arrayOf("All", "Ongoing", "Completed")) {
+        fun toUriPart(): String? = when (state) {
+            1 -> "1"
+            2 -> "2"
+            else -> null
+        }
+    }
+
+    class WordCountMinFilter : Filter.Text("Min word count")
+    class WordCountMaxFilter : Filter.Text("Max word count")
 
     class GenreFilter(genres: List<Pair<String, String>>) : Filter.Group<GenreCheckBox>("Genres", genres.map { GenreCheckBox(it.first, it.second) })
     class GenreCheckBox(val id: String, name: String) : Filter.CheckBox(name)
