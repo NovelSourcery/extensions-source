@@ -55,7 +55,12 @@ class NovelCool :
         .add("lang", langCode)
 
     override suspend fun fetchPageText(page: Page): String {
-        val chapterId = page.url.substringAfter("chapter_id=")
+        // "/chapter/<slug>/<id>/" (current) or "?chapter_id=<id>" (legacy)
+        val chapterId = if (page.url.contains("chapter_id=")) {
+            page.url.substringAfter("chapter_id=")
+        } else {
+            page.url.trimEnd('/').substringAfterLast('/')
+        }
         val body = baseBodyBuilder()
             .add("chapter_id", chapterId)
             .build()
@@ -104,7 +109,28 @@ class NovelCool :
 
     override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = if (query.isBlank()) {
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+        if (query.startsWith("http") && query.contains("/novel/")) {
+            val keyword = query.substringAfter("/novel/")
+                .substringBefore('?')
+                .substringBefore('#')
+                .removeSuffix(".html")
+                .replace('-', ' ')
+                .trim()
+            if (keyword.isNotBlank()) {
+                val body = baseBodyBuilder()
+                    .add("keyword", keyword)
+                    .add("lc_type", "novel")
+                    .add("page", "1")
+                    .add("page_size", "20")
+                    .build()
+                return POST("$apiUrl/book/search/", apiHeaders(), body)
+            }
+        }
+        return searchMangaRequestInternal(page, query, filters)
+    }
+
+    private fun searchMangaRequestInternal(page: Int, query: String, filters: FilterList): Request = if (query.isBlank()) {
         val sortBy = filters.find { it is SortByFilter }
             ?.let { it as SortByFilter }
             ?.toApiValue()
@@ -129,6 +155,9 @@ class NovelCool :
     }
 
     override fun searchMangaParse(response: Response) = popularMangaParse(response)
+
+    // Webview should open the site page, not the JSON API endpoint
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.url.substringBefore("?id=")}.html"
 
     override fun mangaDetailsRequest(manga: SManga): Request {
         val id = manga.url.substringAfter("?id=")
@@ -156,14 +185,18 @@ class NovelCool :
 
     override fun chapterListRequest(manga: SManga): Request {
         val id = manga.url.substringAfter("?id=")
+        // The API ignores the query param; it carries the name slug into
+        // chapterListParse so site chapter paths can be built
+        val visitPath = manga.url.substringBefore("?id=").trim('/')
         val body = baseBodyBuilder()
             .add("book_id", id)
             .build()
 
-        return POST("$apiUrl/chapter/book_list/", apiHeaders(), body)
+        return POST("$apiUrl/chapter/book_list/?visit_path=$visitPath", apiHeaders(), body)
     }
 
     override fun chapterListParse(response: Response): List<SChapter> {
+        val visitPath = response.request.url.queryParameter("visit_path").orEmpty()
         val jsonObject = json.parseToJsonElement(response.body.string()).jsonObject
         val list = jsonObject["list"]?.jsonArray ?: return emptyList()
 
@@ -181,19 +214,31 @@ class NovelCool :
 
             SChapter.create().apply {
                 name = obj["title"]!!.jsonPrimitive.content
-                url = obj["id"]!!.jsonPrimitive.content // Just chapter ID
+                // Site chapter path; the site only cares about the trailing id,
+                // the slug segment is cosmetic
+                val id = obj["id"]!!.jsonPrimitive.content
+                val slug = listOf(visitPath, name.replace(' ', '-'))
+                    .filter { it.isNotBlank() }
+                    .joinToString("-")
+                    .ifBlank { "chapter" }
+                url = "/chapter/$slug/$id/"
                 date_upload = obj["last_modify"]?.jsonPrimitive?.content?.toLongOrNull()?.times(1000) ?: 0L
                 chapter_number = obj["order_id"]?.jsonPrimitive?.content?.toFloatOrNull() ?: -1f
             }
-        }.reversed()
+        }
     }
 
-    override fun pageListRequest(chapter: SChapter): Request = GET("$baseUrl/chapter?chapter_id=${chapter.url}", headers)
-
-    override fun pageListParse(response: Response): List<Page> {
-        val chapterId = response.request.url.queryParameter("chapter_id") ?: ""
-        return listOf(Page(0, "$baseUrl/chapter?chapter_id=$chapterId", null))
+    override fun pageListRequest(chapter: SChapter): Request {
+        // Site chapter path (current) or bare chapter id (legacy entries)
+        val url = if (chapter.url.startsWith("/")) {
+            baseUrl + chapter.url
+        } else {
+            "$baseUrl/chapter/chapter/${chapter.url}/"
+        }
+        return GET(url, headers)
     }
+
+    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString(), null))
 
     override fun imageUrlParse(response: Response) = ""
 
