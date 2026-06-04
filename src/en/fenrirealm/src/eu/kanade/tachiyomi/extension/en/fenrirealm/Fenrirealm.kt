@@ -154,6 +154,17 @@ class Fenrirealm :
     }
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+        if (query.startsWith("http") && query.contains("/series/")) {
+            val slug = query.substringAfter("/series/")
+                .substringBefore('?')
+                .substringBefore('#')
+                .trim('/')
+                .substringBefore('/')
+            if (slug.isNotBlank()) {
+                return GET("$apiBaseUrl/series/$slug", headers)
+            }
+        }
+
         val url = "$apiBaseUrl/series".toHttpUrl().newBuilder().apply {
             addQueryParameter("page", page.toString())
             addQueryParameter("per_page", "20")
@@ -200,7 +211,18 @@ class Fenrirealm :
         return GET(url, headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage = latestUpdatesParse(response)
+    override fun searchMangaParse(response: Response): MangasPage {
+        val lastSegment = response.request.url.encodedPath.trimEnd('/').substringAfterLast('/')
+        if (lastSegment != "series") {
+            return try {
+                val manga = json.decodeFromString<NovelDto>(response.body.string()).toSManga(baseUrl)
+                MangasPage(listOf(manga), false)
+            } catch (_: Exception) {
+                MangasPage(emptyList(), false)
+            }
+        }
+        return latestUpdatesParse(response)
+    }
 
     override fun getMangaUrl(manga: SManga): String {
         val slug = manga.url.trim('/').substringAfterLast('/')
@@ -208,7 +230,7 @@ class Fenrirealm :
     }
 
     override fun mangaDetailsRequest(manga: SManga): Request {
-        val slug = manga.url.removePrefix("/").removeSuffix("/")
+        val slug = manga.url.removePrefix("/").removeSuffix("/").removePrefix("series/")
         return GET("$apiBaseUrl/series/$slug", headers)
     }
 
@@ -225,7 +247,7 @@ class Fenrirealm :
     }
 
     override fun chapterListRequest(manga: SManga): Request {
-        val slug = manga.url.removePrefix("/").removeSuffix("/")
+        val slug = manga.url.removePrefix("/").removeSuffix("/").removePrefix("series/")
         return GET("$apiBaseUrl/series/$slug/chapters", headers)
     }
 
@@ -336,7 +358,7 @@ class Fenrirealm :
             .orEmpty()
 
         return SManga.create().apply {
-            url = if (searchedSlug.isNotBlank()) "/$searchedSlug" else "/"
+            url = if (searchedSlug.isNotBlank()) "/series/$searchedSlug" else "/"
             title = searchedSlug
                 .substringAfterLast('/')
                 .replace('-', ' ')
@@ -382,7 +404,7 @@ class Fenrirealm :
         @SerialName("global_note") val globalNote: String? = null,
     ) {
         fun toSManga(baseUrl: String): SManga = SManga.create().apply {
-            url = "/$slug"
+            url = "/series/$slug"
             this.title = this@NovelDto.title
             thumbnail_url = if (!cover.isNullOrEmpty()) {
                 if (cover.startsWith("http")) cover else "$baseUrl/$cover"
