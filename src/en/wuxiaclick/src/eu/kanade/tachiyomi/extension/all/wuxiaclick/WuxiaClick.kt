@@ -335,8 +335,10 @@ class WuxiaClick :
 
     override fun getMangaUrl(manga: SManga): String {
         val slug = extractNovelSlug(manga.url)
-        return "https://wuxiaworld.eu/novel/$slug"
+        return "$baseUrl/novel/$slug"
     }
+
+    override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapter.url
 
     // ======================== Details ========================
 
