@@ -28,6 +28,7 @@ class ZetroTranslation :
         get() = preferences.getBoolean(PREF_EXCLUDE_LOCKED, false)
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        super.setupPreferenceScreen(screen)
         CheckBoxPreference(screen.context).apply {
             key = PREF_EXCLUDE_LOCKED
             title = "Exclude locked chapters"

@@ -1,9 +1,9 @@
 ext {
     extName = 'BoxNovel'
     extClass = '.BoxNovel'
-    themePkg = 'readnovelfull'
-    baseUrl = 'https://novlove.com'
-    overrideVersionCode = 1
+    themePkg = 'madaranovel'
+    baseUrl = 'https://novelnice.com'
+    overrideVersionCode = 2
     isNsfw = false
     isNovel = true
 }

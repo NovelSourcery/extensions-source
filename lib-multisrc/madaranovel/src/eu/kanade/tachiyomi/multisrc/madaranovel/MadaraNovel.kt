@@ -7,6 +7,7 @@ import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
+import eu.kanade.tachiyomi.source.SourceTracker
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -21,6 +22,7 @@ import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 import uy.kohesive.injekt.injectLazy
 import java.util.Calendar
 
@@ -35,7 +37,8 @@ open class MadaraNovel(
     override val lang: String = "en",
 ) : HttpSource(),
     NovelSource,
-    ConfigurableSource {
+    ConfigurableSource,
+    SourceTracker {
 
     override val isNovelSource = true
 
@@ -217,6 +220,9 @@ open class MadaraNovel(
 
         doc.select(".manga-title-badges, #manga-title span").remove()
 
+        // Cache the WP post id for tracking (bookmark/history) calls later
+        extractPostId(doc)?.let { cachePostId(response.request.url.encodedPath, it) }
+
         return SManga.create().apply {
             title = doc.selectFirst(".post-title h1, #manga-title h1")?.text()?.trim() ?: ""
 
@@ -230,9 +236,9 @@ open class MadaraNovel(
                 null
             }
 
-            description = doc.selectFirst("div.summary__content")?.text()?.trim()
-                ?: doc.selectFirst("#tab-manga-about")?.text()?.trim()
-                ?: doc.selectFirst(".manga-excerpt")?.text()?.trim()
+            description = doc.selectFirst("div.summary__content")?.formattedDescription()
+                ?: doc.selectFirst("#tab-manga-about")?.formattedDescription()
+                ?: doc.selectFirst(".manga-excerpt")?.formattedDescription()
                 ?: ""
             author = doc.selectFirst(".manga-authors")?.text()?.trim()
                 ?: doc.select(".post-content_item, .post-content")
@@ -263,11 +269,34 @@ open class MadaraNovel(
         }
     }
 
+    /**
+     * Extracts the WordPress post id of a novel from its page.
+     * Used both for the old chapter list endpoint and tracking calls.
+     */
+    protected fun extractPostId(doc: Document): String? = doc.selectFirst(".rating-post-id")?.attr("value")?.ifEmpty { null }
+        ?: doc.selectFirst("#manga-chapters-holder")?.attr("data-id")?.ifEmpty { null }
+        ?: doc.selectFirst("a[data-post-id]")?.attr("data-post-id")?.ifEmpty { null }
+        // Fallback: extract from shortlink (e.g., <link rel="shortlink" href="...?p=91245">)
+        ?: doc.selectFirst("link[rel=shortlink]")?.attr("href")
+            ?.let { Regex("""[?&]p=(\d+)""").find(it)?.groupValues?.get(1) }
+
+    // "Chapter 12", "Ch. 12.5 - Title", "Episode 3: Title"
+    private val chapterPrefixRegex =
+        Regex("""^(?:chapter|chap|ch|episode|ep)\.?\s*(\d+(?:\.\d+)?)\s*[-–—:.]?\s*""", RegexOption.IGNORE_CASE)
+
+    // "12 - Title" (bare number requires an explicit separator so titles that
+    // merely start with a number aren't eaten)
+    private val numberSeparatorRegex = Regex("""^(\d+(?:\.\d+)?)\s*[-–—:]\s*""")
+
     override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
 
     override fun chapterListParse(response: Response): List<SChapter> {
         val doc = response.asJsoup()
         val mangaUrl = response.request.url.encodedPath
+
+        // Cache the WP post id for tracking (bookmark/history) calls later
+        val postId = extractPostId(doc)
+        postId?.let { cachePostId(mangaUrl, it) }
 
         val chapters = mutableListOf<SChapter>()
         var html: String
@@ -282,17 +311,9 @@ open class MadaraNovel(
             ).execute()
             html = chapResponse.body.string()
         } else {
-            // Extract novel ID from various sources
-            val novelId = doc.selectFirst(".rating-post-id")?.attr("value")
-                ?: doc.selectFirst("#manga-chapters-holder")?.attr("data-id")
-                // Fallback: extract from shortlink (e.g., <link rel="shortlink" href="...?p=91245">)
-                ?: doc.selectFirst("link[rel=shortlink]")?.attr("href")
-                    ?.let { Regex("""[?&]p=(\d+)""").find(it)?.groupValues?.get(1) }
-                ?: ""
-
             val formBody = FormBody.Builder()
                 .add("action", "manga_get_chapters")
-                .add("manga", novelId)
+                .add("manga", postId ?: "")
                 .build()
 
             val chapResponse = client.newCall(
@@ -307,8 +328,17 @@ open class MadaraNovel(
 
             chapDoc.select(".wp-manga-chapter").forEachIndexed { index, element ->
                 try {
-                    var chapterName = element.selectFirst("a")?.text()?.trim() ?: return@forEachIndexed
+                    val rawName = element.selectFirst("a")?.text()?.trim() ?: return@forEachIndexed
                     val isLocked = element.className().contains("premium-block")
+
+                    // The app shows the chapter number separately from the title,
+                    // so strip "Chapter 12 - " style prefixes from the displayed name
+                    val numberMatch = chapterPrefixRegex.find(rawName)
+                        ?: numberSeparatorRegex.find(rawName)
+                    val parsedNumber = numberMatch?.groupValues?.get(1)?.toFloatOrNull()
+                    var chapterName = numberMatch?.let { rawName.removeRange(it.range).trim() }
+                        ?.ifEmpty { null }
+                        ?: rawName
 
                     if (isLocked) {
                         chapterName = "🔒 $chapterName"
@@ -340,7 +370,7 @@ open class MadaraNovel(
                                 url = relativeChapterUrl
                                 name = chapterName
                                 date_upload = parseDate(releaseDate)
-                                chapter_number = (totalChaps - index).toFloat()
+                                chapter_number = parsedNumber ?: (totalChaps - index).toFloat()
                             },
                         )
                     }
@@ -453,6 +483,204 @@ open class MadaraNovel(
 
     protected fun Response.asJsoup(): Document = Jsoup.parse(body.string())
 
+    // ======================== Tracking ========================
+
+    /**
+     * Set to false in a subclass to disable chapter read syncing for that source,
+     * e.g. if the site removed the wp-manga user history AJAX endpoint.
+     */
+    protected open val chapterTrackingSupported = true
+
+    /**
+     * Set to false in a subclass to disable favorites/bookmark syncing for that source,
+     * e.g. if the site removed the wp-manga bookmark AJAX endpoint.
+     */
+    protected open val favoritesTrackingSupported = true
+
+    private val trackingEnabled: Boolean
+        get() = preferences.getBoolean(PREF_ENABLE_TRACKING, false)
+
+    override val supportsChapterTracking: Boolean
+        get() = chapterTrackingSupported && trackingEnabled
+
+    override val supportsFavoritesTracking: Boolean
+        get() = favoritesTrackingSupported && trackingEnabled
+
+    override suspend fun onChaptersRead(
+        manga: SManga,
+        changedChapters: List<SChapter>,
+        allChapters: List<SChapter>,
+        categories: List<String>,
+    ) {
+        if (!supportsChapterTracking) return
+        val target = changedChapters
+            .filter { it.chapter_number > 0f }
+            .maxByOrNull { it.chapter_number }
+            ?: changedChapters.lastOrNull()
+            ?: return
+
+        // The site happily overwrites history with an older chapter, so guard locally
+        if (preferences.getBoolean(PREF_PROTECT_HIGHEST, true)) {
+            val cached = highestTrackedNumber(cacheKey(manga.url))
+            if (cached != null && target.chapter_number <= cached) return
+        }
+
+        val chapterSlug = target.url.substringBefore('?').trimEnd('/').substringAfterLast('/')
+        if (chapterSlug.isEmpty()) return
+
+        val postId = resolvePostId(manga) ?: return
+        // The history endpoint requires a fresh wp-manga nonce. It lives in the
+        // `var manga = {...}` JS object on the chapter reading page, so scrape it
+        // from there (with the novel page as fallback).
+        val nonce = fetchNonce(target.url) ?: fetchNonce(manga.url) ?: return
+
+        val historyBody = FormBody.Builder()
+            .add("action", "manga-user-history")
+            .add("postID", postId)
+            .add("chapterSlug", chapterSlug)
+            .add("paged", "1")
+            .add("img_id", "")
+            .add("nonce", nonce)
+            .build()
+        var anySuccess = ajaxSucceeded(historyBody)
+
+        if (preferences.getBoolean(PREF_BOOKMARK_CHAPTER, false)) {
+            val bookmarkBody = FormBody.Builder()
+                .add("action", "wp-manga-user-bookmark")
+                .add("postID", postId)
+                .add("chapter", chapterSlug)
+                .add("page", "1")
+                .build()
+            anySuccess = ajaxSucceeded(bookmarkBody) || anySuccess
+        }
+
+        if (anySuccess) {
+            recordHighestTracked(cacheKey(manga.url), target.chapter_number)
+        }
+    }
+
+    override suspend fun onFavorited(manga: SManga, categories: List<String>) {
+        if (!supportsFavoritesTracking) return
+        val postId = resolvePostId(manga) ?: return
+        val body = FormBody.Builder()
+            .add("action", "wp-manga-user-bookmark")
+            .add("postID", postId)
+            .add("chapter", "")
+            .add("page", "1")
+            .build()
+        ajaxSucceeded(body)
+    }
+
+    override suspend fun onUnfavorited(manga: SManga, categories: List<String>) {
+        if (!supportsFavoritesTracking) return
+        val postId = resolvePostId(manga) ?: return
+        val body = FormBody.Builder()
+            .add("action", "wp-manga-delete-bookmark")
+            .add("postID", postId)
+            .add("isMangaSingle", "1")
+            .build()
+        ajaxSucceeded(body)
+    }
+
+    /** Sends a wp-admin/admin-ajax.php POST and reports whether it returned {"success":true}. */
+    private fun ajaxSucceeded(body: FormBody): Boolean = try {
+        client.newCall(POST("$baseUrl/wp-admin/admin-ajax.php", headers, body)).execute().use { resp ->
+            resp.isSuccessful && resp.body.string().contains("\"success\":true")
+        }
+    } catch (e: Exception) {
+        false
+    }
+
+    /** Returns the cached post id, or scrapes the novel page when missing. */
+    private fun resolvePostId(manga: SManga): String? {
+        cachedPostId(cacheKey(manga.url))?.let { return it }
+        return try {
+            val url = baseUrl + manga.url
+            val response = client.newCall(GET(url, headers)).execute()
+            val doc = Jsoup.parse(response.use { it.body.string() }, url)
+            extractPostId(doc)?.also { cachePostId(manga.url, it) }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Fetches a page and extracts the AJAX nonce used by manga-user-history.
+     * It lives in the `user_history-js-extra` script on chapter reading pages:
+     * `var user_history_params = {"ajax_url":"...","postID":"...","nonce":"..."}`.
+     * Pages carry several localized script objects with their own nonces
+     * (wpMangaLogin, madara, etc.) — only this one is valid for history calls.
+     */
+    private fun fetchNonce(path: String): String? = try {
+        val response = client.newCall(GET(baseUrl + path, headers)).execute()
+        val html = response.use { it.body.string() }
+        Regex("""var\s+user_history_params\s*=\s*\{[^}]*?"nonce"\s*:\s*"(\w+)"""").find(html)
+            ?.groupValues?.get(1)
+            // Fallback: the wp-manga `var manga` object's nonce
+            ?: Regex("""var\s+manga\s*=\s*\{[^}]*?"nonce"\s*:\s*"(\w+)"""").find(html)
+                ?.groupValues?.get(1)
+    } catch (e: Exception) {
+        null
+    }
+
+    private val postIdCache = mutableMapOf<String, String>()
+
+    private fun cacheKey(url: String): String = url.removePrefix(baseUrl).substringBefore('?').trimEnd('/')
+
+    private fun cachedPostId(key: String): String? {
+        synchronized(postIdCache) {
+            if (postIdCache.isEmpty()) {
+                val raw = preferences.getString(PREF_POST_ID_CACHE, "") ?: ""
+                raw.split('\n').forEach { line ->
+                    val sep = line.indexOf('|')
+                    if (sep > 0) postIdCache[line.substring(0, sep)] = line.substring(sep + 1)
+                }
+            }
+            return postIdCache[key]
+        }
+    }
+
+    protected fun cachePostId(mangaUrl: String, id: String) {
+        val key = cacheKey(mangaUrl)
+        synchronized(postIdCache) {
+            // Hydrate from prefs first so we don't clobber other entries
+            if (cachedPostId(key) == id) return
+            postIdCache[key] = id
+            val serialized = postIdCache.entries.joinToString("\n") { "${it.key}|${it.value}" }
+            preferences.edit().putString(PREF_POST_ID_CACHE, serialized).apply()
+        }
+    }
+
+    private fun highestTrackedNumber(mangaUrl: String): Float? {
+        val raw = preferences.getString(PREF_HIGHEST_CACHE, "") ?: ""
+        raw.split('\n').forEach { line ->
+            val sep = line.indexOf('|')
+            if (sep > 0 && line.substring(0, sep) == mangaUrl) {
+                return line.substring(sep + 1).toFloatOrNull()
+            }
+        }
+        return null
+    }
+
+    private fun recordHighestTracked(mangaUrl: String, value: Float) {
+        val raw = preferences.getString(PREF_HIGHEST_CACHE, "") ?: ""
+        val rebuilt = StringBuilder()
+        var replaced = false
+        raw.split('\n').filter { it.isNotEmpty() }.forEach { line ->
+            val sep = line.indexOf('|')
+            if (sep > 0 && line.substring(0, sep) == mangaUrl) {
+                if (!replaced) {
+                    rebuilt.append(mangaUrl).append('|').append(value).append('\n')
+                    replaced = true
+                }
+            } else {
+                rebuilt.append(line).append('\n')
+            }
+        }
+        if (!replaced) rebuilt.append(mangaUrl).append('|').append(value).append('\n')
+        preferences.edit().putString(PREF_HIGHEST_CACHE, rebuilt.toString()).apply()
+    }
+
     // ======================== Settings ========================
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
@@ -476,12 +704,62 @@ open class MadaraNovel(
             summary = "If enabled, returns the raw HTML of the chapter content instead of parsed text. Useful for custom parsers."
             setDefaultValue(false)
         }.also(screen::addPreference)
+
+        if (chapterTrackingSupported || favoritesTrackingSupported) {
+            SwitchPreferenceCompat(screen.context).apply {
+                key = PREF_ENABLE_TRACKING
+                title = "Enable $name tracking"
+                summary = "Sync library bookmarks and reading progress to your $name account. Requires being logged in via WebView."
+                setDefaultValue(false)
+            }.also(screen::addPreference)
+
+            if (chapterTrackingSupported) {
+                SwitchPreferenceCompat(screen.context).apply {
+                    key = PREF_PROTECT_HIGHEST
+                    title = "Don't sync chapters below current"
+                    summary = "Skip syncing a chapter lower than the highest already synced for that novel. The site otherwise overwrites your history with the older chapter."
+                    setDefaultValue(true)
+                }.also(screen::addPreference)
+
+                SwitchPreferenceCompat(screen.context).apply {
+                    key = PREF_BOOKMARK_CHAPTER
+                    title = "Bookmark chapter on read"
+                    summary = "Also bookmark the chapter on the site when marking it read, updating the bookmark's chapter pointer."
+                    setDefaultValue(false)
+                }.also(screen::addPreference)
+            }
+
+            SwitchPreferenceCompat(screen.context).apply {
+                key = PREF_RESET_TRACKING_CACHE
+                title = "Reset tracking cache"
+                summary = "Toggle to clear cached post IDs and highest-synced-chapter records."
+                setDefaultValue(false)
+                setOnPreferenceChangeListener { _, newValue ->
+                    if (newValue as Boolean) {
+                        preferences.edit()
+                            .remove(PREF_POST_ID_CACHE)
+                            .remove(PREF_HIGHEST_CACHE)
+                            .apply()
+                        synchronized(postIdCache) { postIdCache.clear() }
+                        false
+                    } else {
+                        true
+                    }
+                }
+            }.also(screen::addPreference)
+        }
     }
 
     companion object {
         private const val USE_NEW_CHAPTER_ENDPOINT_PREF = "pref_use_new_chapter_endpoint"
         private const val PREF_REVERSE_CHAPTERS = "pref_reverse_chapters"
         private const val PREF_RAW_HTML = "pref_raw_html"
+        private const val PREF_ENABLE_TRACKING = "pref_enable_tracking"
+        private const val PREF_PROTECT_HIGHEST = "pref_protect_highest"
+        private const val PREF_BOOKMARK_CHAPTER = "pref_bookmark_chapter_on_read"
+        private const val PREF_RESET_TRACKING_CACHE = "pref_reset_tracking_cache"
+        private const val PREF_POST_ID_CACHE = "pref_post_id_cache"
+        private const val PREF_HIGHEST_CACHE = "pref_highest_tracked_cache"
     }
 
     private class StatusFilter :
@@ -510,4 +788,31 @@ open class MadaraNovel(
             else -> "latest"
         }
     }
+}
+
+/**
+ * Converts an element's HTML into plain text while preserving paragraph
+ * (<p>) and line (<br>) breaks as newlines, instead of Jsoup's text()
+ * which collapses everything into a single line.
+ *
+ * Top-level so standalone Madara-like sources that don't extend
+ * [MadaraNovel] can reuse it too.
+ */
+fun Element.formattedDescription(): String {
+    val breakToken = "__MADARA_BR__"
+    val paragraphToken = "__MADARA_P__"
+    val node = clone()
+    node.select("script, style").remove()
+    node.select("br").forEach { it.after(breakToken) }
+    node.select("p, div, h1, h2, h3, h4, h5, h6, li")
+        // the root element itself can match (e.g. div.summary__content) but has
+        // no parent on the clone, so after() would throw
+        .filter { it !== node }
+        .forEach { it.after(paragraphToken) }
+    return node.text()
+        .replace(' ', ' ')
+        .replace(Regex("""\s*$paragraphToken\s*"""), "\n\n")
+        .replace(Regex("""\s*$breakToken\s*"""), "\n")
+        .replace(Regex("\n{3,}"), "\n\n")
+        .trim()
 }

@@ -1,142 +1,181 @@
 package eu.kanade.tachiyomi.novelextension.en.boxnovel
 
-import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
+import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 
 class BoxNovel :
-    ReadNovelFull(
+    MadaraNovel(
+        baseUrl = "https://novelnice.com",
         name = "BoxNovel",
-        baseUrl = "https://novlove.com",
         lang = "en",
     ) {
-    override val latestPage = "sort/nov-love-daily-update"
+    override val useNewChapterEndpointDefault = true
+    override val reverseChapterListDefault = true
 
-    // BoxNovel uses path-based filtering instead of query parameters
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        if (query.isNotBlank()) {
-            return super.searchMangaRequest(page, query, filters)
-        }
+        val url = "$baseUrl/page/$page/".toHttpUrl().newBuilder()
+            .addQueryParameter("s", query)
+            .addQueryParameter("post_type", "wp-manga")
 
-        // Handle filters
-        var path = ""
         filters.forEach { filter ->
             when (filter) {
-                is TypeFilter -> {
-                    if (filter.state > 0) {
-                        path = typeOptions[filter.state].second
+                is AuthorFilter -> if (filter.state.isNotBlank()) {
+                    url.addQueryParameter("author", filter.state)
+                }
+
+                is ArtistFilter -> if (filter.state.isNotBlank()) {
+                    url.addQueryParameter("artist", filter.state)
+                }
+
+                is YearFilter -> if (filter.state.isNotBlank()) {
+                    url.addQueryParameter("release", filter.state)
+                }
+
+                is AdultFilter -> {
+                    val value = adultOptions[filter.state].second
+                    if (value.isNotEmpty()) {
+                        url.addQueryParameter("adult", value)
                     }
                 }
 
-                is GenreFilter -> {
-                    if (filter.state > 0) {
-                        path = genreOptions[filter.state].second
+                is OrderByFilter -> {
+                    val value = orderByOptions[filter.state].second
+                    if (value.isNotEmpty()) {
+                        url.addQueryParameter("m_orderby", value)
                     }
                 }
+
+                is GenreConditionFilter -> if (filter.state) {
+                    url.addQueryParameter("op", "1")
+                }
+
+                is StatusFilter ->
+                    filter.state
+                        .filter { it.state }
+                        .forEach { url.addQueryParameter("status[]", it.value) }
+
+                is GenreFilter ->
+                    filter.state
+                        .filter { it.state }
+                        .forEach { url.addQueryParameter("genre[]", it.value) }
 
                 else -> {}
             }
         }
 
-        // Default to popular if no filter selected
-        if (path.isEmpty()) {
-            path = "sort/nov-love-popular"
-        }
-
-        // Add page number
-        val url = if (page > 1) {
-            "$baseUrl/$path?page=$page"
-        } else {
-            "$baseUrl/$path"
-        }
-
-        return GET(url, headers)
+        return GET(url.build(), headers)
     }
 
     override fun getFilterList() = FilterList(
-        Filter.Header("Filters are ignored with text search"),
-        Filter.Separator(),
-        TypeFilter(),
+        AuthorFilter(),
+        ArtistFilter(),
+        YearFilter(),
+        AdultFilter(),
+        OrderByFilter(),
+        GenreConditionFilter(),
+        StatusFilter(),
         GenreFilter(),
     )
 
-    private class TypeFilter :
-        Filter.Select<String>(
-            "Type",
-            typeOptions.map { it.first }.toTypedArray(),
-        )
+    private class AuthorFilter : Filter.Text("Author")
+    private class ArtistFilter : Filter.Text("Artist")
+    private class YearFilter : Filter.Text("Year of Released")
 
-    private class GenreFilter :
-        Filter.Select<String>(
-            "Genre",
-            genreOptions.map { it.first }.toTypedArray(),
-        )
+    private class AdultFilter : Filter.Select<String>("Adult content", adultOptions.map { it.first }.toTypedArray())
+
+    private class OrderByFilter : Filter.Select<String>("Order by", orderByOptions.map { it.first }.toTypedArray())
+
+    private class GenreConditionFilter : Filter.CheckBox("Having all selected genres")
+
+    private class GenreCheckBox(name: String, val value: String) : Filter.CheckBox(name)
+
+    private class StatusFilter : Filter.Group<GenreCheckBox>("Status", statusOptions.map { GenreCheckBox(it.first, it.second) })
+
+    private class GenreFilter : Filter.Group<GenreCheckBox>("Genre", genreOptions.map { GenreCheckBox(it.first, it.second) })
 
     companion object {
-        private val typeOptions = listOf(
+        private val adultOptions = listOf(
             Pair("All", ""),
-            Pair("Hot Novel", "sort/nov-love-hot"),
-            Pair("Completed Novel", "sort/nov-love-complete"),
-            Pair("Most Popular", "sort/nov-love-popular"),
+            Pair("None adult content", "0"),
+            Pair("Only adult content", "1"),
+        )
+
+        private val orderByOptions = listOf(
+            Pair("Relevance", ""),
+            Pair("Latest", "latest"),
+            Pair("A-Z", "alphabet"),
+            Pair("Rating", "rating"),
+            Pair("Trending", "trending"),
+            Pair("Most Views", "views"),
+            Pair("New", "new-manga"),
+        )
+
+        private val statusOptions = listOf(
+            Pair("OnGoing", "on-going"),
+            Pair("Completed", "end"),
+            Pair("Canceled", "canceled"),
+            Pair("On Hold", "on-hold"),
+            Pair("Upcoming", "upcoming"),
         )
 
         private val genreOptions = listOf(
-            Pair("All", ""),
-            Pair("Action", "nov-love-genres/action"),
-            Pair("Adventure", "nov-love-genres/adventure"),
-            Pair("Anime & Comics", "nov-love-genres/anime-&-comics"),
-            Pair("Comedy", "nov-love-genres/comedy"),
-            Pair("Drama", "nov-love-genres/drama"),
-            Pair("Eastern", "nov-love-genres/eastern"),
-            Pair("Fan-fiction", "nov-love-genres/fan-fiction"),
-            Pair("Fanfiction", "nov-love-genres/fanfiction"),
-            Pair("Fantasy", "nov-love-genres/fantasy"),
-            Pair("Game", "nov-love-genres/game"),
-            Pair("Games", "nov-love-genres/games"),
-            Pair("Gender Bender", "nov-love-genres/gender-bender"),
-            Pair("General", "nov-love-genres/general"),
-            Pair("Harem", "nov-love-genres/harem"),
-            Pair("Historical", "nov-love-genres/historical"),
-            Pair("Horror", "nov-love-genres/horror"),
-            Pair("Isekai", "nov-love-genres/isekai"),
-            Pair("Josei", "nov-love-genres/josei"),
-            Pair("LitRPG", "nov-love-genres/litrpg"),
-            Pair("Magic", "nov-love-genres/magic"),
-            Pair("Magical Realism", "nov-love-genres/magical-realism"),
-            Pair("Martial Arts", "nov-love-genres/martial-arts"),
-            Pair("Mature", "nov-love-genres/mature"),
-            Pair("Mecha", "nov-love-genres/mecha"),
-            Pair("Modern Life", "nov-love-genres/modern-life"),
-            Pair("Mystery", "nov-love-genres/mystery"),
-            Pair("Other", "nov-love-genres/other"),
-            Pair("Psychological", "nov-love-genres/psychological"),
-            Pair("Reincarnation", "nov-love-genres/reincarnation"),
-            Pair("Romance", "nov-love-genres/romance"),
-            Pair("School Life", "nov-love-genres/school-life"),
-            Pair("Sci-fi", "nov-love-genres/sci-fi"),
-            Pair("Seinen", "nov-love-genres/seinen"),
-            Pair("Shoujo", "nov-love-genres/shoujo"),
-            Pair("Shoujo Ai", "nov-love-genres/shoujo-ai"),
-            Pair("Shounen", "nov-love-genres/shounen"),
-            Pair("Shounen Ai", "nov-love-genres/shounen-ai"),
-            Pair("Slice of Life", "nov-love-genres/slice-of-life"),
-            Pair("Smut", "nov-love-genres/smut"),
-            Pair("Sports", "nov-love-genres/sports"),
-            Pair("Supernatural", "nov-love-genres/supernatural"),
-            Pair("System", "nov-love-genres/system"),
-            Pair("Thriller", "nov-love-genres/thriller"),
-            Pair("Tragedy", "nov-love-genres/tragedy"),
-            Pair("Urban", "nov-love-genres/urban"),
-            Pair("Urban Life", "nov-love-genres/urban-life"),
-            Pair("Video Games", "nov-love-genres/video-games"),
-            Pair("War", "nov-love-genres/war"),
-            Pair("Wuxia", "nov-love-genres/wuxia"),
-            Pair("Xianxia", "nov-love-genres/xianxia"),
-            Pair("Xuanhuan", "nov-love-genres/xuanhuan"),
-            Pair("Yaoi", "nov-love-genres/yaoi"),
-            Pair("Yuri", "nov-love-genres/yuri"),
+            Pair("Action", "action"),
+            Pair("Adventure", "adventure"),
+            Pair("Anime & Comics", "anime-comics"),
+            Pair("Comedy", "comedy"),
+            Pair("Drama", "drama"),
+            Pair("Eastern", "eastern"),
+            Pair("Fan-fiction", "fan-fiction"),
+            Pair("Fanfiction", "fanfiction"),
+            Pair("Fantasy", "fantasy"),
+            Pair("Game", "game"),
+            Pair("Games", "games"),
+            Pair("Gender Bender", "gender-bender"),
+            Pair("General", "general"),
+            Pair("Harem", "harem"),
+            Pair("Historical", "historical"),
+            Pair("Horror", "horror"),
+            Pair("Isekai", "isekai"),
+            Pair("Josei", "josei"),
+            Pair("LitRPG", "litrpg"),
+            Pair("Magic", "magic"),
+            Pair("Magical Realism", "magical-realism"),
+            Pair("Martial Arts", "martial-arts"),
+            Pair("Mature", "mature"),
+            Pair("Mecha", "mecha"),
+            Pair("Modern Life", "modern-life"),
+            Pair("Mystery", "mystery"),
+            Pair("Other", "other"),
+            Pair("Psychological", "psychological"),
+            Pair("Reincarnation", "reincarnation"),
+            Pair("Romance", "romance"),
+            Pair("School Life", "school-life"),
+            Pair("Sci-fi", "sci-fi"),
+            Pair("Seinen", "seinen"),
+            Pair("Shoujo", "shoujo"),
+            Pair("Shoujo Ai", "shoujo-ai"),
+            Pair("Shounen", "shounen"),
+            Pair("Shounen Ai", "shounen-ai"),
+            Pair("Slice of Life", "slice-of-life"),
+            Pair("Smut", "smut"),
+            Pair("Sports", "sports"),
+            Pair("Supernatural", "supernatural"),
+            Pair("System", "system"),
+            Pair("Thriller", "thriller"),
+            Pair("Tragedy", "tragedy"),
+            Pair("Urban", "urban"),
+            Pair("Urban Life", "urban-life"),
+            Pair("Video Games", "video-games"),
+            Pair("War", "war"),
+            Pair("Wuxia", "wuxia"),
+            Pair("Xianxia", "xianxia"),
+            Pair("Xuanhuan", "xuanhuan"),
+            Pair("Yaoi", "yaoi"),
+            Pair("Yuri", "yuri"),
         )
     }
 }

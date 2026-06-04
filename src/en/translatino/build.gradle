@@ -3,7 +3,7 @@ ext {
     extClass = '.TranslatinOtaku'
     themePkg = 'madaranovel'
     baseUrl = 'https://translatinotaku.net'
-    overrideVersionCode = 1
+    overrideVersionCode = 2
     isNsfw = false
     isNovel = true
 }
