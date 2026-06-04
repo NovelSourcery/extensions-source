@@ -1,0 +1,9 @@
+ext {
+    extName = 'Konkon'
+    extClass = '.Konkon'
+    extVersionCode = 1
+    isNsfw = true
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"
