@@ -54,7 +54,7 @@ abstract class ReadNovelFull(
 
     override val supportsLatest = true
 
-    override val client = network.client
+    override val client = network.cloudflareClient
 
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
