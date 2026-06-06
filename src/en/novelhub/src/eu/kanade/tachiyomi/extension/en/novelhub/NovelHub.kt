@@ -29,7 +29,7 @@ import java.net.URLEncoder
 
 /**
  * NovelHub.net - Novel reading extension
- * Per instructions.html: Popular from trending section, flip chapter list
+ * Popular from /ranking (server-rendered), flip chapter list
  */
 class NovelHub :
     HttpSource(),
@@ -54,71 +54,60 @@ class NovelHub :
     // ======================== Popular ========================
 
     override fun popularMangaRequest(page: Int): Request {
-        // Per instructions.html: Popular from trending section
-        return GET("$baseUrl/trending?page=$page", headers)
+        // /trending is an empty JS shell; /ranking is server-rendered and paginated
+        return GET("$baseUrl/ranking?page=$page", headers)
     }
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        val doc = Jsoup.parse(response.body.string())
+    override fun popularMangaParse(response: Response): MangasPage = parseNovelList(response)
 
-        // Per instructions.html: Parse from trending section
-        // Selector: section[aria-labelledby="trending-heading"] or div.flex-shrink-0
+    /**
+     * Shared parser for novel listing pages (/ranking, /latest, genre pages).
+     * Handles both card layouts:
+     * - article cards (latest/genre): lazy img with data-src inside the cover anchor
+     * - ranking cards: img with relative src outside the anchor
+     */
+    private fun parseNovelList(response: Response): MangasPage {
+        // Base URI needed so absUrl() resolves relative covers like "storage/novels/covers/x.webp"
+        val doc = Jsoup.parse(response.body.string(), response.request.url.toString())
+        return parseNovelListFromDoc(doc)
+    }
+
+    private fun parseNovelListFromDoc(doc: org.jsoup.nodes.Document): MangasPage {
         val novels = mutableListOf<SManga>()
+        val seen = mutableSetOf<String>()
 
-        // Primary: From trending section items
-        doc.select("section[aria-labelledby=trending-heading] a[href*=/novel/], div.flex-shrink-0 a[href*=/novel/]").forEach { element ->
-            try {
-                val url = element.attr("href").replace(baseUrl, "")
-                if (url.isBlank() || !url.contains("/novel/")) return@forEach
+        doc.select("a[href*=/novel/]").forEach { anchor ->
+            val slug = anchor.absUrl("href").substringAfter("/novel/", "")
+                .substringBefore("?").substringBefore("#").trim('/')
+            if (slug.isBlank() || slug.contains("/")) return@forEach // skip chapter links
+            if (!seen.add(slug)) return@forEach
 
-                // Per instructions.html: title in h4 or from img alt
-                val title = element.selectFirst("h4")?.text()?.trim()
-                    ?: element.selectFirst("img")?.attr("alt")?.trim()
-                    ?: return@forEach
+            // Nearest card container: article, or the closest div that holds the cover img
+            val card = anchor.parents().firstOrNull {
+                it.tagName() == "article" || (it.tagName() == "div" && it.selectFirst("img") != null)
+            } ?: anchor
 
-                // Per instructions.html: cover from img with data-src or src
-                val cover = element.selectFirst("img")?.let { img ->
-                    img.attr("data-src").ifEmpty { img.attr("src") }
-                } ?: ""
+            val title = card.selectFirst("h3, h4")?.text()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: card.selectFirst("img[alt]")?.attr("alt")?.trim()?.takeIf { it.isNotEmpty() }
+                ?: anchor.text().trim().takeIf { it.isNotEmpty() }
+                ?: return@forEach
 
-                novels.add(
-                    SManga.create().apply {
-                        this.title = title
-                        this.url = url
-                        thumbnail_url = if (cover.startsWith("http")) cover else "$baseUrl/$cover"
-                    },
-                )
-            } catch (e: Exception) {
-            }
-        }
+            val img = anchor.selectFirst("img") ?: card.selectFirst("img")
+            val cover = img?.let { it.absUrl("data-src").ifEmpty { it.absUrl("src") } }
+                ?.takeIf { it.isNotEmpty() }
+                ?: "$baseUrl/storage/novels/covers/$slug.webp"
 
-        if (novels.isEmpty()) {
-            doc.select("a[href*=/novel/]").forEach { element ->
-                try {
-                    val url = element.attr("href").replace(baseUrl, "")
-                    val title = element.selectFirst("h4, h3, .title")?.text()?.trim()
-                        ?: element.attr("title").ifEmpty { null }
-                        ?: element.selectFirst("img")?.attr("alt")
-                        ?: return@forEach
-
-                    val cover = element.selectFirst("img")?.let { img ->
-                        img.attr("data-src").ifEmpty { img.attr("src") }
-                    } ?: ""
-
-                    novels.add(
-                        SManga.create().apply {
-                            this.title = title
-                            this.url = url
-                            thumbnail_url = if (cover.startsWith("http")) cover else "$baseUrl/$cover"
-                        },
-                    )
-                } catch (e: Exception) {
-                }
-            }
+            novels.add(
+                SManga.create().apply {
+                    this.title = title
+                    url = "/novel/$slug"
+                    thumbnail_url = cover
+                },
+            )
         }
 
         val hasNextPage = doc.selectFirst("a[rel=next], a:contains(Next)") != null
-        return MangasPage(novels.distinctBy { it.url }, hasNextPage)
+        return MangasPage(novels, hasNextPage)
     }
     // ======================== Latest ========================
 
@@ -164,8 +153,8 @@ class NovelHub :
             }
         }
 
-        // Default to trending
-        return GET("$baseUrl/trending?page=$page", headers)
+        // Default to ranking (server-rendered; /trending is an empty JS shell)
+        return GET("$baseUrl/ranking?page=$page", headers)
     }
 
     override fun searchMangaParse(response: Response): MangasPage {
@@ -183,62 +172,53 @@ class NovelHub :
             }
             MangasPage(novels, false)
         } else {
-            // HTML response from genre filter - parse like popular
-            val doc = Jsoup.parse(responseBody)
-            val novels = mutableListOf<SManga>()
-
-            doc.select("a[href*=/novel/]").forEach { element ->
-                try {
-                    val url = element.attr("href").replace(baseUrl, "")
-                    if (url.isBlank() || !url.contains("/novel/")) return@forEach
-
-                    val title = element.selectFirst("h4, h3, .title")?.text()?.trim()
-                        ?: element.attr("title").ifEmpty { null }
-                        ?: element.selectFirst("img")?.attr("alt")
-                        ?: return@forEach
-
-                    val cover = element.selectFirst("img")?.let { img ->
-                        img.attr("data-src").ifEmpty { img.attr("src") }
-                    } ?: ""
-
-                    novels.add(
-                        SManga.create().apply {
-                            this.title = title
-                            this.url = url
-                            thumbnail_url = if (cover.startsWith("http")) cover else "$baseUrl/$cover"
-                        },
-                    )
-                } catch (e: Exception) {
-                }
-            }
-
-            val hasNextPage = doc.selectFirst("a[rel=next], a:contains(Next)") != null
-            MangasPage(novels.distinctBy { it.url }, hasNextPage)
+            // HTML response from genre filter - same card layout as listings
+            val doc = Jsoup.parse(responseBody, response.request.url.toString())
+            parseNovelListFromDoc(doc)
         }
     }
     // ======================== Details ========================
 
     override fun mangaDetailsParse(response: Response): SManga {
-        val doc = Jsoup.parse(response.body.string())
+        val doc = Jsoup.parse(response.body.string(), response.request.url.toString())
 
         return SManga.create().apply {
             title = doc.selectFirst("h1")?.text()?.trim() ?: ""
 
-            // Per user: Cover is in div.flex-shrink-0 img with full URL
-            // Example: <img src="https://novelhub.net/storage/novels/covers/my-charity-system-made-me-too-op.webp"
-            thumbnail_url = doc.selectFirst("div.flex-shrink-0 img")?.let { img ->
-                img.attr("src").ifEmpty { null }
-                    ?: img.attr("data-src").ifEmpty { null }
-            } ?: doc.selectFirst("img[alt*=Cover], img.object-cover")?.let { img ->
-                img.attr("src").ifEmpty { img.attr("data-src") }
+            // og:image always carries the cover; DOM fallback scoped to cover path
+            // (header logo also sits in a div.flex-shrink-0, so don't select by that class)
+            thumbnail_url = doc.selectFirst("meta[property=og:image]")?.attr("content")
+                ?.takeIf { it.isNotEmpty() }
+                ?: doc.selectFirst("img[src*=/covers/], img[data-src*=/covers/]")?.let { img ->
+                    img.absUrl("src").ifEmpty { img.absUrl("data-src") }
+                }
+
+            // Synopsis holds multiple <p> tags - join all of them, preserving <br> breaks
+            description = doc.selectFirst("div.prose, div.p-4.max-w-none")?.let { el ->
+                el.select("br").prepend("\\n")
+                el.select("p")
+                    .map { it.text().replace("\\n", "\n").trim() }
+                    .filter { it.isNotEmpty() }
+                    .takeIf { it.isNotEmpty() }
+                    ?.joinToString("\n\n")
+                    ?: el.text().replace("\\n", "\n").trim()
             }
 
-            description = doc.selectFirst("div.prose p, div.p-4.max-w-none p")?.text()?.trim()
             author = doc.selectFirst("span.font-medium.text-white")?.text()?.trim()
-            genre = doc.select("a[href*=/genre/]").joinToString(", ") { it.text().trim() }
+            genre = doc.select("a[href*=/genre/]")
+                .map { it.text().trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+                .joinToString(", ")
+
+            // Status sits in a stats block: value div (font-bold) + "Status" label div.
+            // Don't scan doc.text() - the footer always contains a "Completed" nav link.
+            val statusText = doc.selectFirst("div:matchesOwn(^\\s*Status\\s*$)")
+                ?.parent()?.selectFirst("div.font-bold")?.text() ?: ""
             status = when {
-                doc.text().contains("Completed", ignoreCase = true) -> SManga.COMPLETED
-                doc.text().contains("Ongoing", ignoreCase = true) -> SManga.ONGOING
+                statusText.contains("Completed", ignoreCase = true) -> SManga.COMPLETED
+                statusText.contains("Ongoing", ignoreCase = true) -> SManga.ONGOING
+                statusText.contains("Hiatus", ignoreCase = true) -> SManga.ON_HIATUS
                 else -> SManga.UNKNOWN
             }
         }
