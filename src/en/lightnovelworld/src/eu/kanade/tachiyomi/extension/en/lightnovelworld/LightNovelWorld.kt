@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.lightnovelworld
+package eu.kanade.tachiyomi.novelextension.en.lightnovelworld
 
 import android.app.Application
 import androidx.preference.PreferenceScreen
