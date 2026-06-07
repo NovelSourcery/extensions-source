@@ -138,6 +138,9 @@ class Fenrirealm :
     // API base URL - from instructions.txt: /api/new/v2
     private val apiBaseUrl = "$baseUrl/api/new/v2"
 
+    // Chapter Number Prefix
+    private val titlePrefixRE = Regex("^chapter [0-9]+(?: [^[:alnum:]] |)", RegexOption.IGNORE_CASE)
+
     override fun popularMangaRequest(page: Int): Request = GET("$apiBaseUrl/home/popular-series", headers)
 
     override fun popularMangaParse(response: Response): MangasPage {
@@ -255,22 +258,41 @@ class Fenrirealm :
         val chapters = json.decodeFromString<List<ChapterApiDto>>(response.body.string())
         val slug = response.request.url.pathSegments.dropLast(1).lastOrNull() ?: ""
 
-        return chapters.mapNotNull { chapter ->
+        return chapters.sortedWith(
+            compareBy({ it.group?.index ?: 0 }, { it.number }),
+        ).mapIndexedNotNull { index, chapter ->
             val isLocked = chapter.locked?.price?.let { it > 0 } ?: false
-            if (hideLockedChapters && isLocked) return@mapNotNull null
+            if (hideLockedChapters && isLocked) return@mapIndexedNotNull null
 
             SChapter.create().apply {
-                url = "/series/$slug/chapter-${chapter.number}"
+                url = buildString {
+                    append("/series/$slug")
+                    chapter.group?.slug?.let {
+                        append("/$it")
+                    }
+                    append("/chapter-${chapter.number}")
+                }
+
                 name = buildString {
                     if (isLocked) append("🔒 ")
-                    if (!chapter.title.isNullOrBlank() && chapter.title != "Chapter ${chapter.number}") {
-                        append(" - ${chapter.title}")
+
+                    val group = chapter.group
+                    when {
+                        group?.abbr != null -> append("${group.abbr} Ch. ${chapter.number}")
+                        group?.index != null -> append("Vol. ${group.index} Ch. ${chapter.number}")
+                        else -> append("Chapter ${chapter.number}")
                     }
+
+                    chapter.title
+                        ?.replace(titlePrefixRE, "")
+                        ?.trim()
+                        ?.takeIf(String::isNotBlank)
+                        ?.let { append(" - $it") }
                 }
-                chapter_number = chapter.number.toFloat()
+                chapter_number = (index + 1).toFloat()
                 date_upload = parseDate(chapter.createdAt)
             }
-        }.sortedByDescending { it.chapter_number }
+        }.asReversed()
     }
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
@@ -604,13 +626,11 @@ class Fenrirealm :
     )
 
     @Serializable
-    data class ChapterDto(
-        val id: Int? = null,
-        val title: String,
-        val slug: String,
-        val url: String? = null,
-        @SerialName("chapter_number") val chapterNumber: Int? = null,
-        @SerialName("created_at") val createdAt: String? = null,
+    data class GroupDto(
+        val index: Int? = null,
+        val slug: String? = null,
+        val name: String? = null,
+        @SerialName("abbreviation") val abbr: String? = null,
     )
 
     @Serializable
@@ -618,6 +638,7 @@ class Fenrirealm :
         val number: Int,
         val title: String? = null,
         val slug: String? = null,
+        val group: GroupDto? = null,
         @SerialName("created_at") val createdAt: String? = null,
         @SerialName("updated_at") val updatedAt: String? = null,
         val locked: LockedDto? = null,

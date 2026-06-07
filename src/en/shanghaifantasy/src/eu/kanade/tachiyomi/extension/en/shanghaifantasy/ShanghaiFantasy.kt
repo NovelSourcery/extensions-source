@@ -72,7 +72,7 @@ class ShanghaiFantasy :
         }
 
         return GET(
-            "$baseUrl/wp-json/fiction/v1/novels/?novelstatus=$statusParam&term=$genreParam&page=$page&orderby=&order=",
+            "$baseUrl/wp-json/fiction/v1/novels/?novelstatus=$statusParam&term=$genreParam&page=$page&orderby=&order=&query=$query",
             headers,
         )
     }
