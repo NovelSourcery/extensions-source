@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.novellib
+package eu.kanade.tachiyomi.novelextension.en.novellib
 
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
