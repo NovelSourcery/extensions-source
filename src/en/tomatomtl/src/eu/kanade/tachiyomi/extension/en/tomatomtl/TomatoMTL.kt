@@ -49,7 +49,12 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 @Serializable
-data class SourceItem(val id: String, val name: String)
+data class SourceItem(
+    val id: String,
+    val name: String,
+    val baseUrl: String = "",
+    val regexp: String = "",
+)
 
 class TomatoMTL :
     HttpSource(),
@@ -76,6 +81,10 @@ class TomatoMTL :
 
     // Decryption key from the website's JavaScript
     private val unlockCode = "65237366656177646a7671646b65313736383537393230302356523111774562"
+
+    // Tracks the previous garden API page to detect sources that repeat results forever
+    private var lastGardenPageKey: String? = null
+    private var lastGardenPageLinks: Set<String> = emptySet()
 
     // Override client to append machine translation cookies without bypassing the default WebView CookieJar
     override val client: OkHttpClient = network.cloudflareClient.newBuilder()
@@ -389,6 +398,10 @@ class TomatoMTL :
             1
         }
 
+        // The garden source id comes from the request URL path (/api/source/{source}/...),
+        // NOT from the book's "host" field which is the upstream site's domain.
+        val requestSource = requestUrl.substringAfter("/source/", "").substringBefore("/")
+
         return try {
             val jsonResult = json.parseToJsonElement(decrypted).jsonObject
             val success = jsonResult["success"]?.jsonPrimitive?.booleanOrNull ?: false
@@ -400,13 +413,19 @@ class TomatoMTL :
 
             val books = jsonResult["data"]?.jsonArray ?: return MangasPage(emptyList(), false)
 
-            // Pagination logic - garden API uses "has_more" or check array size
-            val hasMore = when {
-                jsonResult["has_more"]?.jsonPrimitive?.booleanOrNull != null -> jsonResult["has_more"]?.jsonPrimitive?.booleanOrNull ?: false
-                jsonResult["hasMore"]?.jsonPrimitive?.booleanOrNull != null -> jsonResult["hasMore"]?.jsonPrimitive?.booleanOrNull ?: false
-                books.size >= 20 -> true
-                else -> false
+            // Some sources ignore the page param and return identical results for every page
+            // (with a "next" pointer that never ends), so stop when a page repeats the previous one
+            val pageKey = requestUrl.replace(Regex("([?&])page=\\d+"), "")
+            val pageLinks = books.mapNotNull { it.jsonObject["link"]?.jsonPrimitive?.contentOrNull }.toSet()
+            if (page > 1 && pageKey == lastGardenPageKey && pageLinks == lastGardenPageLinks) {
+                return MangasPage(emptyList(), false)
             }
+            lastGardenPageKey = pageKey
+            lastGardenPageLinks = pageLinks
+
+            // Garden API gives no max-page indication ("next" can be present even past the
+            // end), so keep paginating until a page comes back empty or repeats
+            val hasMore = books.isNotEmpty()
 
             val titlesToTranslate = mutableListOf<String>()
             val mangaData = books.mapNotNull { element ->
@@ -422,10 +441,12 @@ class TomatoMTL :
                     titlesToTranslate.add(cleanedTitle)
 
                     val hexUrl = stringToHex(bookUrl)
-                    val source = book["host"]?.jsonPrimitive?.contentOrNull
-                        ?.replace(Regex("https?://"), "")
-                        ?.replace(Regex("\\..*"), "")
-                        ?: "unknown"
+                    val source = requestSource.ifEmpty {
+                        book["host"]?.jsonPrimitive?.contentOrNull
+                            ?.replace(Regex("https?://"), "")
+                            ?.replace(Regex("\\..*"), "")
+                            ?: "unknown"
+                    }
 
                     val gardenUrl = "/garden/$source/$hexUrl"
 
@@ -783,9 +804,9 @@ class TomatoMTL :
                 val pathParts = manga.url.removePrefix("/garden/").split("/")
                 if (pathParts.size < 2) return@fromCallable manga
 
-                val source = pathParts[0]
                 val hexId = pathParts[1]
                 val novelUrl = hexToString(hexId)
+                val source = resolveGardenSource(pathParts[0], novelUrl)
 
                 Log.d("TomatoMTL", "Fetching garden details for: source=$source, url=$novelUrl")
 
@@ -1072,9 +1093,9 @@ class TomatoMTL :
                 val pathParts = manga.url.removePrefix("/garden/").split("/")
                 if (pathParts.size < 2) return@fromCallable emptyList<SChapter>()
 
-                val source = pathParts[0]
                 val hexId = pathParts[1]
                 val novelUrl = hexToString(hexId)
+                val source = resolveGardenSource(pathParts[0], novelUrl)
 
                 val chaptersUrl = "$gardenApiBase/source/$source/chapters?url=${URLEncoder.encode(novelUrl, "UTF-8")}"
                 Log.d("TomatoMTL", "Fetching garden chapters from: $chaptersUrl")
@@ -1392,9 +1413,9 @@ class TomatoMTL :
         val pathParts = pathString.split("/")
         if (pathParts.size < 3 || pathString.isEmpty()) return "Invalid chapter URL format"
 
-        val source = pathParts[0]
-        // pathParts[1] is the hex novel URL (not used directly for chapter fetch)
+        // pathParts[1] is the hex novel URL - used to resolve the provider id
         // pathParts[2] contains {encoded_chapter_url}-{index}
+        val source = resolveGardenSource(pathParts[0], hexToString(pathParts[1]))
         val chapterPart = pathParts[2]
 
         val lastDashIdx = chapterPart.lastIndexOf("-")
@@ -1971,6 +1992,60 @@ class TomatoMTL :
         }
     }
 
+    /**
+     * Read the full cached source list, refreshing from the API if missing.
+     * Must only be called from a background thread (performs network on refresh).
+     */
+    private fun getSourceItems(): List<SourceItem> {
+        val cached = preferences.getString(SOURCES_CACHE_KEY, null)
+        if (cached != null) {
+            try {
+                val items = json.decodeFromString<List<SourceItem>>(cached)
+                // Old cache format lacked baseUrl/regexp - refresh to get the URL patterns
+                if (items.any { it.regexp.isNotBlank() || it.baseUrl.isNotBlank() }) {
+                    return items
+                }
+            } catch (e: Exception) {
+                Log.e("TomatoMTL", "Error reading cached sources: ${e.message}")
+            }
+        }
+        refreshSources()
+        return preferences.getString(SOURCES_CACHE_KEY, null)?.let {
+            try {
+                json.decodeFromString<List<SourceItem>>(it)
+            } catch (e: Exception) {
+                null
+            }
+        } ?: emptyList()
+    }
+
+    /**
+     * Resolve the garden provider id for a novel URL. Older versions stored a source id
+     * derived from the upstream host (e.g. "api"), which the garden API rejects with
+     * "provider not found". When the stored id is not a known provider, match the novel
+     * URL against each provider's URL pattern / base_url to recover the real id.
+     */
+    private fun resolveGardenSource(source: String, novelUrl: String): String {
+        val sources = getSourceItems()
+        if (sources.isEmpty() || sources.any { it.id == source }) return source
+
+        val match = sources.firstOrNull { item ->
+            item.regexp.isNotBlank() &&
+                try {
+                    Regex(item.regexp).containsMatchIn(novelUrl)
+                } catch (e: Exception) {
+                    false
+                }
+        } ?: sources.firstOrNull { item ->
+            item.baseUrl.isNotBlank() && novelUrl.startsWith(item.baseUrl)
+        }
+
+        if (match != null) {
+            Log.d("TomatoMTL", "Resolved garden source '$source' -> '${match.id}' for $novelUrl")
+        }
+        return match?.id ?: source
+    }
+
     private fun refreshSources() {
         try {
             val response = client.newCall(GET("$gardenApiBase/sources", headers)).execute()
@@ -1992,7 +2067,9 @@ class TomatoMTL :
                             val srcId = obj["id"]?.jsonPrimitive?.contentOrNull
                                 ?: return@mapNotNull null
                             val srcName = obj["name"]?.jsonPrimitive?.contentOrNull ?: srcId
-                            SourceItem(srcId, srcName)
+                            val srcBaseUrl = obj["base_url"]?.jsonPrimitive?.contentOrNull ?: ""
+                            val srcRegexp = obj["regexp"]?.jsonPrimitive?.contentOrNull ?: ""
+                            SourceItem(srcId, srcName, srcBaseUrl, srcRegexp)
                         }
                         preferences.edit()
                             .putString(SOURCES_CACHE_KEY, json.encodeToString(sources))
