@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.wuxiaclick
+﻿package eu.kanade.tachiyomi.novelextension.en.wuxiaclick
 
 import android.app.Application
 import android.content.SharedPreferences

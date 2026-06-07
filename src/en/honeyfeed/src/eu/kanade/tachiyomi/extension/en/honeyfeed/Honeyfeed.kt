@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.honeyfeed
+package eu.kanade.tachiyomi.novelextension.en.honeyfeed
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource

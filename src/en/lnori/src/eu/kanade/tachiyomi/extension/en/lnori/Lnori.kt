@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.lnori
+package eu.kanade.tachiyomi.novelextension.en.lnori
 
 import android.app.Application
 import android.content.SharedPreferences

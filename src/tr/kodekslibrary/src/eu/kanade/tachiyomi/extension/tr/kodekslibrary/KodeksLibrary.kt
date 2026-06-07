@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.tr.kodekslibrary
+﻿package eu.kanade.tachiyomi.novelextension.tr.kodekslibrary
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 

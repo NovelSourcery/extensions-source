@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.mtlreader
+package eu.kanade.tachiyomi.novelextension.en.mtlreader
 
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen

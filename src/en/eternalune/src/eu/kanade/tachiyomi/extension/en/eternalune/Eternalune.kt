@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.eternalune
+﻿package eu.kanade.tachiyomi.novelextension.en.eternalune
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 

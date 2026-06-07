@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.ranovel
+package eu.kanade.tachiyomi.novelextension.en.ranovel
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 import eu.kanade.tachiyomi.network.GET

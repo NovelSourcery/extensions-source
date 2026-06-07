@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.pawread
+﻿package eu.kanade.tachiyomi.novelextension.en.pawread
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource

@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.dragontea
+﻿package eu.kanade.tachiyomi.novelextension.en.dragontea
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 

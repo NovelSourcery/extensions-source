@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.lncrawler
+package eu.kanade.tachiyomi.novelextension.en.lncrawler
 
 import android.app.Application
 import android.content.SharedPreferences

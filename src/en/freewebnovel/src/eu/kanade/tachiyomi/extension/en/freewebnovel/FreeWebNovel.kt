@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.freewebnovel
+﻿package eu.kanade.tachiyomi.novelextension.en.freewebnovel
 
 import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
 import eu.kanade.tachiyomi.source.model.SManga

@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.ar.azora
+﻿package eu.kanade.tachiyomi.novelextension.ar.azora
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 

@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.fenrirealm
+﻿package eu.kanade.tachiyomi.novelextension.en.fenrirealm
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource

@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.requiemtranslations
+﻿package eu.kanade.tachiyomi.novelextension.en.requiemtranslations
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 import eu.kanade.tachiyomi.network.GET

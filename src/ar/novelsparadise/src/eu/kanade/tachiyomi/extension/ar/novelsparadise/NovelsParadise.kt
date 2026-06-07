@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.ar.novelsparadise
+﻿package eu.kanade.tachiyomi.novelextension.ar.novelsparadise
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 

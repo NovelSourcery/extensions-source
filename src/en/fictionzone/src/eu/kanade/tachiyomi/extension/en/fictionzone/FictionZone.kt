@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.fictionzone
+﻿package eu.kanade.tachiyomi.novelextension.en.fictionzone
 
 import android.app.Application
 import android.content.SharedPreferences

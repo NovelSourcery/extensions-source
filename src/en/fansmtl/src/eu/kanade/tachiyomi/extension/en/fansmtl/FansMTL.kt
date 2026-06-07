@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.fansmtl
+﻿package eu.kanade.tachiyomi.novelextension.en.fansmtl
 
 import eu.kanade.tachiyomi.multisrc.readwn.ReadWN
 import eu.kanade.tachiyomi.network.GET

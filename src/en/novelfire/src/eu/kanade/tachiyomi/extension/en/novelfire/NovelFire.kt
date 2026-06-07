@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.novelfire
+package eu.kanade.tachiyomi.novelextension.en.novelfire
 
 import android.app.Application
 import android.content.SharedPreferences

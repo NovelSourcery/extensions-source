@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.noveldex
+﻿package eu.kanade.tachiyomi.novelextension.en.noveldex
 
 import android.app.Application
 import android.content.SharedPreferences

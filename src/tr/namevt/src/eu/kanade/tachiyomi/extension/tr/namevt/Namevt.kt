@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.tr.namevt
+﻿package eu.kanade.tachiyomi.novelextension.tr.namevt
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 

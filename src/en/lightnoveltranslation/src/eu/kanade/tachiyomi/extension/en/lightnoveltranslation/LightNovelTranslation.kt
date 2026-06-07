@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.lightnoveltranslation
+﻿package eu.kanade.tachiyomi.novelextension.en.lightnoveltranslation
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST

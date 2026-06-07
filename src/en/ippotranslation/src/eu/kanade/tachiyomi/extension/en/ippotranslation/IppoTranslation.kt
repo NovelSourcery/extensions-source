@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.ippotranslation
+package eu.kanade.tachiyomi.novelextension.en.ippotranslation
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 

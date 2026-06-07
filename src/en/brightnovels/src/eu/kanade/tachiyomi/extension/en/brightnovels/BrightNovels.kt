@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.brightnovels
+package eu.kanade.tachiyomi.novelextension.en.brightnovels
 
 import android.app.Application
 import android.content.SharedPreferences

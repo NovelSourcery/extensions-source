@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.hireaththranslation
+package eu.kanade.tachiyomi.novelextension.en.hireaththranslation
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 

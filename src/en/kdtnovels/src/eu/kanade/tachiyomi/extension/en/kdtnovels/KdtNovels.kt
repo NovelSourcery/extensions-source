@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.kdtnovels
+package eu.kanade.tachiyomi.novelextension.en.kdtnovels
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 import eu.kanade.tachiyomi.network.GET

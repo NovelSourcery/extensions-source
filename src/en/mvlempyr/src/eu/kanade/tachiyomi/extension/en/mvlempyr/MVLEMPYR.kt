@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.mvlempyr
+﻿package eu.kanade.tachiyomi.novelextension.en.mvlempyr
 
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET

@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.kuupress
+package eu.kanade.tachiyomi.novelextension.en.kuupress
 
 import android.util.Base64
 import eu.kanade.tachiyomi.network.GET

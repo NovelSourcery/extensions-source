@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.citrusaurora
+﻿package eu.kanade.tachiyomi.novelextension.en.citrusaurora
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 

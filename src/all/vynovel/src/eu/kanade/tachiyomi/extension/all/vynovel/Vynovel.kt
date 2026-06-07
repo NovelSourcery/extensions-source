@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.all.vynovel
+﻿package eu.kanade.tachiyomi.novelextension.all.vynovel
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource

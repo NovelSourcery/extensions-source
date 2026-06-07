@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.systemtranslation
+package eu.kanade.tachiyomi.novelextension.en.systemtranslation
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 import eu.kanade.tachiyomi.network.GET

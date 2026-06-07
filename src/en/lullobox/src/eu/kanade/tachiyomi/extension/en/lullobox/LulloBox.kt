@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.lullobox
+﻿package eu.kanade.tachiyomi.novelextension.en.lullobox
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 

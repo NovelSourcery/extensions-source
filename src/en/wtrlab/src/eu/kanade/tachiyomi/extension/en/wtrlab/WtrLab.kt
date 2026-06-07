@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.wtrlab
+package eu.kanade.tachiyomi.novelextension.en.wtrlab
 
 import android.app.Application
 import android.util.Log

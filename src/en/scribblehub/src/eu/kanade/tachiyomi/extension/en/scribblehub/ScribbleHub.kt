@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.scribblehub
+package eu.kanade.tachiyomi.novelextension.en.scribblehub
 
 import android.app.Application
 import android.content.SharedPreferences

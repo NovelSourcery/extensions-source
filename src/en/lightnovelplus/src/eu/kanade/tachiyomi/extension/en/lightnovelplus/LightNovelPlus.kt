@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.lightnovelplus
+package eu.kanade.tachiyomi.novelextension.en.lightnovelplus
 
 import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
 import eu.kanade.tachiyomi.network.GET

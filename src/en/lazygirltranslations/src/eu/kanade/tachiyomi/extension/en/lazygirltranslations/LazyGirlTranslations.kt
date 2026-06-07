@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.lazygirltranslations
+﻿package eu.kanade.tachiyomi.novelextension.en.lazygirltranslations
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 

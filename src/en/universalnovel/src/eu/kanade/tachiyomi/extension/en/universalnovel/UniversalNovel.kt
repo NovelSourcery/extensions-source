@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.universalnovel
+﻿package eu.kanade.tachiyomi.novelextension.en.universalnovel
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 

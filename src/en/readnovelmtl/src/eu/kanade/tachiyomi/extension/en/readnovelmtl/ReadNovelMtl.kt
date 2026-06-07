@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.readnovelmtl
+﻿package eu.kanade.tachiyomi.novelextension.en.readnovelmtl
 
 import android.app.Application
 import android.content.SharedPreferences

@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.webnovel
+package eu.kanade.tachiyomi.novelextension.en.webnovel
 
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.SManga

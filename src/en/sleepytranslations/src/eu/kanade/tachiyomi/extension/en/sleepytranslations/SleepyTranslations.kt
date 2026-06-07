@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.sleepytranslations
+﻿package eu.kanade.tachiyomi.novelextension.en.sleepytranslations
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 

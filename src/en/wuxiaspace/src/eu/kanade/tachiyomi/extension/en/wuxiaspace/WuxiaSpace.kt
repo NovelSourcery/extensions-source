@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.wuxiaspace
+package eu.kanade.tachiyomi.novelextension.en.wuxiaspace
 
 import eu.kanade.tachiyomi.multisrc.readwn.ReadWN
 

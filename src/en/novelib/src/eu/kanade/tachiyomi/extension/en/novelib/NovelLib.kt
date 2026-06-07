@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.novelib
+﻿package eu.kanade.tachiyomi.novelextension.en.novelib
 
 import eu.kanade.tachiyomi.multisrc.fictioneer.Fictioneer
 

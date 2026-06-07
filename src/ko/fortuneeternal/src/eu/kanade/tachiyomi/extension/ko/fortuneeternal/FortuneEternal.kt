@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.ko.fortuneeternal
+﻿package eu.kanade.tachiyomi.novelextension.ko.fortuneeternal
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 

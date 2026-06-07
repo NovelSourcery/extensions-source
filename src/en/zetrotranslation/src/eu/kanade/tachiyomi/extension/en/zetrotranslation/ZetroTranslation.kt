@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.zetrotranslation
+﻿package eu.kanade.tachiyomi.novelextension.en.zetrotranslation
 
 import android.app.Application
 import android.content.SharedPreferences

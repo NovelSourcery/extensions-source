@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.ar.freekolnovel
+package eu.kanade.tachiyomi.novelextension.ar.freekolnovel
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 import eu.kanade.tachiyomi.network.GET

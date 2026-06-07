@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.tr.ragnarscans
+﻿package eu.kanade.tachiyomi.novelextension.tr.ragnarscans
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 

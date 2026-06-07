@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.sonicmtl
+package eu.kanade.tachiyomi.novelextension.en.sonicmtl
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 import eu.kanade.tachiyomi.network.GET

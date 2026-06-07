@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.webnovel
+package eu.kanade.tachiyomi.novelextension.en.webnovel
 
 import android.app.Application
 import android.content.SharedPreferences

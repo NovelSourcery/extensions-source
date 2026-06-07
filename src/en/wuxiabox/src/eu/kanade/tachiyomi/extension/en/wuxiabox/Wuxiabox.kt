@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.wuxiabox
+package eu.kanade.tachiyomi.novelextension.en.wuxiabox
 
 import eu.kanade.tachiyomi.multisrc.readwn.ReadWN
 import eu.kanade.tachiyomi.network.GET

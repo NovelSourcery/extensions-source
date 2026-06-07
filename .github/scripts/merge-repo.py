@@ -19,7 +19,7 @@ print(f"Modules to delete: {to_delete}")
 
 for module in to_delete:
     apk_name = f"tsundoku-{module}-v*.*.*.apk"
-    icon_name = f"eu.kanade.tachiyomi.extension.{module}.png"
+    icon_name = f"eu.kanade.tachiyomi.novelextension.{module}.png"
     for file in REMOTE_REPO.joinpath("apk").glob(apk_name):
         print(file.name)
         file.unlink(missing_ok=True)

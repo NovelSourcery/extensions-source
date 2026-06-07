@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.inkitt
+package eu.kanade.tachiyomi.novelextension.en.inkitt
 
 import android.app.Application
 import android.content.SharedPreferences

@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.mtlbooks
+﻿package eu.kanade.tachiyomi.novelextension.en.mtlbooks
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST

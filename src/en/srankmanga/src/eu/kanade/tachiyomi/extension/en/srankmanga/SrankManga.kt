@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.srankmanga
+package eu.kanade.tachiyomi.novelextension.en.srankmanga
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 import eu.kanade.tachiyomi.network.GET

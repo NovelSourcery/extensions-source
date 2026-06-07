@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.id.bacalightnovel
+﻿package eu.kanade.tachiyomi.novelextension.id.bacalightnovel
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 

@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.foxaholic18
+﻿package eu.kanade.tachiyomi.novelextension.en.foxaholic18
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 

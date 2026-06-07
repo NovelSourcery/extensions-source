@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.ar.markazriwayat
+﻿package eu.kanade.tachiyomi.novelextension.ar.markazriwayat
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 

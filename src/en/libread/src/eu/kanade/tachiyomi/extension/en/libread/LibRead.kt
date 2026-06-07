@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.libread
+﻿package eu.kanade.tachiyomi.novelextension.en.libread
 
 import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
 import eu.kanade.tachiyomi.source.model.Filter

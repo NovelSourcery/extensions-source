@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.translatino
+package eu.kanade.tachiyomi.novelextension.en.translatino
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST

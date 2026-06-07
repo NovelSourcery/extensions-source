@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.id.novelbookid
+﻿package eu.kanade.tachiyomi.novelextension.id.novelbookid
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 

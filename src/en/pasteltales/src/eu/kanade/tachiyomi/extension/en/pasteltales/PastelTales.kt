@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.pasteltales
+﻿package eu.kanade.tachiyomi.novelextension.en.pasteltales
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 

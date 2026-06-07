@@ -5,9 +5,9 @@
 
     <application android:icon="@mipmap/ic_launcher" android:allowBackup="false" android:label="${appName}">
 
-        <meta-data android:name="tachiyomi.extension.class" android:value="${extClass}" />
-        <meta-data android:name="tachiyomi.extension.nsfw" android:value="${nsfw}" />
-        <meta-data android:name="tachiyomi.extension.novel" android:value="1" />
+        <meta-data android:name="tachiyomi.novelextension.class" android:value="${extClass}" />
+        <meta-data android:name="tachiyomi.novelextension.nsfw" android:value="${nsfw}" />
+        <meta-data android:name="tachiyomi.novelextension.novel" android:value="1" />
 
     </application>
 

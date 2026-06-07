@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.tomatomtl
+package eu.kanade.tachiyomi.novelextension.en.tomatomtl
 
 import android.app.Application
 import android.content.SharedPreferences

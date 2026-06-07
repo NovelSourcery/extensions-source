@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.readfromnet
+﻿package eu.kanade.tachiyomi.novelextension.en.readfromnet
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource

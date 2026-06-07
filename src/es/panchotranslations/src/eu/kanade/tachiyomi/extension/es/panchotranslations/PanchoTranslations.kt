@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.es.panchotranslations
+﻿package eu.kanade.tachiyomi.novelextension.es.panchotranslations
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 

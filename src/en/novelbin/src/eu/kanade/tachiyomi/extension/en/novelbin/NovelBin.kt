@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.novelbin
+﻿package eu.kanade.tachiyomi.novelextension.en.novelbin
 
 import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
 import eu.kanade.tachiyomi.source.model.MangasPage

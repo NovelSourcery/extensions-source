@@ -15,7 +15,7 @@ if (theme != null) evaluationDependsOn(theme.path)
 android {
     compileSdk = AndroidConfig.compileSdk
 
-    namespace = "eu.kanade.tachiyomi.extension"
+    namespace = "eu.kanade.tachiyomi.novelextension"
 
     sourceSets {
         main {

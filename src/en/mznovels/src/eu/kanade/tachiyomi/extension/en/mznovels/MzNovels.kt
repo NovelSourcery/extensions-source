@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.mznovels
+﻿package eu.kanade.tachiyomi.novelextension.en.mznovels
 
 import android.app.Application
 import android.content.SharedPreferences

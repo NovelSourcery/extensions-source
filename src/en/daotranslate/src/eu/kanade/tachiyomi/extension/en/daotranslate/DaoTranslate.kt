@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.daotranslate
+package eu.kanade.tachiyomi.novelextension.en.daotranslate
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 

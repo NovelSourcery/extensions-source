@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.sufficientvelocity
+package eu.kanade.tachiyomi.novelextension.en.sufficientvelocity
 
 import eu.kanade.tachiyomi.multisrc.xenforo.XenForo
 

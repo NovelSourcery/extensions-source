@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.ranobes
+﻿package eu.kanade.tachiyomi.novelextension.en.ranobes
 
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen

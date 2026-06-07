@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.neosekai
+﻿package eu.kanade.tachiyomi.novelextension.en.neosekai
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 

@@ -226,7 +226,7 @@ src/<lang>/<mysourcename>/
 
 `<lang>` should be an ISO 639-1 compliant language code (two letters or `all`). `<mysourcename>`
 should be adapted from the site name, and can only contain lowercase ASCII letters and digits.
-Your extension code must be placed in the package `eu.kanade.tachiyomi.extension.<lang>.<mysourcename>`.
+Your extension code must be placed in the package `eu.kanade.tachiyomi.novelextension.<lang>.<mysourcename>`.
 
 > [!TIP]
 > Additional files in the extension package (like `Dto.kt`, `Filters.kt`, `UrlActivity.kt`)
@@ -754,7 +754,7 @@ os.makedirs(f"{package}/src")
 os.makedirs(f"{package}/res")
 
 with open(f"{package}/src/{source}.kt", "w") as f:
-    f.write(f"package eu.kanade.tachiyomi.extension.{lang}.{package}\n\n")
+    f.write(f"package eu.kanade.tachiyomi.novelextension.{lang}.{package}\n\n")
 ```
 
 ### Additional Notes
@@ -876,7 +876,7 @@ Since most of the manga sources are going to use HTTPS, we need to disable SSL v
 to use the web debugger. For that, add this code to inside your source class:
 
 ```kotlin
-package eu.kanade.tachiyomi.extension.en.mysource
+package eu.kanade.tachiyomi.novelextension.en.mysource
 
 import android.annotation.SuppressLint
 import eu.kanade.tachiyomi.source.online.HttpSource

@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.wordexcerpt
+﻿package eu.kanade.tachiyomi.novelextension.en.wordexcerpt
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 

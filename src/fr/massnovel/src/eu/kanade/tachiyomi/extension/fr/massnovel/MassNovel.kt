@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.fr.massnovel
+﻿package eu.kanade.tachiyomi.novelextension.fr.massnovel
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 

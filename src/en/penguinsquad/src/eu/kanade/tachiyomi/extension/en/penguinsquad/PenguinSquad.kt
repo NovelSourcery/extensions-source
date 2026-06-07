@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.penguinsquad
+﻿package eu.kanade.tachiyomi.novelextension.en.penguinsquad
 
 import eu.kanade.tachiyomi.multisrc.fictioneer.Fictioneer
 

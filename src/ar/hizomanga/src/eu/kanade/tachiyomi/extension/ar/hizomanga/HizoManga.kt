@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.ar.hizomanga
+﻿package eu.kanade.tachiyomi.novelextension.ar.hizomanga
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 

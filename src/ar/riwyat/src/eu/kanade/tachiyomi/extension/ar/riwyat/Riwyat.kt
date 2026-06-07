@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.ar.riwyat
+﻿package eu.kanade.tachiyomi.novelextension.ar.riwyat
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 import eu.kanade.tachiyomi.network.GET

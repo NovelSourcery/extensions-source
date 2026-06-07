@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.novelbuddy
+﻿package eu.kanade.tachiyomi.novelextension.en.novelbuddy
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource

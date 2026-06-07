@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.en.knoxt
+﻿package eu.kanade.tachiyomi.novelextension.en.knoxt
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 

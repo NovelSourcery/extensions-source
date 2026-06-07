@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.shanghaifantasy
+package eu.kanade.tachiyomi.novelextension.en.shanghaifantasy
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource

@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.tr.turkcelightnovels
+﻿package eu.kanade.tachiyomi.novelextension.tr.turkcelightnovels
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 

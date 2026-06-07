@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.extension.tr.ekitaplar
+﻿package eu.kanade.tachiyomi.novelextension.tr.ekitaplar
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 
