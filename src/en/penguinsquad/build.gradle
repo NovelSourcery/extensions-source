@@ -1,9 +1,7 @@
 ext {
     extName = 'PenguinSquad'
     extClass = '.PenguinSquad'
-    themePkg = 'fictioneer'
-    baseUrl = 'https://penguin-squad.com'
-    overrideVersionCode = 1
+    extVersionCode = 3
     isNsfw = false
     isNovel = true
 }
