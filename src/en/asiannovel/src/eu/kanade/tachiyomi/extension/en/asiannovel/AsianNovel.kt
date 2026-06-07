@@ -260,7 +260,7 @@ class AsianNovel :
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val request = GET(page.url, headers)
+        val request = GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
         val response = client.newCall(request).execute()
         val document = Jsoup.parse(response.body.string())
 

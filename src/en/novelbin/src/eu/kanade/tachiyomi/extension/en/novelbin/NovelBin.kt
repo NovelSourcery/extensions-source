@@ -137,7 +137,7 @@ class NovelBin :
 
     // Content parsing
     override suspend fun fetchPageText(page: eu.kanade.tachiyomi.source.model.Page): String {
-        val response = client.newCall(okhttp3.Request.Builder().url(page.url).headers(headers).build()).execute()
+        val response = client.newCall(okhttp3.Request.Builder().url(if (page.url.startsWith("http")) page.url else baseUrl + page.url).headers(headers).build()).execute()
         val document = response.asJsoup()
 
         val content = document.selectFirst("div#chr-content, div#chapter-content, div.chapter-content")

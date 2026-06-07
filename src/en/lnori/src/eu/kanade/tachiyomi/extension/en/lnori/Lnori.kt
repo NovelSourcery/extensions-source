@@ -795,7 +795,7 @@ class Lnori :
     // ======================== Novel Content ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val request = GET(page.url, headers)
+        val request = GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
         val response = client.newCall(request).execute()
         val html = response.body.string()
         val document = Jsoup.parse(html)

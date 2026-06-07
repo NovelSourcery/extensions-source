@@ -295,7 +295,7 @@ abstract class XenForo(
     }
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.newCall(GET(page.url, headers)).execute().asJsoup()
+        val doc = client.newCall(GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)).execute().asJsoup()
         val postId = page.url.substringAfterLast("#")
         val post = doc.selectFirst("#js-$postId") ?: doc.selectFirst(".message-body")
         val message = post?.selectFirst(".bbWrapper") ?: return ""

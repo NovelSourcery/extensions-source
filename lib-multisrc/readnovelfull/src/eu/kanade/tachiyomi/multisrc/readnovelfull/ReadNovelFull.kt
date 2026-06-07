@@ -633,7 +633,8 @@ abstract class ReadNovelFull(
     // ======================== Novel Content ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(page.url, headers)).execute()
+        val pageUrl = if (page.url.startsWith("http")) page.url else baseUrl + page.url
+        val response = client.newCall(GET(pageUrl, headers)).execute()
         val document = response.asJsoup()
 
         // Try multiple selectors for chapter content
