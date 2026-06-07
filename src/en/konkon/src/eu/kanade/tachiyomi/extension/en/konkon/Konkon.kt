@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.konkon
+package eu.kanade.tachiyomi.novelextension.en.konkon
 
 import android.content.SharedPreferences
 import android.util.Base64
