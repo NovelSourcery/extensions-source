@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.mtlwuxia
+package eu.kanade.tachiyomi.novelextension.en.mtlwuxia
 
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
