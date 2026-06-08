@@ -4,10 +4,11 @@ import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
+import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.ParsedHttpSource
+import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
@@ -30,7 +31,7 @@ abstract class LightNovelWP(
     override val name: String,
     override val baseUrl: String,
     override val lang: String,
-) : ParsedHttpSource(),
+) : HttpSource(),
     NovelSource {
 
     // isNovelSource is provided by NovelSource interface with default value true
@@ -57,9 +58,23 @@ abstract class LightNovelWP(
         return GET(url, headers)
     }
 
-    override fun popularMangaSelector() = "article"
+    override fun popularMangaParse(response: Response): MangasPage = mangaListParse(response, popularMangaSelector(), popularMangaNextPageSelector(), ::popularMangaFromElement)
 
-    override fun popularMangaFromElement(element: Element): SManga = SManga.create().apply {
+    protected fun mangaListParse(
+        response: Response,
+        selector: String,
+        nextPageSelector: String,
+        fromElement: (Element) -> SManga,
+    ): MangasPage {
+        val document = response.asJsoup()
+        val mangas = document.select(selector).map { fromElement(it) }
+        val hasNextPage = document.selectFirst(nextPageSelector) != null
+        return MangasPage(mangas, hasNextPage)
+    }
+
+    protected open fun popularMangaSelector() = "article"
+
+    protected open fun popularMangaFromElement(element: Element): SManga = SManga.create().apply {
         val link = element.selectFirst("a[title], a[href*='/novel/']")
         if (link != null) {
             title = link.attr("title").ifEmpty { link.text() }.trim()
@@ -73,7 +88,7 @@ abstract class LightNovelWP(
         }
     }
 
-    override fun popularMangaNextPageSelector() = "a.next.page-numbers, .pagination .next"
+    protected open fun popularMangaNextPageSelector() = "a.next.page-numbers, .pagination .next"
 
     // ======================== Latest ========================
 
@@ -85,11 +100,13 @@ abstract class LightNovelWP(
         return GET(url, headers)
     }
 
-    override fun latestUpdatesSelector() = popularMangaSelector()
+    override fun latestUpdatesParse(response: Response): MangasPage = mangaListParse(response, latestUpdatesSelector(), latestUpdatesNextPageSelector(), ::latestUpdatesFromElement)
 
-    override fun latestUpdatesFromElement(element: Element) = popularMangaFromElement(element)
+    protected open fun latestUpdatesSelector() = popularMangaSelector()
 
-    override fun latestUpdatesNextPageSelector() = popularMangaNextPageSelector()
+    protected open fun latestUpdatesFromElement(element: Element) = popularMangaFromElement(element)
+
+    protected open fun latestUpdatesNextPageSelector() = popularMangaNextPageSelector()
 
     // ======================== Search ========================
 
@@ -100,15 +117,19 @@ abstract class LightNovelWP(
         return GET(url, headers)
     }
 
-    override fun searchMangaSelector() = popularMangaSelector()
+    override fun searchMangaParse(response: Response): MangasPage = mangaListParse(response, searchMangaSelector(), searchMangaNextPageSelector(), ::searchMangaFromElement)
 
-    override fun searchMangaFromElement(element: Element) = popularMangaFromElement(element)
+    protected open fun searchMangaSelector() = popularMangaSelector()
 
-    override fun searchMangaNextPageSelector() = popularMangaNextPageSelector()
+    protected open fun searchMangaFromElement(element: Element) = popularMangaFromElement(element)
+
+    protected open fun searchMangaNextPageSelector() = popularMangaNextPageSelector()
 
     // ======================== Details ========================
 
-    override fun mangaDetailsParse(document: Document): SManga = SManga.create().apply {
+    override fun mangaDetailsParse(response: Response): SManga = mangaDetailsParse(response.asJsoup())
+
+    protected open fun mangaDetailsParse(document: Document): SManga = SManga.create().apply {
         // Get cover and title from image
         document.selectFirst("img.ts-post-image, .thumb img")?.let {
             thumbnail_url = it.attr("data-src").ifEmpty { it.attr("src") }
@@ -225,18 +246,11 @@ abstract class LightNovelWP(
         0L
     }
 
-    override fun chapterListSelector() = throw UnsupportedOperationException()
-
-    override fun chapterFromElement(element: Element) = throw UnsupportedOperationException()
-
     // ======================== Pages ========================
 
-    override fun pageListParse(document: Document): List<Page> {
-        // For novel sources, we return a single page that will contain the text
-        return listOf(Page(0, document.location()))
-    }
+    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
 
-    override fun imageUrlParse(document: Document): String = ""
+    override fun imageUrlParse(response: Response): String = ""
 
     // ======================== Novel Content ========================
 

@@ -5,10 +5,11 @@ import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
+import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.ParsedHttpSource
+import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
 import okhttp3.FormBody
 import okhttp3.Request
@@ -32,7 +33,7 @@ abstract class ReadWN(
     override val name: String,
     override val baseUrl: String,
     override val lang: String,
-) : ParsedHttpSource(),
+) : HttpSource(),
     NovelSource {
 
     override val isNovelSource = true
@@ -52,9 +53,23 @@ abstract class ReadWN(
         return GET(url, headers)
     }
 
-    override fun popularMangaSelector() = "li.novel-item"
+    override fun popularMangaParse(response: Response): MangasPage = mangaListParse(response, popularMangaSelector(), popularMangaNextPageSelector(), ::popularMangaFromElement)
 
-    override fun popularMangaFromElement(element: Element): SManga = SManga.create().apply {
+    protected fun mangaListParse(
+        response: Response,
+        selector: String,
+        nextPageSelector: String?,
+        fromElement: (Element) -> SManga,
+    ): MangasPage {
+        val document = response.asJsoup()
+        val mangas = document.select(selector).map { fromElement(it) }
+        val hasNextPage = nextPageSelector?.let { document.selectFirst(it) != null } ?: false
+        return MangasPage(mangas, hasNextPage)
+    }
+
+    protected open fun popularMangaSelector() = "li.novel-item"
+
+    protected open fun popularMangaFromElement(element: Element): SManga = SManga.create().apply {
         val link = element.selectFirst("a[href]")
         if (link != null) {
             val href = link.attr("abs:href")
@@ -69,7 +84,7 @@ abstract class ReadWN(
         }
     }
 
-    override fun popularMangaNextPageSelector() = ".pagination a.next"
+    protected open fun popularMangaNextPageSelector(): String? = ".pagination a.next"
 
     // ======================== Latest ========================
 
@@ -78,11 +93,13 @@ abstract class ReadWN(
         return GET(url, headers)
     }
 
-    override fun latestUpdatesSelector() = popularMangaSelector()
+    override fun latestUpdatesParse(response: Response): MangasPage = mangaListParse(response, latestUpdatesSelector(), latestUpdatesNextPageSelector(), ::latestUpdatesFromElement)
 
-    override fun latestUpdatesFromElement(element: Element) = popularMangaFromElement(element)
+    protected open fun latestUpdatesSelector() = popularMangaSelector()
 
-    override fun latestUpdatesNextPageSelector() = popularMangaNextPageSelector()
+    protected open fun latestUpdatesFromElement(element: Element) = popularMangaFromElement(element)
+
+    protected open fun latestUpdatesNextPageSelector(): String? = popularMangaNextPageSelector()
 
     // ======================== Search ========================
 
@@ -154,15 +171,19 @@ abstract class ReadWN(
         return GET(url, headers)
     }
 
-    override fun searchMangaSelector() = popularMangaSelector()
+    override fun searchMangaParse(response: Response): MangasPage = mangaListParse(response, searchMangaSelector(), searchMangaNextPageSelector(), ::searchMangaFromElement)
 
-    override fun searchMangaFromElement(element: Element) = popularMangaFromElement(element)
+    protected open fun searchMangaSelector() = popularMangaSelector()
 
-    override fun searchMangaNextPageSelector(): String? = null // Search doesn't have pagination
+    protected open fun searchMangaFromElement(element: Element) = popularMangaFromElement(element)
+
+    protected open fun searchMangaNextPageSelector(): String? = null // Search doesn't have pagination
 
     // ======================== Details ========================
 
-    override fun mangaDetailsParse(document: Document): SManga = SManga.create().apply {
+    override fun mangaDetailsParse(response: Response): SManga = mangaDetailsParse(response.asJsoup())
+
+    protected open fun mangaDetailsParse(document: Document): SManga = SManga.create().apply {
         title = document.selectFirst("h1.novel-title")?.text()?.trim() ?: ""
         author = document.selectFirst("span[itemprop=author]")?.text()?.trim()
         thumbnail_url = document.selectFirst("figure.cover img")?.let {
@@ -253,15 +274,11 @@ abstract class ReadWN(
         return calendar.timeInMillis
     }
 
-    override fun chapterListSelector() = throw UnsupportedOperationException()
-
-    override fun chapterFromElement(element: Element) = throw UnsupportedOperationException()
-
     // ======================== Pages ========================
 
-    override fun pageListParse(document: Document): List<Page> = listOf(Page(0, document.location()))
+    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
 
-    override fun imageUrlParse(document: Document): String = ""
+    override fun imageUrlParse(response: Response): String = ""
 
     // ======================== Novel Content ========================
 
