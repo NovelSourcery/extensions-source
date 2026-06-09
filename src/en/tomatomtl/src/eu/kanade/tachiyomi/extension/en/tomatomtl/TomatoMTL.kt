@@ -1391,7 +1391,7 @@ class TomatoMTL :
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val chapterUrl = page.url
+        val chapterUrl = if (page.url.startsWith("http")) page.url else baseUrl + page.url
         Log.d("TomatoMTL", "Fetching chapter content: $chapterUrl")
 
         val isGarden = chapterUrl.contains("/garden/")

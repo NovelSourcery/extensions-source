@@ -300,10 +300,11 @@ class MtlBooks :
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val cleanUrl = page.url.removePrefix("mtlbooks://")
-        val parts = cleanUrl.split("/")
-        val novelSlug = parts.getOrNull(0) ?: ""
-        val chapterSlug = parts.getOrNull(1) ?: ""
+        // chapter.url shape: /novel/{novelSlug}/{chapterSlug}. Parse slugs directly so no page-list
+        // fetch is needed (the app supplies chapter.url as the single novel page).
+        val parts = page.url.removePrefix("/").split("/")
+        val novelSlug = parts.getOrNull(1) ?: ""
+        val chapterSlug = parts.getOrNull(2) ?: ""
 
         val body = json.encodeToString(
             ChapterReadRequest.serializer(),

@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.novelextension.all.vynovel
+﻿package eu.kanade.tachiyomi.novelextension.en.vynovel
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
@@ -20,7 +20,7 @@ class Vynovel :
 
     override val name = "Vynovel"
     override val baseUrl = "https://vynovel.com"
-    override val lang = "all"
+    override val lang = "en"
     override val supportsLatest = true
     override val isNovelSource = true
 
@@ -201,7 +201,7 @@ class Vynovel :
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val request = GET(page.url, headers)
+        val request = GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
         val response = client.newCall(request).execute()
         val document = Jsoup.parse(response.body.string())
 

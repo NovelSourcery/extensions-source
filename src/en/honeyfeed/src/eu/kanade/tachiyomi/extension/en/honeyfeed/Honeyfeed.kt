@@ -136,7 +136,7 @@ class Honeyfeed :
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.newCall(GET(page.url, headers)).execute().asJsoup()
+        val doc = client.newCall(GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)).execute().asJsoup()
         val title = doc.selectFirst("h1")?.text() ?: ""
         val body = doc.selectFirst(".wrap-body") ?: return ""
         body.select("#wrap-button-remove-blur").remove()

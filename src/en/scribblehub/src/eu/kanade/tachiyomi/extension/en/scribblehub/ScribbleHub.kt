@@ -242,7 +242,7 @@ class ScribbleHub :
 
     // Novel source implementation
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(page.url, headers)).execute()
+        val response = client.newCall(GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)).execute()
         val body = response.body.string()
         val doc = Jsoup.parse(body, page.url)
 

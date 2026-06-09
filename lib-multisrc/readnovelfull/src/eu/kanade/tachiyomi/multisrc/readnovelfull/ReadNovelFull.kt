@@ -10,10 +10,11 @@ import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
+import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.ParsedHttpSource
+import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.utils.setAltTitles
 import okhttp3.FormBody
@@ -46,7 +47,7 @@ abstract class ReadNovelFull(
     override val name: String,
     override val baseUrl: String,
     override val lang: String,
-) : ParsedHttpSource(),
+) : HttpSource(),
     NovelSource,
     ConfigurableSource {
 
@@ -95,9 +96,23 @@ abstract class ReadNovelFull(
         GET("$baseUrl/$popularPage?$pageParam=$page", headers)
     }
 
-    override fun popularMangaSelector() = "div.col-novel-main div.list-novel div.row, div.archive div.row, div.index-intro div.item, div.ul-list1 div.li, div.col-l div.li, div.col-r div.li"
+    override fun popularMangaParse(response: Response): MangasPage = mangaListParse(response, popularMangaSelector(), popularMangaNextPageSelector(), ::popularMangaFromElement)
 
-    override fun popularMangaFromElement(element: Element): SManga = SManga.create().apply {
+    protected fun mangaListParse(
+        response: Response,
+        selector: String,
+        nextPageSelector: String,
+        fromElement: (Element) -> SManga,
+    ): MangasPage {
+        val document = response.asJsoup()
+        val mangas = document.select(selector).map { fromElement(it) }.filter { it.url.isNotBlank() }
+        val hasNextPage = document.selectFirst(nextPageSelector) != null
+        return MangasPage(mangas, hasNextPage)
+    }
+
+    protected open fun popularMangaSelector() = "div.col-novel-main div.list-novel div.row, div.archive div.row, div.index-intro div.item, div.ul-list1 div.li, div.col-l div.li, div.col-r div.li"
+
+    protected open fun popularMangaFromElement(element: Element): SManga = SManga.create().apply {
         title = "Unknown Title"
         url = ""
 
@@ -140,7 +155,7 @@ abstract class ReadNovelFull(
         }
     }
 
-    override fun popularMangaNextPageSelector() = "li.next:not(.disabled), ul.pagination li.active + li a, div.pages a:contains(>>), div.pages a:contains(>), div.pages a[href], div.paging a[href], div.pagination a.next"
+    protected open fun popularMangaNextPageSelector() = "li.next:not(.disabled), ul.pagination li.active + li a, div.pages a:contains(>>), div.pages a:contains(>), div.pages a[href], div.paging a[href], div.pagination a.next"
 
     // ======================== Latest ========================
 
@@ -154,9 +169,11 @@ abstract class ReadNovelFull(
         GET("$baseUrl/$latestPage?$pageParam=$page", headers)
     }
 
-    override fun latestUpdatesSelector() = popularMangaSelector() + ", ul.ul-list2 li"
+    override fun latestUpdatesParse(response: Response): MangasPage = mangaListParse(response, latestUpdatesSelector(), latestUpdatesNextPageSelector(), ::latestUpdatesFromElement)
 
-    override fun latestUpdatesFromElement(element: Element): SManga {
+    protected open fun latestUpdatesSelector() = popularMangaSelector() + ", ul.ul-list2 li"
+
+    protected open fun latestUpdatesFromElement(element: Element): SManga {
         // Handle ul-list2 li structure for FreeWebNovel latest updates
         if (element.tagName() == "li" && element.selectFirst("div.s1.con") != null) {
             return SManga.create().apply {
@@ -175,7 +192,7 @@ abstract class ReadNovelFull(
         return popularMangaFromElement(element)
     }
 
-    override fun latestUpdatesNextPageSelector() = popularMangaNextPageSelector()
+    protected open fun latestUpdatesNextPageSelector() = popularMangaNextPageSelector()
 
     // ======================== Search ========================
 
@@ -306,18 +323,22 @@ abstract class ReadNovelFull(
         }
     }
 
-    override fun searchMangaSelector() = popularMangaSelector()
+    override fun searchMangaParse(response: Response): MangasPage = mangaListParse(response, searchMangaSelector(), searchMangaNextPageSelector(), ::searchMangaFromElement)
 
-    override fun searchMangaFromElement(element: Element) = popularMangaFromElement(element)
+    protected open fun searchMangaSelector() = popularMangaSelector()
 
-    override fun searchMangaNextPageSelector() = popularMangaNextPageSelector()
+    protected open fun searchMangaFromElement(element: Element) = popularMangaFromElement(element)
+
+    protected open fun searchMangaNextPageSelector() = popularMangaNextPageSelector()
 
     // ======================== Details ========================
 
-    override fun mangaDetailsParse(document: Document): SManga = SManga.create().apply {
+    override fun mangaDetailsParse(response: Response): SManga = mangaDetailsParse(response.asJsoup())
+
+    protected open fun mangaDetailsParse(document: Document): SManga = SManga.create().apply {
         document.selectFirst("div.books, div.book, div.m-imgtxt, div.m-book1")?.let { info ->
-            thumbnail_url = info.selectFirst("img")?.let {
-                it.attr("data-src").ifEmpty { it.attr("src") }
+            thumbnail_url = info.selectFirst("div.pic img, img")?.let {
+                it.attr("abs:data-src").ifEmpty { it.attr("abs:src") }
             }
             title = info.selectFirst("h3.title, h1.tit, img")?.let {
                 it.text().ifEmpty { it.attr("title") }
@@ -617,23 +638,19 @@ abstract class ReadNovelFull(
         }
     }
 
-    override fun chapterListSelector() = throw UnsupportedOperationException()
-
-    override fun chapterFromElement(element: Element) = throw UnsupportedOperationException()
-
     // ======================== Pages ========================
 
-    override fun pageListParse(document: Document): List<Page> {
-        // For novel sources, we return a single page that will contain the text
-        return listOf(Page(0, document.location()))
-    }
+    // Novel: single text page fetched once in fetchPageText. The app's getPageList short-circuit
+    // returns the stub without calling this, so it never double-fetches.
+    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
 
-    override fun imageUrlParse(document: Document): String = ""
+    override fun imageUrlParse(response: Response): String = ""
 
     // ======================== Novel Content ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(page.url, headers)).execute()
+        val pageUrl = if (page.url.startsWith("http")) page.url else baseUrl + page.url
+        val response = client.newCall(GET(pageUrl, headers)).execute()
         val document = response.asJsoup()
 
         // Try multiple selectors for chapter content

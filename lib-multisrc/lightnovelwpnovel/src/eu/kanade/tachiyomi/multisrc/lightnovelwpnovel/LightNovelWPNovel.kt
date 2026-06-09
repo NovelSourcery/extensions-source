@@ -297,11 +297,11 @@ open class LightNovelWPNovel(
         }
 
         // Last resort: LNReader regex approach
-        val contentMatch = Regex("""<div[^>]*class="epcontent[^"]*"[^>]*>([^]*?)<div[^>]*class="?bottomnav""")
+        val contentMatch = Regex("""<div[^>]*class="epcontent[^"]*"[^>]*>([\s\S]*?)<div[^>]*class="?bottomnav""")
             .find(html)?.groupValues?.get(1)
 
         if (contentMatch != null) {
-            val paragraphs = Regex("""<p[^>]*>([^]*?)</p>""")
+            val paragraphs = Regex("""<p[^>]*>([\s\S]*?)</p>""")
                 .findAll(contentMatch)
                 .map { "<p>${it.groupValues[1]}</p>" }
                 .joinToString("\n")

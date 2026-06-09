@@ -46,7 +46,7 @@ class NovelUpdates :
     }
 
     override suspend fun fetchPageText(page: Page): String {
-        val chapterUrl = page.url
+        val chapterUrl = if (page.url.startsWith("http")) page.url else baseUrl + page.url
 
         val response = client.newCall(GET(chapterUrl, headers)).execute()
         val body = response.body.string()

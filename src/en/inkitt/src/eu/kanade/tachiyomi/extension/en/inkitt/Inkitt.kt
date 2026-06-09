@@ -344,7 +344,7 @@ class Inkitt :
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.newCall(GET(page.url, headers)).execute().asJsoup()
+        val doc = client.newCall(GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)).execute().asJsoup()
         val content = doc.selectFirst("div#chapterText") ?: return ""
         content.select("script, ins, .adsbygoogle").remove()
         return content.html()
