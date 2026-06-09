@@ -543,10 +543,15 @@ class NovelFire :
 
     /**
      * Fetches only the pages that could contain new chapters, reusing existing data for pages
-     * that are known to be unchanged. Assumes NovelFire paginates at [CHAPTERS_PER_PAGE] per page.
+     * that are known to be unchanged.
      *
-     * Because [SyncChaptersWithSource] deduplicates by URL, a slightly wrong page-size estimate
-     * is safe: we may re-fetch an already-known page, but we won't lose chapters.
+     * Uses [CHAPTERS_PER_PAGE] as an initial estimate, then corrects it by reading the actual
+     * chapter count from the first fetched page — but only when that page is a full middle page
+     * (has a next page AND is not page 1). The last page of a novel is always partial, so its
+     * count can't be used to infer page size.
+     *
+     * Because [SyncChaptersWithSource] deduplicates by URL, any harmless overlap between kept
+     * and fresh chapters is silently discarded.
      *
      * @param existingChapters chapters already in the DB, sorted newest-first (sourceOrder)
      */
@@ -560,15 +565,49 @@ class NovelFire :
             return getAllChaptersFromHtml(novelPath)
         }
 
-        // Which page holds the last chapter we have?
-        val startPage = ((existingCount - 1) / CHAPTERS_PER_PAGE) + 1
-        // How many chapters sit on pages strictly before startPage (we already have those)?
-        val keepCount = (startPage - 1) * CHAPTERS_PER_PAGE
-        Log.d(TAG, "incremental: existing=$existingCount startPage=$startPage keepCount=$keepCount — fetching pages $startPage+")
+        // Estimate the start page using the assumed page size constant
+        val estimatedStartPage = ((existingCount - 1) / CHAPTERS_PER_PAGE) + 1
 
-        val freshChapters = getAllChaptersFromHtml(novelPath, startPage)
-        Log.d(TAG, "incremental: fetched ${freshChapters.size} fresh chapters from pages $startPage+")
+        // Probe that page — if it's a full middle page, its count is the true page size
+        val (probeChapters, probeHasNext) = fetchSingleHtmlPage(novelPath, estimatedStartPage)
 
+        // Detection is only reliable when the page is full (has a next page) and not page 1
+        // (page 1 could be the only page with fewer chapters than the page size)
+        val pageSize = if (probeHasNext && estimatedStartPage > 1 && probeChapters.isNotEmpty()) {
+            probeChapters.size.also { detected ->
+                if (detected != CHAPTERS_PER_PAGE) {
+                    Log.d(TAG, "incremental: detected page size $detected (assumed $CHAPTERS_PER_PAGE)")
+                }
+            }
+        } else {
+            CHAPTERS_PER_PAGE
+        }
+
+        val startPage = ((existingCount - 1) / pageSize) + 1
+        val keepCount = (startPage - 1) * pageSize
+        Log.d(TAG, "incremental: existing=$existingCount pageSize=$pageSize startPage=$startPage keepCount=$keepCount")
+
+        val freshChapters: List<SChapter>
+        if (startPage != estimatedStartPage) {
+            // Page size changed enough to shift which page to start from — discard the probe
+            Log.d(TAG, "incremental: start page shifted $estimatedStartPage→$startPage, re-fetching")
+            freshChapters = getAllChaptersFromHtml(novelPath, startPage)
+        } else {
+            // Reuse the probe page — collect any remaining pages, then sort together
+            val collected = probeChapters.toMutableList()
+            if (probeHasNext) {
+                var page = estimatedStartPage + 1
+                while (true) {
+                    val (pageChapters, hasNext) = fetchSingleHtmlPage(novelPath, page)
+                    collected += pageChapters
+                    if (!hasNext) break
+                    page++
+                }
+            }
+            freshChapters = sortChaptersByNumber(collected)
+        }
+
+        Log.d(TAG, "incremental: fetched ${freshChapters.size} fresh chapters")
         if (keepCount == 0) return freshChapters
 
         // existingChapters is newest-first; takeLast(keepCount) gives the oldest keepCount
@@ -578,58 +617,53 @@ class NovelFire :
         return keptOldestFirst + freshChapters
     }
 
+    /** Fetches and parses a single chapter-list page. Returns chapters (unsorted) and whether a next page exists. */
+    private fun fetchSingleHtmlPage(novelPath: String, page: Int): Pair<List<SChapter>, Boolean> {
+        val pageUrl = "$baseUrl/$novelPath/chapters?page=$page"
+        Log.d(TAG, "html fetch: GET $pageUrl")
+        val response = client.newCall(GET(pageUrl, headers)).execute()
+        val body = response.body.string()
+        if (body.contains("You are being rate limited")) throw NovelFireThrottlingError()
+        val doc = Jsoup.parse(body)
+        checkCloudflare(doc)
+        val chapters = doc.select(".chapter-list li").mapNotNull { element ->
+            val linkElement = element.selectFirst("a") ?: return@mapNotNull null
+            val chapterName = linkElement.attr("title").ifEmpty { linkElement.text() }
+            val chapterUrl = linkElement.attr("href")
+            val chapterDate: Long = dateFormat.tryParse(
+                linkElement.selectFirst(".chapter-update[datetime]")?.attr("datetime"),
+            )
+            chapterUrl.takeIf { it.isNotEmpty() }?.let {
+                SChapter.create().apply {
+                    name = chapterName
+                    url = it.removePrefix(baseUrl)
+                    date_upload = chapterDate
+                }
+            }
+        }
+        val hasNextPage = doc.selectFirst("a[rel=\"next\"]") != null
+        Log.d(TAG, "html fetch: page $page parsed ${chapters.size} chapters (hasNext=$hasNextPage)")
+        return Pair(chapters, hasNextPage)
+    }
+
     private fun getAllChaptersFromHtml(novelPath: String, startPage: Int = 1): List<SChapter> {
         val allChapters = mutableListOf<SChapter>()
         var page = startPage
-
         while (true) {
-            val pageUrl = "$baseUrl/$novelPath/chapters?page=$page"
-            Log.d(TAG, "html fetch: GET $pageUrl")
-            val response = client.newCall(GET(pageUrl, headers)).execute()
-            val body = response.body.string()
-
-            // Check for rate limiting
-            if (body.contains("You are being rate limited")) {
-                throw NovelFireThrottlingError()
-            }
-
-            val doc = Jsoup.parse(body)
-            checkCloudflare(doc)
-
-            val beforeCount = allChapters.size
-            doc.select(".chapter-list li").forEach { element ->
-                val linkElement = element.selectFirst("a") ?: return@forEach
-                val chapterName = linkElement.attr("title").ifEmpty { linkElement.text() }
-                val chapterUrl = linkElement.attr("href")
-                val chapterDate: Long = dateFormat.tryParse(
-                    linkElement.selectFirst(".chapter-update[datetime]")?.attr("datetime"),
-                )
-                if (chapterUrl.isNotEmpty()) {
-                    allChapters.add(
-                        SChapter.create().apply {
-                            name = chapterName
-                            url = chapterUrl.removePrefix(baseUrl)
-                            date_upload = chapterDate
-                        },
-                    )
-                }
-            }
-            Log.d(TAG, "html fetch: page $page parsed ${allChapters.size - beforeCount} chapters (running total=${allChapters.size})")
-
-            // Stop if there's no next page
-            val hasNextPage = doc.selectFirst("a[rel=\"next\"]") != null
+            val (pageChapters, hasNextPage) = fetchSingleHtmlPage(novelPath, page)
+            allChapters += pageChapters
             if (!hasNextPage) break
             page++
         }
-
-        // Sort by chapter number numerically (extract number from name)
-        return allChapters.sortedWith(
-            compareBy { chapter ->
-                Regex("""(?:chapter|ch\.?)\s*(\d+(?:\.\d+)?)""", RegexOption.IGNORE_CASE)
-                    .find(chapter.name)?.groupValues?.get(1)?.toDoubleOrNull() ?: Double.MAX_VALUE
-            },
-        )
+        return sortChaptersByNumber(allChapters)
     }
+
+    private fun sortChaptersByNumber(chapters: List<SChapter>): List<SChapter> = chapters.sortedWith(
+        compareBy { chapter ->
+            Regex("""(?:chapter|ch\.?)\s*(\d+(?:\.\d+)?)""", RegexOption.IGNORE_CASE)
+                .find(chapter.name)?.groupValues?.get(1)?.toDoubleOrNull() ?: Double.MAX_VALUE
+        },
+    )
 
     // ======================== Chapter Content ========================
 
