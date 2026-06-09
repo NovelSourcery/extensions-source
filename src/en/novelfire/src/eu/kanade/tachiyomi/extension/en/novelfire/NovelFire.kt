@@ -30,6 +30,7 @@ import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
+import java.io.File
 import java.text.SimpleDateFormat
 
 /**
@@ -61,6 +62,10 @@ class NovelFire :
 
     // In-memory tag cache (id -> name)
     private var tagCache: List<TagItem> = emptyList()
+
+    init {
+        migrateDeleteLegacyChapterCache()
+    }
 
     // Custom error for rate limiting
     private class NovelFireThrottlingError(message: String = "Novel Fire is rate limiting requests") : Exception(message)
@@ -138,6 +143,16 @@ class NovelFire :
             tags.find { it.name.lowercase() == name }?.id
                 ?: tags.find { it.name.lowercase().startsWith(name) }?.id
         }
+    }
+
+    private fun migrateDeleteLegacyChapterCache() {
+        if (preferences.getBoolean(LEGACY_CACHE_CLEANED_KEY, false)) return
+        val legacyDir = File(Injekt.get<Application>().cacheDir, "novelfire_chapters")
+        if (legacyDir.exists()) {
+            val deleted = legacyDir.deleteRecursively()
+            Log.d(TAG, "migration: deleted legacy chapter cache dir (success=$deleted)")
+        }
+        preferences.edit().putBoolean(LEGACY_CACHE_CLEANED_KEY, true).apply()
     }
 
     override fun imageUrlParse(response: Response): String = ""
@@ -920,5 +935,6 @@ class NovelFire :
         private const val TAGS_CACHE_TIME_KEY = "novelfire_tags_cache_time"
         private const val CLEAR_TAG_CACHE_KEY = "novelfire_clear_tag_cache"
         private const val CHAPTER_FETCH_METHOD_KEY = "novelfire_chapter_fetch_method"
+        private const val LEGACY_CACHE_CLEANED_KEY = "novelfire_legacy_cache_cleaned"
     }
 }
