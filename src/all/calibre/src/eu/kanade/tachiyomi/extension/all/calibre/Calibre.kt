@@ -17,6 +17,9 @@ import kotlinx.coroutines.delay
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import okhttp3.Headers
 import okhttp3.Request
@@ -223,7 +226,9 @@ class Calibre :
         val tree = runCatching {
             json.decodeFromString<TreeFile>(body).tree
         }.getOrNull() ?: return ""
-        return renderNode(findBody(tree) ?: tree)
+        // Resource root for this book file, e.g. /book-file/<id>/<fmt>/<size>/<mtime>/
+        val resourceRoot = BOOKFILE_ROOT_REGEX.find(url)?.value.orEmpty()
+        return renderNode(findBody(tree) ?: tree, resourceRoot)
     }
 
     private suspend fun refreshBookFileUrl(staleUrl: String): String? {
@@ -240,11 +245,11 @@ class Calibre :
         return null
     }
 
-    private fun renderNode(node: TreeNode): String {
+    private fun renderNode(node: TreeNode, resourceRoot: String): String {
         val inner = buildString {
             append(node.x.orEmpty())
             node.c.forEach { child ->
-                append(renderNode(child))
+                append(renderNode(child, resourceRoot))
                 append(child.l.orEmpty())
             }
         }
@@ -252,10 +257,37 @@ class Calibre :
         return when {
             tag == null || tag == "body" || tag == "html" -> inner
             tag == "br" -> "<br>"
+            tag == "img" -> renderImg(node, resourceRoot)
             tag in keepTags -> "<$tag>$inner</$tag>"
             else -> inner
         }
     }
+
+    private fun renderImg(node: TreeNode, resourceRoot: String): String {
+        val src = resolveImageSrc(node.attr("src"), resourceRoot) ?: return ""
+        val alt = node.attr("alt").orEmpty()
+        return "<img src=\"$src\" alt=\"$alt\">"
+    }
+
+    // Calibre inlines most images as data: URIs; external resources use a
+    // "<link_uid>|<base64(path)>|" reference that maps onto the book-file tree.
+    private fun resolveImageSrc(src: String?, resourceRoot: String): String? {
+        if (src.isNullOrBlank()) return null
+        if (src.startsWith("data:")) return src
+        val encoded = RESOURCE_REF_REGEX.find(src)?.groupValues?.get(1)
+        val path = if (encoded != null) {
+            runCatching { String(Base64.getDecoder().decode(encoded)) }.getOrNull() ?: return null
+        } else {
+            src
+        }
+        if (path.startsWith("http://") || path.startsWith("https://")) return path
+        if (resourceRoot.isBlank()) return null
+        return baseUrl + resourceRoot + path.trimStart('/')
+    }
+
+    private fun TreeNode.attr(name: String): String? = a.firstOrNull {
+        it.size >= 2 && (it[0] as? JsonPrimitive)?.contentOrNull == name
+    }?.let { (it[1] as? JsonPrimitive)?.contentOrNull }
 
     private fun flattenToc(toc: TocItem): List<TocItem> {
         val result = mutableListOf<TocItem>()
@@ -339,6 +371,8 @@ class Calibre :
     @Serializable
     private data class TreeNode(
         val n: String? = null,
+        // Attribute pairs; entries are [name, value] with an occasional trailing flag.
+        val a: List<List<JsonElement>> = emptyList(),
         val x: String? = null,
         val l: String? = null,
         val c: List<TreeNode> = emptyList(),
@@ -373,5 +407,7 @@ class Calibre :
             3 to "date:>=thisyear",
         )
         private val BOOKFILE_REGEX = Regex("""/book-file/(\d+)/([^/]+)/\d+/\d+/(.+)""")
+        private val BOOKFILE_ROOT_REGEX = Regex("""^/book-file/\d+/[^/]+/\d+/\d+/""")
+        private val RESOURCE_REF_REGEX = Regex("""^[^|]+\|([^|]+)\|""")
     }
 }
