@@ -1,0 +1,8 @@
+ext {
+    extName = 'Calibre'
+    extClass = '.Calibre'
+    extVersionCode = 1
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"
