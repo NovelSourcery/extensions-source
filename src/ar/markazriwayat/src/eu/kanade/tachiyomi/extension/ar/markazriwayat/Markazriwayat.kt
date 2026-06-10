@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.novelextension.ar.markazriwayat
+package eu.kanade.tachiyomi.novelextension.ar.markazriwayat
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
@@ -17,6 +17,8 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import java.net.URI
 import java.net.URLEncoder
+import java.text.SimpleDateFormat
+import java.util.Locale
 
 // Custom "theam" WP theme: HTML lib-card listings + /wp-json/theam/v1/ REST API.
 class Markazriwayat :
@@ -38,9 +40,12 @@ class Markazriwayat :
 
     // region Browse (HTML lib-card grid)
 
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/library/", headers)
+    override fun popularMangaRequest(page: Int): Request = GET(pagedUrl("/library/", page), headers)
 
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/new/", headers)
+    override fun latestUpdatesRequest(page: Int): Request = GET(pagedUrl("/new/", page), headers)
+
+    // WP pagination: page 1 = /library/, page N = /library/page/N/.
+    private fun pagedUrl(path: String, page: Int): String = if (page <= 1) "$baseUrl$path" else "$baseUrl$path".trimEnd('/') + "/page/$page/"
 
     override fun popularMangaParse(response: Response): MangasPage {
         val doc = response.asJsoup()
@@ -55,10 +60,13 @@ class Markazriwayat :
                 thumbnail_url = card.selectFirst(".lib-card__img img")?.absCover()
             }
         }
-        return MangasPage(novels, hasNextPage = false)
+        return MangasPage(novels, hasNextPage = novels.isNotEmpty() && hasNextPage(doc))
     }
 
     override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
+
+    // Stops paging when the theme exposes no "next" link, avoiding refetch loops.
+    private fun hasNextPage(doc: Document): Boolean = doc.selectFirst("a.next, a[rel=next], link[rel=next], .pagination a.next, .nav-links a.next") != null
 
     // endregion
 
@@ -66,7 +74,10 @@ class Markazriwayat :
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val term = URLEncoder.encode(query, "UTF-8")
-        return GET("$baseUrl/wp-json/theam/v1/novel-search?term=$term&per_page=20", headers)
+        return GET(
+            "$baseUrl/wp-json/theam/v1/novel-search?term=$term&page=$page&per_page=$SEARCH_PER_PAGE",
+            headers,
+        )
     }
 
     override fun searchMangaParse(response: Response): MangasPage {
@@ -80,7 +91,8 @@ class Markazriwayat :
                 genre = item.genres.joinToString()
             }
         }
-        return MangasPage(novels, hasNextPage = false)
+        val hasNext = result.hasMore || result.items.size >= SEARCH_PER_PAGE
+        return MangasPage(novels, hasNextPage = hasNext)
     }
 
     // endregion
@@ -119,9 +131,7 @@ class Markazriwayat :
             ?.takeIf { it.isNotBlank() }
 
         val apiChapters = if (mangaId != null) fetchChaptersViaApi(mangaId) else emptyList()
-        val chapters = apiChapters.ifEmpty { parseChaptersFromHtml(doc) }
-
-        return chapters
+        return orderChapters(apiChapters.ifEmpty { parseChaptersFromHtml(doc) })
     }
 
     private fun fetchChaptersViaApi(mangaId: String): List<SChapter> {
@@ -146,6 +156,8 @@ class Markazriwayat :
                     SChapter.create().apply {
                         name = item.label
                         this.url = item.url.toRelative()
+                        chapter_number = item.num.toChapterNumber()
+                        date_upload = parseDate(item.date)
                     },
                 )
             }
@@ -157,13 +169,37 @@ class Markazriwayat :
 
     private fun parseChaptersFromHtml(doc: Document): List<SChapter> = doc.select(".ch-row").mapNotNull { row ->
         val link = row.selectFirst("a")?.attr("href")?.ifBlank { null } ?: return@mapNotNull null
+        val title = row.selectFirst(".ch-title")?.text()?.trim() ?: link
         SChapter.create().apply {
-            name = row.selectFirst(".ch-title")?.text()?.trim() ?: link
+            name = title
             url = link.toRelative()
+            chapter_number = (row.selectFirst(".ch-num")?.text() ?: title).toChapterNumber()
+            date_upload = parseDate(row.selectFirst(".ch-date, .ch-row time")?.text())
         }
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> = parseChaptersFromHtml(response.asJsoup()).reversed()
+    override fun chapterListParse(response: Response): List<SChapter> = orderChapters(parseChaptersFromHtml(response.asJsoup()))
+
+    // Single ordering authority for both the API and HTML paths: newest chapter first.
+    private fun orderChapters(chapters: List<SChapter>): List<SChapter> = chapters.sortedByDescending { it.chapter_number }
+
+    private fun String?.toChapterNumber(): Float {
+        if (this.isNullOrBlank()) return -1f
+        return CHAPTER_NUM_REGEX.find(this)?.value?.toFloatOrNull() ?: -1f
+    }
+
+    private fun parseDate(dateStr: String?): Long {
+        val raw = dateStr?.trim().orEmpty()
+        if (raw.isBlank()) return 0L
+        DATE_FORMATS.forEach { fmt ->
+            try {
+                return fmt.parse(raw)?.time ?: return@forEach
+            } catch (_: Exception) {
+                // try next format
+            }
+        }
+        return 0L
+    }
 
     // endregion
 
@@ -220,6 +256,7 @@ class Markazriwayat :
     @Serializable
     private data class SearchResponse(
         val items: List<SearchItem> = emptyList(),
+        @SerialName("has_more") val hasMore: Boolean = false,
     )
 
     @Serializable
@@ -244,4 +281,15 @@ class Markazriwayat :
         val num: String = "",
         val date: String = "",
     )
+
+    companion object {
+        private const val SEARCH_PER_PAGE = 20
+        private val CHAPTER_NUM_REGEX = Regex("""\d+(\.\d+)?""")
+        private val DATE_FORMATS = listOf(
+            "yyyy-MM-dd'T'HH:mm:ss",
+            "yyyy-MM-dd HH:mm:ss",
+            "yyyy-MM-dd",
+            "dd/MM/yyyy",
+        ).map { SimpleDateFormat(it, Locale.US) }
+    }
 }
