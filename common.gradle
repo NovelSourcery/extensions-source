@@ -58,18 +58,28 @@ android {
         }
     }
 
-    signingConfigs {
-        release {
-            storeFile = rootProject.file("signingkey.jks")
-            storePassword = System.getenv("KEY_STORE_PASSWORD")
-            keyAlias = System.getenv("ALIAS")
-            keyPassword = System.getenv("KEY_PASSWORD")
+    def keystoreFile = rootProject.file("signingkey.jks")
+    def hasSigning = keystoreFile.exists() &&
+            System.getenv("KEY_STORE_PASSWORD") &&
+            System.getenv("ALIAS") &&
+            System.getenv("KEY_PASSWORD")
+
+    if (hasSigning) {
+        signingConfigs {
+            release {
+                storeFile = keystoreFile
+                storePassword = System.getenv("KEY_STORE_PASSWORD")
+                keyAlias = System.getenv("ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
         }
     }
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.release
+            if (hasSigning) {
+                signingConfig = signingConfigs.release
+            }
             minifyEnabled = false
             vcsInfo.include = false
         }
