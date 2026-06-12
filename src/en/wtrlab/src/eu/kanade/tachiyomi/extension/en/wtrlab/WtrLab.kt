@@ -13,9 +13,12 @@ import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
+import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.lib.chapterutils.mergeChapters
+import keiyoushi.lib.chapterutils.shouldReturnExisting
 import keiyoushi.utils.setAltTitles
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -34,6 +37,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
@@ -717,6 +721,38 @@ class WtrLab :
 
     override fun chapterListRequest(manga: SManga): Request = GET("$baseUrl${manga.url}", headers)
 
+    override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
+        val response = client.newCall(chapterListRequest(manga)).execute()
+        val html = response.body.string()
+        val doc = Jsoup.parse(html)
+        val url = response.request.url.toString()
+
+        val urlMatch = Regex("""(?:serie-|novel/)(\d+)/([^/]+)""").find(url)
+            ?: return emptyList()
+
+        val rawId = urlMatch.groupValues[1].toInt()
+        val slug = urlMatch.groupValues[2]
+        val chapterCount = extractChapterCount(doc)
+
+        if (chapterCount == 0) return emptyList()
+
+        Log.d(TAG, "getChapterList: rawId=$rawId existing=${context.existingChapters.size} siteTotal=$chapterCount")
+
+        if (shouldReturnExisting(context.existingChapters.size, chapterCount)) {
+            Log.d(TAG, "getChapterList: count unchanged — returning existing")
+            return context.existingChapters
+        }
+
+        val existingCount = context.existingChapters.size
+        val startOrder = if (existingCount > 0) existingCount + 1 else 1
+        val keepCount = startOrder - 1
+
+        Log.d(TAG, "getChapterList: startOrder=$startOrder keepCount=$keepCount")
+
+        val fresh = fetchAllChapters(rawId, chapterCount, slug, startOrder)
+        return mergeChapters(context.existingChapters, fresh, keepCount).reversed()
+    }
+
     override fun chapterListParse(response: Response): List<SChapter> {
         val html = response.body.string()
         val doc = Jsoup.parse(html)
@@ -727,42 +763,39 @@ class WtrLab :
 
         val rawId = urlMatch.groupValues[1].toInt()
         val slug = urlMatch.groupValues[2]
+        val chapterCount = extractChapterCount(doc)
 
-        var chapterCount = 0
-
-        val pageText = doc.text()
-        val chapterCountMatch = Regex("""(\d+)\s+Chapters?""", RegexOption.IGNORE_CASE).find(pageText)
-        if (chapterCountMatch != null) {
-            chapterCount = chapterCountMatch.groupValues[1].toIntOrNull() ?: 0
-        }
-
-        if (chapterCount == 0) {
-            val nextDataText = doc.selectFirst("#__NEXT_DATA__")?.data()
-            if (nextDataText != null) {
-                try {
-                    val jsonData = json.parseToJsonElement(nextDataText).jsonObject
-                    val serieData = jsonData["props"]?.jsonObject
-                        ?.get("pageProps")?.jsonObject
-                        ?.get("serie")?.jsonObject
-                        ?.get("serie_data")?.jsonObject
-                    chapterCount = serieData?.get("chapter_count")?.jsonPrimitive?.intOrNull ?: 0
-                } catch (e: Exception) {
-                }
-            }
-        }
-
-        if (chapterCount == 0) {
-            return emptyList()
-        }
+        if (chapterCount == 0) return emptyList()
 
         return fetchAllChapters(rawId, chapterCount, slug).reversed()
     }
 
-    private fun fetchAllChapters(rawId: Int, totalChapters: Int, slug: String): List<SChapter> {
+    private fun extractChapterCount(doc: Document): Int {
+        // Prefer the structured JSON data — it's precise and unambiguous
+        val nextDataText = doc.selectFirst("#__NEXT_DATA__")?.data()
+        if (nextDataText != null) {
+            try {
+                val jsonData = json.parseToJsonElement(nextDataText).jsonObject
+                val count = jsonData["props"]?.jsonObject
+                    ?.get("pageProps")?.jsonObject
+                    ?.get("serie")?.jsonObject
+                    ?.get("serie_data")?.jsonObject
+                    ?.get("chapter_count")?.jsonPrimitive?.intOrNull ?: 0
+                if (count > 0) return count
+            } catch (e: Exception) {
+            }
+        }
+
+        // Fallback: scan page text for "N Chapters" (less reliable but covers older layouts)
+        return Regex("""(\d+)\s+Chapters?""", RegexOption.IGNORE_CASE)
+            .find(doc.text())?.groupValues?.get(1)?.toIntOrNull() ?: 0
+    }
+
+    private fun fetchAllChapters(rawId: Int, totalChapters: Int, slug: String, startOrder: Int = 1): List<SChapter> {
         val allChapters = mutableListOf<SChapter>()
         val batchSize = 250
 
-        var start = 1
+        var start = startOrder
         while (start <= totalChapters) {
             val end = minOf(start + batchSize - 1, totalChapters)
 
@@ -793,6 +826,7 @@ class WtrLab :
                 if (chapters.size < batchSize) break
                 start += batchSize
             } catch (e: Exception) {
+                Log.w(TAG, "fetchAllChapters: batch start=$start failed — ${e.message}")
                 break
             }
         }
@@ -869,6 +903,10 @@ class WtrLab :
         FoldersFilter(),
         LibraryExcludeFilter(),
     )
+
+    companion object {
+        private const val TAG = "WtrLab"
+    }
 }
 
 private const val TRANSLATION_MODE_KEY = "translationMode"

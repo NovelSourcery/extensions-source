@@ -1,21 +1,21 @@
 package eu.kanade.tachiyomi.novelextension.en.lightnovelworld
 
 import android.app.Application
-import androidx.preference.PreferenceScreen
-import androidx.preference.SwitchPreferenceCompat
+import android.util.Log
 import eu.kanade.tachiyomi.network.GET
-import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
+import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.lib.chapterutils.paginatedChapterList
+import keiyoushi.lib.chapterutils.shouldReturnExisting
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
@@ -27,13 +27,11 @@ import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
 import java.io.File
-import java.security.MessageDigest
 import java.util.Calendar
 
 class LightNovelWorld :
     HttpSource(),
-    NovelSource,
-    ConfigurableSource {
+    NovelSource {
 
     override val name = "Light Novel World"
     override val baseUrl = "https://lightnovelworld.org"
@@ -45,61 +43,19 @@ class LightNovelWorld :
 
     override val isNovelSource = true
 
+    init {
+        migrateDeleteLegacyChapterCache()
+    }
+
+    private fun migrateDeleteLegacyChapterCache() {
+        val legacyDir = File(Injekt.get<Application>().cacheDir, "lightnovelworld_chapters")
+        if (legacyDir.exists()) {
+            val deleted = legacyDir.deleteRecursively()
+            Log.d(TAG, "migration: deleted legacy chapter cache dir (success=$deleted)")
+        }
+    }
+
     override fun imageUrlParse(response: Response): String = ""
-
-    // ======================== Pagination Caching ========================
-
-    @Serializable
-    data class PaginationState(
-        val lastChapterTotal: Int = 0,
-        val lastUpdated: Long = 0L,
-        val cachedChapters: List<CachedChapter> = emptyList(),
-    )
-
-    @Serializable
-    data class CachedChapter(
-        val name: String,
-        val url: String,
-        val dateUpload: Long = 0L,
-        val chapterNumber: Float = -1f,
-    )
-
-    private val cacheDir: File by lazy {
-        val dir = File(Injekt.get<Application>().cacheDir, "lightnovelworld_chapters")
-        dir.mkdirs()
-        dir
-    }
-
-    private val cacheLock = Any()
-
-    private fun getCacheFile(novelPath: String): File {
-        val md5 = MessageDigest.getInstance("MD5")
-            .digest(novelPath.toByteArray())
-            .joinToString("") { "%02x".format(it) }
-        return File(cacheDir, "$md5.json")
-    }
-
-    private fun loadPaginationState(novelPath: String): PaginationState? = synchronized(cacheLock) {
-        val file = getCacheFile(novelPath)
-        if (!file.exists()) return@synchronized null
-        try {
-            json.decodeFromString<PaginationState>(file.readText())
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun savePaginationState(novelPath: String, state: PaginationState) = synchronized(cacheLock) {
-        try {
-            getCacheFile(novelPath).writeText(json.encodeToString(state))
-        } catch (_: Exception) {}
-    }
-
-    private fun clearAllChapterCache() {
-        synchronized(cacheLock) {
-            cacheDir.listFiles()?.forEach { it.delete() }
-        }
-    }
 
     private fun String?.toAbsoluteUrl(): String? = when {
         this.isNullOrEmpty() -> null
@@ -304,74 +260,51 @@ class LightNovelWorld :
         return GET("$baseUrl$path/chapters/", headers)
     }
 
+    override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
+        val response = client.newCall(chapterListRequest(manga)).execute()
+        val page1Doc = Jsoup.parse(response.body.string())
+        val basePath = response.request.url.encodedPath
+
+        val totalPages = page1Doc.select("#pageSelect option").size.coerceAtLeast(1)
+        val currentTotal = Regex("""A total of (\d+) chapters""")
+            .find(page1Doc.selectFirst(".chapters-description")?.text().orEmpty())
+            ?.groupValues?.get(1)?.toIntOrNull() ?: 0
+
+        Log.d(TAG, "getChapterList: url=$basePath existing=${context.existingChapters.size} siteTotal=$currentTotal totalPages=$totalPages")
+
+        if (shouldReturnExisting(context.existingChapters.size, currentTotal)) {
+            Log.d(TAG, "getChapterList: count unchanged — returning existing")
+            return context.existingChapters
+        }
+
+        return paginatedChapterList(
+            context = context,
+            siteTotal = currentTotal,
+            assumedPageSize = CHAPTERS_PER_PAGE,
+            fetchPage = { page ->
+                val doc = if (page == 1) {
+                    page1Doc
+                } else {
+                    val pageResponse = client.newCall(GET("$baseUrl$basePath?page=$page", headers)).execute()
+                    Jsoup.parse(pageResponse.body.string())
+                }
+                Pair(parseChapterPage(doc), page < totalPages)
+            },
+            sortChapters = { it },
+        ).reversed()
+    }
+
+    // Fallback path for when getChapterList is not used; performs a full fetch with no optimisation.
     override fun chapterListParse(response: Response): List<SChapter> {
         val doc = Jsoup.parse(response.body.string())
         val basePath = response.request.url.encodedPath
-
-        // Total pages from the page selector ("Page X of N")
         val totalPages = doc.select("#pageSelect option").size.coerceAtLeast(1)
-
-        // Current chapter total from "A total of N chapters" text
-        val currentTotal = Regex("""A total of (\d+) chapters""")
-            .find(doc.selectFirst(".chapters-description")?.text().orEmpty())
-            ?.groupValues?.get(1)?.toIntOrNull() ?: 0
-
-        val cached = loadPaginationState(basePath)
-
-        // Cache hit: total unchanged, return cached chapters without refetching pages
-        if (cached != null && currentTotal > 0 &&
-            cached.lastChapterTotal == currentTotal &&
-            cached.cachedChapters.isNotEmpty()
-        ) {
-            return cached.cachedChapters.map { it.toSChapter() }.reversed()
+        val chapters = parseChapterPage(doc).toMutableList()
+        for (page in 2..totalPages) {
+            val pageResponse = client.newCall(GET("$baseUrl$basePath?page=$page", headers)).execute()
+            chapters += parseChapterPage(Jsoup.parse(pageResponse.body.string()))
         }
-
-        val chapters = mutableListOf<SChapter>()
-        var startPage = 1
-
-        // Incremental fetch: total grew → keep fully-cached pages (fixed 50/page),
-        // refetch only the last partial page and anything after it
-        if (cached != null && currentTotal > cached.lastChapterTotal && cached.cachedChapters.isNotEmpty()) {
-            val fullPages = cached.cachedChapters.size / CHAPTERS_PER_PAGE
-            if (fullPages > 0) {
-                chapters += cached.cachedChapters.take(fullPages * CHAPTERS_PER_PAGE).map { it.toSChapter() }
-                startPage = fullPages + 1
-            }
-        }
-
-        for (page in startPage..totalPages) {
-            val pageDoc = if (page == 1) {
-                doc
-            } else {
-                val pageResponse = client.newCall(GET("$baseUrl$basePath?page=$page", headers)).execute()
-                Jsoup.parse(pageResponse.body.string())
-            }
-            chapters += parseChapterPage(pageDoc)
-        }
-
-        savePaginationState(
-            basePath,
-            PaginationState(
-                lastChapterTotal = if (currentTotal > 0) currentTotal else chapters.size,
-                lastUpdated = System.currentTimeMillis(),
-                cachedChapters = chapters.map {
-                    CachedChapter(it.name, it.url, it.date_upload, it.chapter_number)
-                },
-            ),
-        )
-
-        // Site lists chapters ascending; app expects newest first
         return chapters.reversed()
-    }
-
-    private fun CachedChapter.toSChapter(): SChapter {
-        val cached = this
-        return SChapter.create().apply {
-            name = cached.name
-            url = cached.url
-            date_upload = cached.dateUpload
-            chapter_number = cached.chapterNumber
-        }
     }
 
     private fun parseChapterPage(doc: Document): List<SChapter> {
@@ -395,7 +328,7 @@ class LightNovelWorld :
 
     private fun parseRelativeDate(dateText: String): Long {
         // Normalize NBSP and other whitespace
-        val text = dateText.replace('\u00A0', ' ').trim().lowercase()
+        val text = dateText.replace(' ', ' ').trim().lowercase()
         val match = Regex("""(\d+)\s*(second|minute|hour|day|week|month|year)""").find(text)
             ?: return if (text.contains("just now")) System.currentTimeMillis() else 0L
 
@@ -432,21 +365,6 @@ class LightNovelWorld :
         ).remove()
 
         return content.html()
-    }
-
-    // ======================== Preferences ========================
-
-    override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        SwitchPreferenceCompat(screen.context).apply {
-            key = CLEAR_CHAPTER_CACHE_KEY
-            title = "Clear All Cached Chapter Data"
-            summary = "Toggle this to clear cached chapter pagination data for all novels."
-            setDefaultValue(false)
-            setOnPreferenceChangeListener { _, _ ->
-                clearAllChapterCache()
-                true
-            }
-        }.also(screen::addPreference)
     }
 
     // ======================== Filters ========================
@@ -541,7 +459,7 @@ class LightNovelWorld :
     private class TagsExcludeFilter : Filter.Text("Exclude Tags")
 
     companion object {
+        private const val TAG = "LightNovelWorld"
         private const val CHAPTERS_PER_PAGE = 50
-        private const val CLEAR_CHAPTER_CACHE_KEY = "lightnovelworld_clear_chapter_cache"
     }
 }

@@ -17,6 +17,10 @@ import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.lib.chapterutils.checkCloudflare
+import keiyoushi.lib.chapterutils.paginatedChapterList
+import keiyoushi.lib.chapterutils.shouldReturnExisting
+import keiyoushi.lib.chapterutils.sortByChapterNumber
 import keiyoushi.utils.tryParse
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -395,7 +399,7 @@ class NovelFire :
         val existingCount = context.existingChapters.size
         Log.d(TAG, "getChapterList: manga=${manga.url} existing=$existingCount siteTotal=$totalChapters")
 
-        if (existingCount > 0 && totalChapters > 0 && existingCount == totalChapters) {
+        if (shouldReturnExisting(existingCount, totalChapters)) {
             Log.d(TAG, "getChapterList: count unchanged — returning existing chapters immediately")
             return context.existingChapters
         }
@@ -412,17 +416,32 @@ class NovelFire :
                     throw Exception("Ajax method selected but post_id not found on page")
                 }
             }
-            "html" -> getAllChaptersFromHtmlIncremental(novelPath, context.existingChapters).reversed()
+            "html" -> paginatedChapterList(
+                context = context,
+                siteTotal = totalChapters,
+                assumedPageSize = CHAPTERS_PER_PAGE,
+                fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
+            ).reversed()
             else -> {
                 if (postId != null) {
                     try {
-                        getAllChaptersFromHtmlIncremental(novelPath, context.existingChapters).reversed()
+                        paginatedChapterList(
+                            context = context,
+                            siteTotal = totalChapters,
+                            assumedPageSize = CHAPTERS_PER_PAGE,
+                            fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
+                        ).reversed()
                     } catch (e: Exception) {
                         Log.d(TAG, "getChapterList: HTML incremental failed (${e.message}), falling back to AJAX")
                         getAllChaptersFromAjax(novelPath, postId).reversed()
                     }
                 } else {
-                    getAllChaptersFromHtmlIncremental(novelPath, context.existingChapters).reversed()
+                    paginatedChapterList(
+                        context = context,
+                        siteTotal = totalChapters,
+                        assumedPageSize = CHAPTERS_PER_PAGE,
+                        fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
+                    ).reversed()
                 }
             }
         }
@@ -541,82 +560,6 @@ class NovelFire :
         }.sortedBy { it.chapter_number } // Sort chapters by number ascending
     }
 
-    /**
-     * Fetches only the pages that could contain new chapters, reusing existing data for pages
-     * that are known to be unchanged.
-     *
-     * Uses [CHAPTERS_PER_PAGE] as an initial estimate, then corrects it by reading the actual
-     * chapter count from the first fetched page — but only when that page is a full middle page
-     * (has a next page AND is not page 1). The last page of a novel is always partial, so its
-     * count can't be used to infer page size.
-     *
-     * Because [SyncChaptersWithSource] deduplicates by URL, any harmless overlap between kept
-     * and fresh chapters is silently discarded.
-     *
-     * @param existingChapters chapters already in the DB, sorted newest-first (sourceOrder)
-     */
-    private fun getAllChaptersFromHtmlIncremental(
-        novelPath: String,
-        existingChapters: List<SChapter>,
-    ): List<SChapter> {
-        val existingCount = existingChapters.size
-        if (existingCount == 0) {
-            Log.d(TAG, "incremental: no existing chapters — full fetch from page 1")
-            return getAllChaptersFromHtml(novelPath)
-        }
-
-        // Estimate the start page using the assumed page size constant
-        val estimatedStartPage = ((existingCount - 1) / CHAPTERS_PER_PAGE) + 1
-
-        // Probe that page — if it's a full middle page, its count is the true page size
-        val (probeChapters, probeHasNext) = fetchSingleHtmlPage(novelPath, estimatedStartPage)
-
-        // Detection is only reliable when the page is full (has a next page) and not page 1
-        // (page 1 could be the only page with fewer chapters than the page size)
-        val pageSize = if (probeHasNext && estimatedStartPage > 1 && probeChapters.isNotEmpty()) {
-            probeChapters.size.also { detected ->
-                if (detected != CHAPTERS_PER_PAGE) {
-                    Log.d(TAG, "incremental: detected page size $detected (assumed $CHAPTERS_PER_PAGE)")
-                }
-            }
-        } else {
-            CHAPTERS_PER_PAGE
-        }
-
-        val startPage = ((existingCount - 1) / pageSize) + 1
-        val keepCount = (startPage - 1) * pageSize
-        Log.d(TAG, "incremental: existing=$existingCount pageSize=$pageSize startPage=$startPage keepCount=$keepCount")
-
-        val freshChapters: List<SChapter>
-        if (startPage != estimatedStartPage) {
-            // Page size changed enough to shift which page to start from — discard the probe
-            Log.d(TAG, "incremental: start page shifted $estimatedStartPage→$startPage, re-fetching")
-            freshChapters = getAllChaptersFromHtml(novelPath, startPage)
-        } else {
-            // Reuse the probe page — collect any remaining pages, then sort together
-            val collected = probeChapters.toMutableList()
-            if (probeHasNext) {
-                var page = estimatedStartPage + 1
-                while (true) {
-                    val (pageChapters, hasNext) = fetchSingleHtmlPage(novelPath, page)
-                    collected += pageChapters
-                    if (!hasNext) break
-                    page++
-                }
-            }
-            freshChapters = sortChaptersByNumber(collected)
-        }
-
-        Log.d(TAG, "incremental: fetched ${freshChapters.size} fresh chapters")
-        if (keepCount == 0) return freshChapters
-
-        // existingChapters is newest-first; takeLast(keepCount) gives the oldest keepCount
-        // chapters, then reversed() puts them in ascending order to match freshChapters.
-        val keptOldestFirst = existingChapters.takeLast(keepCount).reversed()
-        Log.d(TAG, "incremental: kept=$keepCount + fresh=${freshChapters.size} = ${keptOldestFirst.size + freshChapters.size} total")
-        return keptOldestFirst + freshChapters
-    }
-
     /** Fetches and parses a single chapter-list page. Returns chapters (unsorted) and whether a next page exists. */
     private fun fetchSingleHtmlPage(novelPath: String, page: Int): Pair<List<SChapter>, Boolean> {
         val pageUrl = "$baseUrl/$novelPath/chapters?page=$page"
@@ -655,15 +598,8 @@ class NovelFire :
             if (!hasNextPage) break
             page++
         }
-        return sortChaptersByNumber(allChapters)
+        return sortByChapterNumber(allChapters)
     }
-
-    private fun sortChaptersByNumber(chapters: List<SChapter>): List<SChapter> = chapters.sortedWith(
-        compareBy { chapter ->
-            Regex("""(?:chapter|ch\.?)\s*(\d+(?:\.\d+)?)""", RegexOption.IGNORE_CASE)
-                .find(chapter.name)?.groupValues?.get(1)?.toDoubleOrNull() ?: Double.MAX_VALUE
-        },
-    )
 
     // ======================== Chapter Content ========================
 
@@ -691,17 +627,6 @@ class NovelFire :
         val content = doc.selectFirst("#content")?.html()
 
         return content ?: ""
-    }
-
-    // ======================== Cloudflare Detection ========================
-
-    private fun checkCloudflare(doc: Document) {
-        val title = doc.title()
-        if (title.contains("Cloudflare", ignoreCase = true) ||
-            doc.selectFirst("title")?.text()?.contains("Cloudflare", ignoreCase = true) == true
-        ) {
-            throw Exception("Cloudflare challenge detected. Please open in WebView.")
-        }
     }
 
     // ======================== Filters ========================

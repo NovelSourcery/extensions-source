@@ -1,8 +1,12 @@
 ext {
     extName = 'WTR-LAB'
     extClass = '.WtrLab'
-    extVersionCode = 4
+    extVersionCode = 5
     isNovel = true
 }
 
 apply from: "$rootDir/common.gradle"
+
+dependencies {
+    implementation(project(":lib:chapterutils"))
+}

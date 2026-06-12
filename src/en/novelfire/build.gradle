@@ -1,8 +1,12 @@
 ext {
     extName = 'Novel Fire'
     extClass = '.NovelFire'
-    extVersionCode = 6
+    extVersionCode = 7
     isNovel = true
 }
 
 apply from: "$rootDir/common.gradle"
+
+dependencies {
+    implementation(project(":lib:chapterutils"))
+}
