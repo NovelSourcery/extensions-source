@@ -1,6 +1,7 @@
 package eu.kanade.tachiyomi.multisrc.madaranovel
 
 import android.content.SharedPreferences
+import android.util.Log
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.GET
@@ -12,9 +13,11 @@ import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
+import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.lib.chapterutils.shouldReturnExisting
 import keiyoushi.utils.getPreferencesLazy
 import kotlinx.serialization.json.Json
 import okhttp3.FormBody
@@ -290,6 +293,27 @@ open class MadaraNovel(
 
     override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
 
+    override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
+        val response = client.newCall(chapterListRequest(manga)).execute()
+        val doc = response.asJsoup()
+        val mangaUrl = response.request.url.encodedPath
+
+        val postId = extractPostId(doc)
+        postId?.let { cachePostId(mangaUrl, it) }
+
+        val siteTotal = extractChapterCount(doc)
+        Log.d(TAG, "getChapterList: url=$mangaUrl existing=${context.existingChapters.size} siteTotal=$siteTotal")
+
+        if (shouldReturnExisting(context.existingChapters.size, siteTotal)) {
+            Log.d(TAG, "getChapterList: count unchanged — returning existing")
+            return context.existingChapters
+        }
+
+        val html = fetchChaptersHtml(mangaUrl, postId, response.request.url.toString())
+        val chapters = parseChaptersFromHtml(html)
+        return if (reverseChapterList) chapters else chapters.reversed()
+    }
+
     override fun chapterListParse(response: Response): List<SChapter> {
         val doc = response.asJsoup()
         val mangaUrl = response.request.url.encodedPath
@@ -298,85 +322,97 @@ open class MadaraNovel(
         val postId = extractPostId(doc)
         postId?.let { cachePostId(mangaUrl, it) }
 
+        val html = fetchChaptersHtml(mangaUrl, postId, response.request.url.toString())
+        val chapters = parseChaptersFromHtml(html)
+        return if (reverseChapterList) chapters else chapters.reversed()
+    }
+
+    /**
+     * Extracts the chapter count shown on the novel detail page.
+     * Override in subclasses for sites with non-English or non-standard labels.
+     */
+    protected open fun extractChapterCount(doc: Document): Int {
+        // Primary: look for a post-content_item whose h5 label is "Chapters" (or "Chapter")
+        val labeled = doc.select(".post-content_item")
+            .find { item ->
+                val h5 = item.selectFirst("h5")?.text()?.trim() ?: return@find false
+                h5.equals("Chapters", ignoreCase = true) || h5.equals("Chapter", ignoreCase = true)
+            }
+            ?.selectFirst(".summary-content")
+            ?.text()?.trim()?.toIntOrNull()
+        if (labeled != null && labeled > 0) return labeled
+
+        // Fallback: any summary-content whose trimmed text is a pure integer (works for
+        // non-English sites where the label differs)
+        return doc.select(".post-content_item .summary-content")
+            .mapNotNull { it.text().trim().toIntOrNull() }
+            .firstOrNull { it > 0 } ?: 0
+    }
+
+    private fun fetchChaptersHtml(mangaUrl: String, postId: String?, referer: String): String = if (useNewChapterEndpoint) {
+        val emptyBody = FormBody.Builder().build()
+        val newHeaders = headersBuilder().set("Referer", referer).build()
+        client.newCall(POST("$baseUrl${mangaUrl}ajax/chapters/", newHeaders, emptyBody))
+            .execute().body.string()
+    } else {
+        val formBody = FormBody.Builder()
+            .add("action", "manga_get_chapters")
+            .add("manga", postId ?: "")
+            .build()
+        client.newCall(POST("$baseUrl/wp-admin/admin-ajax.php", headers, formBody))
+            .execute().body.string()
+    }
+
+    private fun parseChaptersFromHtml(html: String): List<SChapter> {
+        if (html == "0") return emptyList()
+        val chapDoc = Jsoup.parse(html)
+        val totalChaps = chapDoc.select(".wp-manga-chapter").size
         val chapters = mutableListOf<SChapter>()
-        var html: String
 
-        if (useNewChapterEndpoint) {
-            val emptyBody = FormBody.Builder().build()
-            val newHeaders = headersBuilder()
-                .set("Referer", response.request.url.toString())
-                .build()
-            val chapResponse = client.newCall(
-                POST("$baseUrl${mangaUrl}ajax/chapters/", newHeaders, emptyBody),
-            ).execute()
-            html = chapResponse.body.string()
-        } else {
-            val formBody = FormBody.Builder()
-                .add("action", "manga_get_chapters")
-                .add("manga", postId ?: "")
-                .build()
+        chapDoc.select(".wp-manga-chapter").forEachIndexed { index, element ->
+            try {
+                val rawName = element.selectFirst("a")?.text()?.trim() ?: return@forEachIndexed
+                val isLocked = element.className().contains("premium-block")
 
-            val chapResponse = client.newCall(
-                POST("$baseUrl/wp-admin/admin-ajax.php", headers, formBody),
-            ).execute()
-            html = chapResponse.body.string()
-        }
+                // The app shows the chapter number separately from the title,
+                // so strip "Chapter 12 - " style prefixes from the displayed name
+                val numberMatch = chapterPrefixRegex.find(rawName)
+                    ?: numberSeparatorRegex.find(rawName)
+                val parsedNumber = numberMatch?.groupValues?.get(1)?.toFloatOrNull()
+                var chapterName = numberMatch?.let { rawName.removeRange(it.range).trim() }
+                    ?.ifEmpty { null }
+                    ?: rawName
 
-        if (html != "0") {
-            val chapDoc = Jsoup.parse(html)
-            val totalChaps = chapDoc.select(".wp-manga-chapter").size
+                if (isLocked) chapterName = "🔒 $chapterName"
 
-            chapDoc.select(".wp-manga-chapter").forEachIndexed { index, element ->
-                try {
-                    val rawName = element.selectFirst("a")?.text()?.trim() ?: return@forEachIndexed
-                    val isLocked = element.className().contains("premium-block")
+                val releaseDate = element.selectFirst(".chapter-release-date")?.text()?.trim() ?: ""
+                val chapterUrl = element.selectFirst("a")?.attr("href") ?: return@forEachIndexed
 
-                    // The app shows the chapter number separately from the title,
-                    // so strip "Chapter 12 - " style prefixes from the displayed name
-                    val numberMatch = chapterPrefixRegex.find(rawName)
-                        ?: numberSeparatorRegex.find(rawName)
-                    val parsedNumber = numberMatch?.groupValues?.get(1)?.toFloatOrNull()
-                    var chapterName = numberMatch?.let { rawName.removeRange(it.range).trim() }
-                        ?.ifEmpty { null }
-                        ?: rawName
-
-                    if (isLocked) {
-                        chapterName = "🔒 $chapterName"
-                    }
-
-                    val releaseDate = element.selectFirst(".chapter-release-date")?.text()?.trim() ?: ""
-                    val chapterUrl = element.selectFirst("a")?.attr("href") ?: return@forEachIndexed
-
-                    if (chapterUrl != "#") {
-                        // Ensure URL is relative path
-                        val relativeChapterUrl = when {
-                            chapterUrl.startsWith(baseUrl) -> chapterUrl.removePrefix(baseUrl)
-
-                            chapterUrl.startsWith("http://") || chapterUrl.startsWith("https://") -> {
-                                try {
-                                    java.net.URI(chapterUrl).path
-                                } catch (e: Exception) {
-                                    chapterUrl
-                                }
+                if (chapterUrl != "#") {
+                    val relativeChapterUrl = when {
+                        chapterUrl.startsWith(baseUrl) -> chapterUrl.removePrefix(baseUrl)
+                        chapterUrl.startsWith("http://") || chapterUrl.startsWith("https://") -> {
+                            try {
+                                java.net.URI(chapterUrl).path
+                            } catch (e: Exception) {
+                                chapterUrl
                             }
-
-                            chapterUrl.startsWith("/") -> chapterUrl
-
-                            else -> "/$chapterUrl"
                         }
-
-                        chapters.add(
-                            SChapter.create().apply {
-                                url = relativeChapterUrl
-                                name = chapterName
-                                date_upload = parseDate(releaseDate)
-                                chapter_number = parsedNumber ?: (totalChaps - index).toFloat()
-                            },
-                        )
+                        chapterUrl.startsWith("/") -> chapterUrl
+                        else -> "/$chapterUrl"
                     }
-                } catch (e: Exception) {
-                    // Skip problematic chapters
+
+                    chapters.add(
+                        SChapter.create().apply {
+                            url = relativeChapterUrl
+                            name = chapterName
+                            date_upload = parseDate(releaseDate)
+                            chapter_number = parsedNumber ?: (totalChaps - index).toFloat()
+                        },
+                    )
                 }
+            } catch (e: Exception) {
+                // Skip problematic chapters
             }
         }
 
@@ -751,6 +787,7 @@ open class MadaraNovel(
     }
 
     companion object {
+        private const val TAG = "MadaraNovel"
         private const val USE_NEW_CHAPTER_ENDPOINT_PREF = "pref_use_new_chapter_endpoint"
         private const val PREF_REVERSE_CHAPTERS = "pref_reverse_chapters"
         private const val PREF_RAW_HTML = "pref_raw_html"

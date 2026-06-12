@@ -2,4 +2,8 @@ plugins {
     id("lib-multisrc")
 }
 
-baseVersionCode = 2
+baseVersionCode = 3
+
+dependencies {
+    implementation(project(":lib:chapterutils"))
+}
