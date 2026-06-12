@@ -1,5 +1,6 @@
 ﻿package eu.kanade.tachiyomi.novelextension.en.mtlbooks
 
+import android.util.Log
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.NovelSource
@@ -7,9 +8,13 @@ import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
+import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.lib.chapterutils.incrementalStartPage
+import keiyoushi.lib.chapterutils.mergeChapters
+import keiyoushi.lib.chapterutils.shouldReturnExisting
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -230,23 +235,71 @@ class MtlBooks :
         return POST("$apiUrl/chapters/list", headers, body)
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val chapters = mutableListOf<SChapter>()
-        val slug = response.request.url.toString().substringAfter("novel_slug=").substringBefore("&")
+    override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
+        val slug = manga.url.substringAfter("/novel/")
 
+        // Page 1 is always required to determine the total chapter count.
+        val page1 = json.decodeFromString<ChapterListResponse>(
+            client.newCall(chapterListRequest(manga)).execute().body.string(),
+        )
+        val pagination = page1.result.pagination
+        val total = pagination.total
+        val limit = pagination.limit
+        val totalPages = (total + limit - 1) / limit
+        val novelSlug = page1.result.novelSlug
+
+        Log.d(TAG, "getChapterList: slug=$slug existing=${context.existingChapters.size} siteTotal=$total totalPages=$totalPages")
+
+        if (shouldReturnExisting(context.existingChapters.size, total)) {
+            Log.d(TAG, "getChapterList: count unchanged — returning existing")
+            return context.existingChapters
+        }
+
+        val existingCount = context.existingChapters.size
+        val startPage = if (existingCount > 0) incrementalStartPage(existingCount, limit) else 1
+        val keepCount = (startPage - 1) * limit
+        Log.d(TAG, "getChapterList: startPage=$startPage keepCount=$keepCount")
+
+        val freshChapters = mutableListOf<SChapter>()
+
+        // Reuse already-fetched page 1 data if it falls within the fresh range.
+        if (startPage == 1) {
+            page1.result.chapterLists.forEach { freshChapters.add(chapterItemToSChapter(novelSlug, it)) }
+        }
+
+        for (page in maxOf(startPage, 2)..totalPages) {
+            try {
+                val body = json.encodeToString(
+                    ChapterListRequest.serializer(),
+                    ChapterListRequest(novelSlug, page, "ASC"),
+                ).toRequestBody("application/json".toMediaType())
+                val pageData = json.decodeFromString<ChapterListResponse>(
+                    client.newCall(POST("$apiUrl/chapters/list", headers, body)).execute().body.string(),
+                )
+                pageData.result.chapterLists.forEach { freshChapters.add(chapterItemToSChapter(novelSlug, it)) }
+            } catch (e: Exception) {
+                Log.w(TAG, "getChapterList: page $page failed — ${e.message}")
+                break
+            }
+        }
+
+        Log.d(TAG, "getChapterList: fresh=${freshChapters.size} keep=$keepCount")
+        return mergeChapters(context.existingChapters, freshChapters, keepCount).reversed()
+    }
+
+    private fun chapterItemToSChapter(novelSlug: String, ch: ChapterItem): SChapter = SChapter.create().apply {
+        url = "/novel/$novelSlug/${ch.chapterSlug}"
+        name = ch.chapterTitle
+        chapter_number = ch.chapterNumber.toFloat()
+    }
+
+    // Fallback path for when getChapterList is not used; performs a full fetch with no optimisation.
+    override fun chapterListParse(response: Response): List<SChapter> {
         val firstPage = json.decodeFromString<ChapterListResponse>(response.body.string())
         val totalPages = (firstPage.result.pagination.total + firstPage.result.pagination.limit - 1) / firstPage.result.pagination.limit
         val novelSlug = firstPage.result.novelSlug
 
-        firstPage.result.chapterLists.forEach { ch ->
-            chapters.add(
-                SChapter.create().apply {
-                    url = "/novel/$novelSlug/${ch.chapterSlug}"
-                    name = ch.chapterTitle
-                    chapter_number = ch.chapterNumber.toFloat()
-                },
-            )
-        }
+        val chapters = firstPage.result.chapterLists.map { chapterItemToSChapter(novelSlug, it) }.toMutableList()
 
         for (page in 2..totalPages) {
             try {
@@ -254,19 +307,10 @@ class MtlBooks :
                     ChapterListRequest.serializer(),
                     ChapterListRequest(novelSlug, page, "ASC"),
                 ).toRequestBody("application/json".toMediaType())
-
-                val pageResponse = client.newCall(POST("$apiUrl/chapters/list", headers, body)).execute()
-                val pageData = json.decodeFromString<ChapterListResponse>(pageResponse.body.string())
-
-                pageData.result.chapterLists.forEach { ch ->
-                    chapters.add(
-                        SChapter.create().apply {
-                            url = "/novel/$novelSlug/${ch.chapterSlug}"
-                            name = ch.chapterTitle
-                            chapter_number = ch.chapterNumber.toFloat()
-                        },
-                    )
-                }
+                val pageData = json.decodeFromString<ChapterListResponse>(
+                    client.newCall(POST("$apiUrl/chapters/list", headers, body)).execute().body.string(),
+                )
+                pageData.result.chapterLists.forEach { chapters.add(chapterItemToSChapter(novelSlug, it)) }
             } catch (_: Exception) {
                 break
             }
@@ -530,4 +574,8 @@ class MtlBooks :
         @SerialName("chapter_slug") val chapterSlug: String,
         val content: String? = null,
     )
+
+    companion object {
+        private const val TAG = "MtlBooks"
+    }
 }
