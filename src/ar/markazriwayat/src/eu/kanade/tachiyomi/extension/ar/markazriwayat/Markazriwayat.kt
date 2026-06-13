@@ -28,14 +28,17 @@ class Markazriwayat : HttpSource(), NovelSource {
     override val supportsLatest = true
 
     override val isNovelSource = true
-    override val client = network.cloudflareClient
+
+    // ✅ التغيير الأهم: استخدام network.client بدلاً من network.cloudflareClient
+    //    لضمان التوافق مع جميع إصدارات Tachiyomi
+    override val client = network.client
 
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
     }
 
-    // ============================== التصفح (HTML) ==============================
+    // ============================== التصفح ==============================
 
     override fun popularMangaRequest(page: Int): Request = GET(pagedUrl("/library/", page), headers)
 
@@ -108,10 +111,13 @@ class Markazriwayat : HttpSource(), NovelSource {
         }
     }
 
-    // ============================== الفصول (API + HTML كاحتياطي) ==============================
+    // ============================== الفصول (API + HTML احتياطي) ==============================
 
     override suspend fun getChapterList(manga: SManga): List<SChapter> {
-        val doc = client.newCall(GET(baseUrl + manga.url, headers)).execute().asJsoup()
+        // جلب الصفحة أولاً لاستخراج manga-id
+        val response = client.newCall(GET(baseUrl + manga.url, headers)).execute()
+        val doc = response.asJsoup()
+        response.close()
         checkCaptcha(doc)
 
         val mangaId = doc.selectFirst("#manga-chapters-list")?.attr("data-manga-id")
@@ -127,13 +133,12 @@ class Markazriwayat : HttpSource(), NovelSource {
         while (true) {
             val url = "$baseUrl/wp-json/theam/v1/manga-chapters" +
                     "?manga_id=$mangaId&order=DESC&page=$page&per_page=30"
-            val response = try {
-                client.newCall(GET(url, headers)).execute().body.string()
-            } catch (_: Exception) {
-                break
-            }
+            val response = client.newCall(GET(url, headers)).execute()
+            val body = response.body.string()
+            response.close()
+
             val parsed = try {
-                json.decodeFromString<ChaptersResponse>(response)
+                json.decodeFromString<ChaptersResponse>(body)
             } catch (_: Exception) {
                 break
             }
@@ -178,7 +183,9 @@ class Markazriwayat : HttpSource(), NovelSource {
         listOf(Page(0, response.request.url.encodedPath))
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.newCall(GET(baseUrl + page.url, headers)).execute().asJsoup()
+        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        val doc = response.asJsoup()
+        response.close()
         checkCaptcha(doc)
         val content = doc.selectFirst(".reading-content .text-right")
             ?: doc.selectFirst(".reading-content")
