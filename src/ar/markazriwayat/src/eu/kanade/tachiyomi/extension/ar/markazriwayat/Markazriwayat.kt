@@ -20,12 +20,9 @@ import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Locale
 
-// Custom "theam" WP theme: HTML lib-card listings + /wp-json/theam/v1/ REST API.
-class Markazriwayat :
-    HttpSource(),
-    NovelSource {
+class Markazriwayat : HttpSource(), NovelSource {
 
-    override val name = "Markazriwayat"
+    override val name = "مركز رواية"
     override val baseUrl = "https://markazriwayat.com"
     override val lang = "ar"
     override val supportsLatest = true
@@ -38,21 +35,20 @@ class Markazriwayat :
         isLenient = true
     }
 
-    // region Browse (HTML lib-card grid)
+    // ============================== التصفح (HTML) ==============================
 
     override fun popularMangaRequest(page: Int): Request = GET(pagedUrl("/library/", page), headers)
 
     override fun latestUpdatesRequest(page: Int): Request = GET(pagedUrl("/new/", page), headers)
 
-    // WP pagination: page 1 = /library/, page N = /library/page/N/.
-    private fun pagedUrl(path: String, page: Int): String = if (page <= 1) "$baseUrl$path" else "$baseUrl$path".trimEnd('/') + "/page/$page/"
+    private fun pagedUrl(path: String, page: Int): String =
+        if (page <= 1) "$baseUrl$path" else "$baseUrl$path".trimEnd('/') + "/page/$page/"
 
     override fun popularMangaParse(response: Response): MangasPage {
         val doc = response.asJsoup()
         checkCaptcha(doc)
         val novels = doc.select("a.lib-card").mapNotNull { card ->
-            val title = card.selectFirst(".lib-card__title")?.text()?.trim()
-                ?: return@mapNotNull null
+            val title = card.selectFirst(".lib-card__title")?.text()?.trim() ?: return@mapNotNull null
             val href = card.attr("href").ifBlank { return@mapNotNull null }
             SManga.create().apply {
                 this.title = title
@@ -65,19 +61,14 @@ class Markazriwayat :
 
     override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
 
-    // Stops paging when the theme exposes no "next" link, avoiding refetch loops.
-    private fun hasNextPage(doc: Document): Boolean = doc.selectFirst("a.next, a[rel=next], link[rel=next], .pagination a.next, .nav-links a.next") != null
+    private fun hasNextPage(doc: Document): Boolean =
+        doc.selectFirst("a.next, a[rel=next], link[rel=next], .pagination a.next, .nav-links a.next") != null
 
-    // endregion
-
-    // region Search (theam REST API)
+    // ============================== البحث عبر API ==============================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val term = URLEncoder.encode(query, "UTF-8")
-        return GET(
-            "$baseUrl/wp-json/theam/v1/novel-search?term=$term&page=$page&per_page=$SEARCH_PER_PAGE",
-            headers,
-        )
+        return GET("$baseUrl/wp-json/theam/v1/novel-search?term=$term&page=$page&per_page=20", headers)
     }
 
     override fun searchMangaParse(response: Response): MangasPage {
@@ -89,15 +80,13 @@ class Markazriwayat :
                 url = link.toRelative()
                 thumbnail_url = item.cover.ifBlank { null }
                 genre = item.genres.joinToString()
+                description = if (item.chaptersCount > 0) "عدد الفصول: ${item.chaptersCount}" else ""
             }
         }
-        val hasNext = result.hasMore || result.items.size >= SEARCH_PER_PAGE
-        return MangasPage(novels, hasNextPage = hasNext)
+        return MangasPage(novels, hasNextPage = result.hasMore)
     }
 
-    // endregion
-
-    // region Details
+    // ============================== تفاصيل الرواية ==============================
 
     override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
 
@@ -119,9 +108,7 @@ class Markazriwayat :
         }
     }
 
-    // endregion
-
-    // region Chapters (theam REST API with HTML fallback)
+    // ============================== الفصول (API + HTML كاحتياطي) ==============================
 
     override suspend fun getChapterList(manga: SManga): List<SChapter> {
         val doc = client.newCall(GET(baseUrl + manga.url, headers)).execute().asJsoup()
@@ -139,7 +126,7 @@ class Markazriwayat :
         var page = 1
         while (true) {
             val url = "$baseUrl/wp-json/theam/v1/manga-chapters" +
-                "?manga_id=$mangaId&order=DESC&page=$page&per_page=100"
+                    "?manga_id=$mangaId&order=DESC&page=$page&per_page=30"
             val response = try {
                 client.newCall(GET(url, headers)).execute().body.string()
             } catch (_: Exception) {
@@ -155,10 +142,10 @@ class Markazriwayat :
                 chapters.add(
                     SChapter.create().apply {
                         name = item.label
-                        this.url = item.url.toRelative()
+                        url = item.url.toRelative()
                         chapter_number = item.num.toChapterNumber()
                         date_upload = parseDate(item.date)
-                    },
+                    }
                 )
             }
             if (!parsed.hasMore || parsed.items.isEmpty()) break
@@ -167,45 +154,28 @@ class Markazriwayat :
         return chapters
     }
 
-    private fun parseChaptersFromHtml(doc: Document): List<SChapter> = doc.select(".ch-row").mapNotNull { row ->
-        val link = row.selectFirst("a")?.attr("href")?.ifBlank { null } ?: return@mapNotNull null
-        val title = row.selectFirst(".ch-title")?.text()?.trim() ?: link
-        SChapter.create().apply {
-            name = title
-            url = link.toRelative()
-            chapter_number = (row.selectFirst(".ch-num")?.text() ?: title).toChapterNumber()
-            date_upload = parseDate(row.selectFirst(".ch-date, .ch-row time")?.text())
-        }
-    }
-
-    override fun chapterListParse(response: Response): List<SChapter> = orderChapters(parseChaptersFromHtml(response.asJsoup()))
-
-    // Single ordering authority for both the API and HTML paths: newest chapter first.
-    private fun orderChapters(chapters: List<SChapter>): List<SChapter> = chapters.sortedByDescending { it.chapter_number }
-
-    private fun String?.toChapterNumber(): Float {
-        if (this.isNullOrBlank()) return -1f
-        return CHAPTER_NUM_REGEX.find(this)?.value?.toFloatOrNull() ?: -1f
-    }
-
-    private fun parseDate(dateStr: String?): Long {
-        val raw = dateStr?.trim().orEmpty()
-        if (raw.isBlank()) return 0L
-        DATE_FORMATS.forEach { fmt ->
-            try {
-                return fmt.parse(raw)?.time ?: return@forEach
-            } catch (_: Exception) {
-                // try next format
+    private fun parseChaptersFromHtml(doc: Document): List<SChapter> =
+        doc.select(".ch-row").mapNotNull { row ->
+            val link = row.selectFirst("a")?.attr("href")?.ifBlank { null } ?: return@mapNotNull null
+            val title = row.selectFirst(".ch-title")?.text()?.trim() ?: link
+            SChapter.create().apply {
+                name = title
+                url = link.toRelative()
+                chapter_number = (row.selectFirst(".ch-num")?.text() ?: title).toChapterNumber()
+                date_upload = parseDate(row.selectFirst(".ch-date, .ch-row time")?.text())
             }
         }
-        return 0L
-    }
 
-    // endregion
+    override fun chapterListParse(response: Response): List<SChapter> =
+        orderChapters(parseChaptersFromHtml(response.asJsoup()))
 
-    // region Pages / Content
+    private fun orderChapters(chapters: List<SChapter>): List<SChapter> =
+        chapters.sortedByDescending { it.chapter_number }
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
+    // ============================== محتوى الفصل ==============================
+
+    override fun pageListParse(response: Response): List<Page> =
+        listOf(Page(0, response.request.url.encodedPath))
 
     override suspend fun fetchPageText(page: Page): String {
         val doc = client.newCall(GET(baseUrl + page.url, headers)).execute().asJsoup()
@@ -219,16 +189,14 @@ class Markazriwayat :
 
     override fun imageUrlParse(response: Response): String = ""
 
-    // endregion
-
-    // region Helpers
+    // ============================== دوال مساعدة ==============================
 
     private fun Response.asJsoup(): Document = Jsoup.parse(body.string(), request.url.toString())
 
     private fun checkCaptcha(doc: Document) {
         val title = doc.title().trim()
         if (title == "Bot Verification" || title == "Just a moment...") {
-            throw Exception("Captcha detected, please open in WebView")
+            throw Exception("تم اكتشاف كابتشا، يرجى فتح الرابط في متصفح WebView")
         }
     }
 
@@ -251,7 +219,23 @@ class Markazriwayat :
         return if (raw.startsWith("http")) raw else baseUrl + raw.toRelative()
     }
 
-    // endregion
+    private fun String?.toChapterNumber(): Float {
+        if (this.isNullOrBlank()) return -1f
+        return CHAPTER_NUM_REGEX.find(this)?.value?.toFloatOrNull() ?: -1f
+    }
+
+    private fun parseDate(dateStr: String?): Long {
+        val raw = dateStr?.trim().orEmpty()
+        if (raw.isBlank()) return 0L
+        DATE_FORMATS.forEach { fmt ->
+            try {
+                return fmt.parse(raw)?.time ?: return@forEach
+            } catch (_: Exception) { }
+        }
+        return 0L
+    }
+
+    // ============================== نماذج API ==============================
 
     @Serializable
     private data class SearchResponse(
@@ -283,13 +267,12 @@ class Markazriwayat :
     )
 
     companion object {
-        private const val SEARCH_PER_PAGE = 20
         private val CHAPTER_NUM_REGEX = Regex("""\d+(\.\d+)?""")
         private val DATE_FORMATS = listOf(
             "yyyy-MM-dd'T'HH:mm:ss",
             "yyyy-MM-dd HH:mm:ss",
             "yyyy-MM-dd",
-            "dd/MM/yyyy",
+            "dd/MM/yyyy"
         ).map { SimpleDateFormat(it, Locale.US) }
     }
 }
