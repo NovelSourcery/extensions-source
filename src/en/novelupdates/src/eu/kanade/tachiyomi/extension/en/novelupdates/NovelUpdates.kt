@@ -636,6 +636,34 @@ class NovelUpdates :
                     if (match != null) chapterText = match.groupValues[1]
                 }
 
+                // Last edited in version 5 by Batorian - 14/06/2026
+                "konkon" -> {
+                    // chapterUrl: https://konkon.ink/read/chapter/22528/chapter-131-...
+                    // API:        https://api-k.konkon.ink/api/public/chapters/22528
+                    val chapterId = chapterUrl.split("/")[5]
+                    val apiUrl = "https://api-k.konkon.ink/api/public/chapters/$chapterId"
+
+                    val response = client.newCall(GET(apiUrl, headers)).execute()
+                    if (!response.isSuccessful) throw Exception("Failed to fetch chapter: ${response.code}")
+
+                    val json = response.body.string()
+
+                    val isLocked = Regex(""""locked"\s*:\s*true""").containsMatchIn(json)
+                    if (isLocked) throw Exception("Chapter is locked. Please open in webview and log in.")
+
+                    val titleMatch = Regex(""""title"\s*:\s*"([^"]+)"""").find(json)
+                    val contentMatch = Regex(""""content"\s*:\s*"([\s\S]*?)(?<!\\)",""").find(json)
+
+                    chapterTitle = titleMatch?.groupValues?.get(1)
+                        ?.replace("\\u2026", "…")
+                        ?.replace("\\u2019", "\u2019")
+                        ?: ""
+                    chapterContent = contentMatch?.groupValues?.get(1)
+                        ?.replace("\\/", "/")
+                        ?.replace("\\\"", "\"")
+                        ?: throw Exception("Could not extract chapter content.")
+                }
+
                 // Last edited in version 3 by Batorian - 03/06/2026
                 "leafstudio" -> {
                     chapterTitle = doc.select(".title").first()?.text() ?: ""
