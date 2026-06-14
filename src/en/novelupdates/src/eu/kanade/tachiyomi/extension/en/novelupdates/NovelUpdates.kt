@@ -16,6 +16,13 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.FormBody
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -27,13 +34,6 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.boolean
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.int
-import kotlinx.serialization.json.jsonArray
 
 class NovelUpdates :
     HttpSource(),
@@ -657,12 +657,14 @@ class NovelUpdates :
                     val apiUrl = "https://api-k.konkon.ink/api/public/chapters/$chapterId"
 
                     val response = client.newCall(
-                        GET(apiUrl, headers.newBuilder()
-                            .set("Origin", "https://konkon.ink")
-                            .set("Referer", "https://konkon.ink/")
-                            .set("Accept", "application/json")
-                            .build()
-                        )
+                        GET(
+                            apiUrl,
+                            headers.newBuilder()
+                                .set("Origin", "https://konkon.ink")
+                                .set("Referer", "https://konkon.ink/")
+                                .set("Accept", "application/json")
+                                .build(),
+                        ),
                     ).execute()
                     if (!response.isSuccessful) throw Exception("Failed to fetch chapter: ${response.code}")
 
@@ -675,6 +677,10 @@ class NovelUpdates :
                     chapterTitle = data["title"]?.jsonPrimitive?.content ?: ""
                     chapterContent = data["content"]?.jsonPrimitive?.content
                         ?: throw Exception("Could not extract chapter content.")
+
+                    val contentDoc = Jsoup.parse(chapterContent)
+                    contentDoc.select("span").forEach { it.tagName("p") }
+                    chapterContent = contentDoc.html()
                 }
 
                 // Last edited in version 3 by Batorian - 03/06/2026
