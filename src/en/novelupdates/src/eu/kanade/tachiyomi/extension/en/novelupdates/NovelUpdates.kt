@@ -914,26 +914,6 @@ class NovelUpdates :
                     }
                 }
 
-                // Last edited in version 5 by Batorian - 03/06/2026
-                "raeitranslations" -> {
-                    val parts = chapterUrl.split("/")
-                    val apiUrl = "${parts[0]}//api.${parts[2]}/api/chapters/single?id=${parts[3]}&num=${parts[4]}"
-
-                    val response = client.newCall(GET(apiUrl, headers)).execute()
-                    val json = Json.parseToJsonElement(response.body.string()).jsonObject
-                    val currentChapter = json["currentChapter"]!!.jsonObject
-
-                    val chapTag = currentChapter["chapTag"]?.jsonPrimitive?.content ?: ""
-                    val chapTitle = currentChapter["chapTitle"]?.jsonPrimitive?.content ?: ""
-                    val body = currentChapter["body"]?.jsonPrimitive?.content ?: ""
-                    val note = currentChapter["note"]?.jsonPrimitive?.content ?: ""
-                    val novelHead = json["novelHead"]?.jsonPrimitive?.content ?: ""
-
-                    chapterTitle = if (chapTitle.isNotEmpty()) "Chapter $chapTag - $chapTitle" else "Chapter $chapTag"
-                    chapterContent = listOf(novelHead, "<br><hr><br>", body, "<br><hr><br>Translator's Note:<br>", note)
-                        .joinToString("").replace("\n", "<br>")
-                }
-
                 // Last edited in version 3 by Batorian - 03/06/2026
                 "rainofsnow" -> {
                     val displayedDiv = doc.select(".bb-item").firstOrNull { el ->
