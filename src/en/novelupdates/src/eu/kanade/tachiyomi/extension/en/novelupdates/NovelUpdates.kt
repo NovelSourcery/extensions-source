@@ -27,7 +27,14 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
-// mostly ported from LNReader
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
+
 class NovelUpdates :
     HttpSource(),
     NovelSource,
@@ -459,16 +466,16 @@ class NovelUpdates :
         if (!isWordPress && !isBlogspot) {
             // Per-site extraction
             when (targetDomain) {
-                // Last edited in version 3 by Batorian - 03/06/2026
+                // Last edited in version 5 by Batorian - 03/06/2026
                 "akutranslations" -> {
                     val apiUrl = chapterUrl.replace("/novel", "/api/novel")
                     val response = client.newCall(GET(apiUrl, headers)).execute()
-                    val json = response.body.string()
-                    val contentMatch = Regex(""""content"\s*:\s*"([\s\S]*?)(?<!\\)"""").find(json)
-                    val rawContent = contentMatch?.groupValues?.get(1)
+                    val json = Json.parseToJsonElement(response.body.string()).jsonObject
+
+                    val rawContent = json["content"]?.jsonPrimitive?.content
                         ?: throw Exception("Invalid API response structure.")
+
                     chapterContent = rawContent
-                        .replace("\\n", "\n").replace("\\\"", "\"")
                         .trim().split(Regex("\n+"))
                         .map { it.trim() }.filter { it.isNotEmpty() }
                         .joinToString("\n") { "<p>$it</p>" }
@@ -482,36 +489,37 @@ class NovelUpdates :
                     chapterContent = doc.select(".post-body").html()
                 }
 
-                // Last edited in version 3 by Batorian - 03/06/2026
+                // Last edited in version 5 by Batorian - 03/06/2026
                 "brightnovels" -> {
                     val dataPage = doc.select("#app").attr("data-page")
                     if (dataPage.isNullOrEmpty()) throw Exception("data-page attribute not found on Bright Novels.")
-                    // Extract title and content from JSON
-                    val titleMatch = Regex(""""title"\s*:\s*"([^"]+)"""").find(dataPage)
-                    val contentMatch = Regex(""""content"\s*:\s*"([\s\S]*?)(?<!\\)",""").find(dataPage)
-                    val extractedTitle = titleMatch?.groupValues?.get(1) ?: ""
-                    val extractedContent = contentMatch?.groupValues?.get(1)
-                        ?.replace("\\u003c", "<")?.replace("\\u003e", ">")
-                        ?.replace("\\n", "\n")?.replace("\\\"", "\"") ?: ""
+
+                    val pageData = Json.parseToJsonElement(dataPage).jsonObject
+                    val chapter = pageData["props"]!!.jsonObject["chapter"]!!.jsonObject
+
+                    val extractedTitle = chapter["title"]?.jsonPrimitive?.content ?: ""
+                    val extractedContent = chapter["content"]?.jsonPrimitive?.content ?: ""
+
                     val cleaned = Jsoup.parse(extractedContent).also { it.select("script, style").remove() }.html()
                     chapterText = "<h2>$extractedTitle</h2><hr><br>$cleaned"
                 }
 
-                // Last edited in version 3 by Batorian - 03/06/2026
+                // Last edited in version 5 by Batorian - 03/06/2026
                 "canonstory" -> {
                     val parts = chapterUrl.split("/")
                     if (parts.size < 7) throw Exception("Invalid chapter URL structure")
                     val novelSlug = parts[4]
                     val chapterSlug = parts[6]
                     val apiUrl = "${parts[0]}//${parts[2]}/api/public/chapter-by-slug/$novelSlug/$chapterSlug"
+
                     val response = client.newCall(GET(apiUrl, headers)).execute()
-                    val json = response.body.string()
-                    val chapterNumberMatch = Regex(""""chapterNumber"\s*:\s*(\d+)""").find(json)
-                    val titleMatch = Regex(""""title"\s*:\s*"([^"]+)"""").find(json)
-                    val contentMatch = Regex(""""content"\s*:\s*"([\s\S]*?)(?<!\\)"""").find(json)
-                    val chapterNumber = chapterNumberMatch?.groupValues?.get(1) ?: ""
-                    val title = titleMatch?.groupValues?.get(1) ?: ""
-                    val content = contentMatch?.groupValues?.get(1)?.replace("\\n", "\n") ?: ""
+                    val data = Json.parseToJsonElement(response.body.string())
+                        .jsonObject["data"]!!.jsonObject["currentChapter"]!!.jsonObject
+
+                    val chapterNumber = data["chapterNumber"]?.jsonPrimitive?.content ?: ""
+                    val title = data["title"]?.jsonPrimitive?.content ?: ""
+                    val content = data["content"]?.jsonPrimitive?.content ?: ""
+
                     chapterTitle = if (title.isNotEmpty()) "Chapter $chapterNumber - $title" else "Chapter $chapterNumber"
                     chapterContent = content.replace("\n", "<br>")
                 }
@@ -552,39 +560,44 @@ class NovelUpdates :
                     chapterContent = doc.select(".content").html()
                 }
 
-                // Last edited in version 3 by Batorian - 03/06/2026
+                // Last edited in version 5 by Batorian - 03/06/2026
                 "genesistudio" -> {
                     val apiUrl = "$chapterUrl/__data.json?x-sveltekit-invalidated=001"
                     val response = client.newCall(GET(apiUrl, headers)).execute()
-                    val json = response.body.string()
-                    // Parse nodes array and look for the data node with content/notes/footnotes
-                    val dataNodeMatch = Regex(""""type":"data","data":\{([^}]+)\}""").find(json)
-                    // Simplified: look for the content key mapping in the JSON
-                    // The structure is complex; extract the full content as-is
-                    val contentMatch = Regex(""""content":"([\s\S]*?)","notes"""").find(json)
-                    val notesMatch = Regex(""""notes":"([\s\S]*?)","footnotes"""").find(json)
-                    val footnotesMatch = Regex(""""footnotes":"([\s\S]*?)"""").find(json)
-                    val content = contentMatch?.groupValues?.get(1)?.replace("\\n", "\n")?.replace("\\\"", "\"") ?: ""
-                    val notes = notesMatch?.groupValues?.get(1)?.replace("\\n", "\n")?.replace("\\\"", "\"") ?: ""
-                    val footnotes = footnotesMatch?.groupValues?.get(1)?.replace("\\n", "\n")?.replace("\\\"", "\"") ?: ""
-                    chapterText = content +
-                        (if (notes.isNotEmpty()) "<h2>Notes</h2><br>$notes" else "") +
-                        footnotes
+                    val nodes = Json.parseToJsonElement(response.body.string())
+                        .jsonObject["nodes"]!!.jsonArray
+
+                    val data = nodes.first { it.jsonObject["type"]?.jsonPrimitive?.content == "data" }
+                        .jsonObject["data"]!!.jsonArray
+
+                    // Walk the data array looking for an object with content/notes/footnotes keys
+                    for (i in data.indices) {
+                        val entry = data[i].jsonObject
+                        if ("content" in entry && "notes" in entry && "footnotes" in entry) {
+                            val content = data[entry["content"]!!.jsonPrimitive.int].jsonPrimitive.content
+                            val notes = data[entry["notes"]!!.jsonPrimitive.int].jsonPrimitive.contentOrNull ?: ""
+                            val footnotes = data[entry["footnotes"]!!.jsonPrimitive.int].jsonPrimitive.contentOrNull ?: ""
+                            chapterText = content +
+                                (if (notes.isNotEmpty()) "<h2>Notes</h2><br>$notes" else "") +
+                                footnotes
+                            break
+                        }
+                    }
                 }
 
                 // Last edited in version 3 by Batorian - 03/06/2026
                 "greenz" -> {
                     val chapterSlug = chapterUrl.split("/").last()
                     val apiUrl = "https://greenz.com/api/chapters/slug/$chapterSlug"
+
                     val response = client.newCall(GET(apiUrl, headers)).execute()
-                    val json = response.body.string()
-                    val nameMatch = Regex(""""name"\s*:\s*"([^"]+)"""").find(json)
-                    val numMatch = Regex(""""chapterNumber"\s*:\s*(\d+)""").find(json)
-                    val contentMatch = Regex(""""content"\s*:\s*"([\s\S]*?)(?<!\\)"""").find(json)
-                    val chapterName = nameMatch?.groupValues?.get(1) ?: ""
-                    val chapterNumber = numMatch?.groupValues?.get(1) ?: ""
-                    val rawContent = contentMatch?.groupValues?.get(1)
-                        ?.replace("\\n", "\n")?.replace("\\\"", "\"") ?: ""
+                    val data = Json.parseToJsonElement(response.body.string())
+                        .jsonObject["data"]!!.jsonObject
+
+                    val chapterName = data["name"]?.jsonPrimitive?.content ?: ""
+                    val chapterNumber = data["chapterNumber"]?.jsonPrimitive?.content ?: ""
+                    val rawContent = data["content"]?.jsonPrimitive?.content ?: ""
+
                     chapterTitle = "Chapter $chapterNumber - $chapterName"
                     chapterContent = Jsoup.parse(rawContent).html()
                 }
@@ -643,24 +656,24 @@ class NovelUpdates :
                     val chapterId = chapterUrl.split("/")[5]
                     val apiUrl = "https://api-k.konkon.ink/api/public/chapters/$chapterId"
 
-                    val response = client.newCall(GET(apiUrl, headers)).execute()
+                    val response = client.newCall(
+                        GET(apiUrl, headers.newBuilder()
+                            .set("Origin", "https://konkon.ink")
+                            .set("Referer", "https://konkon.ink/")
+                            .set("Accept", "application/json")
+                            .build()
+                        )
+                    ).execute()
                     if (!response.isSuccessful) throw Exception("Failed to fetch chapter: ${response.code}")
 
-                    val json = response.body.string()
+                    val data = Json.parseToJsonElement(response.body.string())
+                        .jsonObject["data"]!!.jsonObject
 
-                    val isLocked = Regex(""""locked"\s*:\s*true""").containsMatchIn(json)
+                    val isLocked = data["user_has_access"]?.jsonPrimitive?.boolean?.not() ?: true
                     if (isLocked) throw Exception("Chapter is locked. Please open in webview and log in.")
 
-                    val titleMatch = Regex(""""title"\s*:\s*"([^"]+)"""").find(json)
-                    val contentMatch = Regex(""""content"\s*:\s*"([\s\S]*?)(?<!\\)",""").find(json)
-
-                    chapterTitle = titleMatch?.groupValues?.get(1)
-                        ?.replace("\\u2026", "…")
-                        ?.replace("\\u2019", "\u2019")
-                        ?: ""
-                    chapterContent = contentMatch?.groupValues?.get(1)
-                        ?.replace("\\/", "/")
-                        ?.replace("\\\"", "\"")
+                    chapterTitle = data["title"]?.jsonPrimitive?.content ?: ""
+                    chapterContent = data["content"]?.jsonPrimitive?.content
                         ?: throw Exception("Could not extract chapter content.")
                 }
 
@@ -694,7 +707,7 @@ class NovelUpdates :
                     chapterContent = doc.select(".entry-content").html()
                 }
 
-                // Last edited in version 3 by Batorian - 03/06/2026
+                // Last edited in version 5 by Batorian - 03/06/2026
                 "mythoriatales" -> {
                     // Fetch script-2 to get the Next.js Server Action hash
                     val scriptHtml = doc.select("script:containsData(script-2)").joinToString("") { it.html() }
@@ -751,14 +764,13 @@ class NovelUpdates :
 
                     val metaSegment = segments.find { it.startsWith("1:") }
                     if (metaSegment != null) {
-                        try {
-                            val metaJson = metaSegment.substring(2)
-                            val titleMatch2 = Regex(""""title"\s*:\s*"([^"]+)"""").find(metaJson)
-                            val numMatch2 = Regex(""""chapterNumber"\s*:\s*(\d+)""").find(metaJson)
-                            val t = titleMatch2?.groupValues?.get(1)
-                            val n = numMatch2?.groupValues?.get(1)?.toIntOrNull() ?: chapterNum
-                            if (t != null) chapterTitle = "Chapter $n: $t"
-                        } catch (_: Exception) { }
+                        runCatching {
+                            val meta = Json.parseToJsonElement(metaSegment.substring(2))
+                                .jsonObject["data"]!!.jsonObject["chapter"]!!.jsonObject
+                            val title = meta["title"]?.jsonPrimitive?.content
+                            val num = meta["chapterNumber"]?.jsonPrimitive?.int ?: chapterNum
+                            if (title != null) chapterTitle = "Chapter $num: $title"
+                        }
                     }
                     if (chapterTitle.isEmpty()) chapterTitle = "Chapter $chapterNum"
 
@@ -778,19 +790,20 @@ class NovelUpdates :
                     chapterContent = doc.select(".halChap--kontenInner").html()
                 }
 
-                // Last edited in version 3 by Batorian - 03/06/2026
+                // Last edited in version 5 by Batorian - 03/06/2026
                 "novelshub" -> {
                     val segments2 = chapterUrl.split("/")
                     val novelSlug = segments2[segments2.size - 2]
                     val chapterSlug2 = segments2.last()
                     val apiUrl = "https://api.novelshub.org/api/chapter?mangaslug=$novelSlug&chapterslug=$chapterSlug2"
+
                     val response = client.newCall(GET(apiUrl, headers)).execute()
-                    val json = response.body.string()
-                    val numMatch = Regex(""""number"\s*:\s*(\d+)""").find(json)
-                    val contentMatch = Regex(""""content"\s*:\s*"([\s\S]*?)(?<!\\)"""").find(json)
-                    val chapterNumber = numMatch?.groupValues?.get(1) ?: ""
-                    val rawContent = contentMatch?.groupValues?.get(1)
-                        ?.replace("\\n", "\n")?.replace("\\\"", "\"") ?: ""
+                    val chapter = Json.parseToJsonElement(response.body.string())
+                        .jsonObject["chapter"]!!.jsonObject
+
+                    val chapterNumber = chapter["number"]?.jsonPrimitive?.content ?: ""
+                    val rawContent = chapter["content"]?.jsonPrimitive?.content ?: ""
+
                     chapterTitle = "Chapter $chapterNumber"
                     val contentDoc = Jsoup.parse(rawContent)
                     contentDoc.select("div").forEach { el ->
@@ -894,24 +907,22 @@ class NovelUpdates :
                     }
                 }
 
-                // Last edited in version 3 by Batorian - 03/06/2026
+                // Last edited in version 5 by Batorian - 03/06/2026
                 "raeitranslations" -> {
                     val parts = chapterUrl.split("/")
                     val apiUrl = "${parts[0]}//api.${parts[2]}/api/chapters/single?id=${parts[3]}&num=${parts[4]}"
+
                     val response = client.newCall(GET(apiUrl, headers)).execute()
-                    val json = response.body.string()
-                    val chapTagMatch = Regex(""""chapTag"\s*:\s*"([^"]+)"""").find(json)
-                    val chapTitleMatch = Regex(""""chapTitle"\s*:\s*"([^"]+)"""").find(json)
-                    val bodyMatch = Regex(""""body"\s*:\s*"([\s\S]*?)(?<!\\)"""").find(json)
-                    val noteMatch = Regex(""""note"\s*:\s*"([\s\S]*?)(?<!\\)"""").find(json)
-                    val novelHeadMatch = Regex(""""novelHead"\s*:\s*"([\s\S]*?)(?<!\\)"""").find(json)
-                    val chapTag = chapTagMatch?.groupValues?.get(1) ?: ""
-                    val chapTitle = chapTitleMatch?.groupValues?.get(1) ?: ""
-                    val body = bodyMatch?.groupValues?.get(1)?.replace("\\n", "\n")?.replace("\\\"", "\"") ?: ""
-                    val note = noteMatch?.groupValues?.get(1)?.replace("\\n", "\n")?.replace("\\\"", "\"") ?: ""
-                    val novelHead = novelHeadMatch?.groupValues?.get(1)?.replace("\\n", "\n")?.replace("\\\"", "\"") ?: ""
-                    val titleElement = "Chapter $chapTag"
-                    chapterTitle = if (chapTitle.isNotEmpty()) "$titleElement - $chapTitle" else titleElement
+                    val json = Json.parseToJsonElement(response.body.string()).jsonObject
+                    val currentChapter = json["currentChapter"]!!.jsonObject
+
+                    val chapTag = currentChapter["chapTag"]?.jsonPrimitive?.content ?: ""
+                    val chapTitle = currentChapter["chapTitle"]?.jsonPrimitive?.content ?: ""
+                    val body = currentChapter["body"]?.jsonPrimitive?.content ?: ""
+                    val note = currentChapter["note"]?.jsonPrimitive?.content ?: ""
+                    val novelHead = json["novelHead"]?.jsonPrimitive?.content ?: ""
+
+                    chapterTitle = if (chapTitle.isNotEmpty()) "Chapter $chapTag - $chapTitle" else "Chapter $chapTag"
                     chapterContent = listOf(novelHead, "<br><hr><br>", body, "<br><hr><br>Translator's Note:<br>", note)
                         .joinToString("").replace("\n", "<br>")
                 }
