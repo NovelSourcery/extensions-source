@@ -680,6 +680,7 @@ class NovelUpdates :
 
                     val contentDoc = Jsoup.parse(chapterContent)
                     contentDoc.select("span").forEach { it.tagName("p") }
+                    contentDoc.select("br").remove()
                     chapterContent = contentDoc.html()
                 }
 
