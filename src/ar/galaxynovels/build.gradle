@@ -1,0 +1,9 @@
+ext {
+    extName = 'Galaxy Novels'
+    extClass = '.GalaxyNovels'
+    extVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"
