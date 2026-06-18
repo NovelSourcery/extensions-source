@@ -151,7 +151,6 @@ class GalaxyNovels :
     override fun searchMangaParse(response: Response): MangasPage {
         val doc = Jsoup.parse(response.body.string())
 
-<<<<<<< HEAD
         val novels = doc.select("article.wor-library-card, article.wor-novel-card").mapNotNull { card ->
             val titleLink = card.selectFirst("h2.wor-library-card__title a, h3 a")
                 ?: card.selectFirst("a.wor-library-card__cover, a[href*=novel]") ?: return@mapNotNull null
@@ -170,17 +169,6 @@ class GalaxyNovels :
                 }
             } else {
                 null
-=======
-        val novels = doc.select("article.wor-novel-card").mapNotNull { card ->
-            val link = card.selectFirst("a[href*=novel]") ?: return@mapNotNull null
-            val title = card.selectFirst("h3 a")?.text()?.trim()
-                ?: link.attr("aria-label").trim().ifEmpty { return@mapNotNull null }
-
-            SManga.create().apply {
-                this.title = title
-                url = link.attr("href").removePrefix(baseUrl)
-                thumbnail_url = card.selectFirst("img")?.attr("src").toAbsoluteUrl()
->>>>>>> b1876598e1b64de7ea9065ffd0525c7823e469fb
             }
         }
 
