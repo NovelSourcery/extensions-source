@@ -1,7 +1,11 @@
 ext {
     extName = 'Galaxy Novels'
     extClass = '.GalaxyNovels'
+<<<<<<< HEAD
     extVersionCode = 2
+=======
+    extVersionCode = 1
+>>>>>>> b1876598e1b64de7ea9065ffd0525c7823e469fb
     isNsfw = false
     isNovel = true
 }
