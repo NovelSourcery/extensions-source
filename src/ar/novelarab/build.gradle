@@ -1,0 +1,11 @@
+ext {
+    extName = 'Novel Arab'
+    extClass = '.NovelArab'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://novelarab.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

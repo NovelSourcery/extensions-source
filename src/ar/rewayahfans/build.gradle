@@ -1,7 +1,7 @@
 ext {
-    extName = 'Galaxy Novels'
-    extClass = '.GalaxyNovels'
-    extVersionCode = 2
+    extName = 'Rewayah Fans'
+    extClass = '.RewayahFans'
+    extVersionCode = 1
     isNsfw = false
     isNovel = true
 }
