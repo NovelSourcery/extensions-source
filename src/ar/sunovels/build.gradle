@@ -1,0 +1,9 @@
+ext {
+    extName = 'Sunovels'
+    extClass = '.Sunovels'
+    extVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"

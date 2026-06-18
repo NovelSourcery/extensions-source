@@ -1,0 +1,9 @@
+ext {
+    extName = 'Rewayah Fans'
+    extClass = '.RewayahFans'
+    extVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply from: "$rootDir/common.gradle"
