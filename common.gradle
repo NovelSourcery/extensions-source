@@ -64,8 +64,8 @@ android {
             System.getenv("ALIAS") &&
             System.getenv("KEY_PASSWORD")
 
-    signingConfigs {
         if (hasSigning) {
+        signingConfigs {
             release {
                 storeFile = keystoreFile
                 storePassword = System.getenv("KEY_STORE_PASSWORD")
@@ -79,8 +79,6 @@ android {
         release {
             if (hasSigning) {
                 signingConfig = signingConfigs.release
-            } else {
-                signingConfig = signingConfigs.debug
             }
             minifyEnabled = false
             vcsInfo.include = false
