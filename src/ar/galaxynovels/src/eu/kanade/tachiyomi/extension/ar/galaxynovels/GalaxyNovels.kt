@@ -244,7 +244,7 @@ class GalaxyNovels :
                     if (chapter.title.isNotEmpty()) {
                         name += " - ${chapter.title}"
                     }
-                    number = chapter.number.toFloatOrNull() ?: chapter.position.toFloat()
+                    chapter_number = chapter.number.toFloatOrNull() ?: chapter.position.toFloat()
                     date_upload = parseDate(chapter.date_iso)
                 }
             }.sortedByDescending { it.chapter_number }
