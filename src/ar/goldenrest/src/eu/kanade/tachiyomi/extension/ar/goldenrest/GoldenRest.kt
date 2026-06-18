@@ -2,6 +2,7 @@ package eu.kanade.tachiyomi.novelextension.ar.goldenrest
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
+import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -10,13 +11,17 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import uy.kohesive.injekt.injectLazy
 
-class GoldenRest : HttpSource() {
+class GoldenRest :
+    HttpSource(),
+    NovelSource {
 
     override val name = "Golden Rest"
 
@@ -60,13 +65,10 @@ class GoldenRest : HttpSource() {
             return GET("$baseUrl/api/mangas/$id", apiHeaders)
         }
 
-        val body = json.encodeToString(
-            kotlinx.serialization.builtins.MapSerializer(
-                kotlinx.serialization.builtins.serializer<String>(),
-                kotlinx.serialization.builtins.serializer<String>(),
-            ),
-            mapOf("title" to query, "page" to page.toString()),
-        ).toRequestBody("application/json".toMediaType())
+        val body = buildJsonObject {
+            put("title", query)
+            put("page", page.toString())
+        }.toString().toRequestBody("application/json".toMediaType())
 
         return POST("$baseUrl/api/mangas/search", apiHeaders, body)
     }
@@ -209,7 +211,6 @@ class GoldenRest : HttpSource() {
             2 -> SManga.ONGOING
             else -> SManga.UNKNOWN
         }
-        setThumbnailUrlWithoutCache(thumbnail_url)
     }
 
     private fun parseDate(dateStr: String): Long = try {
