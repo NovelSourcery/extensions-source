@@ -21,6 +21,7 @@ import keiyoushi.lib.chapterutils.checkCloudflare
 import keiyoushi.lib.chapterutils.paginatedChapterList
 import keiyoushi.lib.chapterutils.shouldReturnExisting
 import keiyoushi.lib.chapterutils.sortByChapterNumber
+import keiyoushi.utils.formattedText
 import keiyoushi.utils.tryParse
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -346,7 +347,7 @@ class NovelFire :
                 .joinToString(", ") { it.text().trim() }
 
             // Get summary
-            val summary = doc.selectFirst(".summary .content")?.text()?.trim()
+            val summary = doc.selectFirst(".summary .content")?.formattedText()
             description = summary?.replace("Show More", "") ?: "No Summary Found"
 
             // Get author

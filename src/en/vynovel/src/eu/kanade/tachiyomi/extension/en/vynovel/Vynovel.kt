@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.formattedText
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -158,7 +159,7 @@ class Vynovel :
                 .joinToString(", ")
 
             // Description
-            description = document.selectFirst("div.summary p.content")?.text()?.trim()
+            description = document.selectFirst("div.summary p.content")?.formattedText()
         }
     }
 

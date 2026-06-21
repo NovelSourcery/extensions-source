@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.utils.formattedText
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -142,7 +143,7 @@ abstract class LightNovelWP(
         }
 
         // Get summary
-        description = document.selectFirst(".entry-content, div[itemprop=description]")?.text()?.trim()
+        description = document.selectFirst(".entry-content, div[itemprop=description]")?.formattedText()
 
         // Parse info section for author/status
         document.select(".spe span, .serl span, .sertostat").forEach { element ->

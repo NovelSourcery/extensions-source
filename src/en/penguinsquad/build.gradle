@@ -1,7 +1,7 @@
 ext {
     extName = 'PenguinSquad'
     extClass = '.PenguinSquad'
-    extVersionCode = 3
+    extVersionCode = 4
     isNsfw = false
     isNovel = true
 }

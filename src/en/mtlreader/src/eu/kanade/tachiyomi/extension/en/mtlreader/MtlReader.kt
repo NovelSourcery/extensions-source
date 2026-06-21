@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.formattedText
 import keiyoushi.utils.getPreferencesLazy
 import okhttp3.Request
 import okhttp3.Response
@@ -123,7 +124,7 @@ class MtlReader :
                 ?: doc.selectFirst("img.thumbnail")?.attr("src")
                 ?: doc.selectFirst(".property_img img")?.attr("src")
 
-            description = doc.selectFirst("#editdescription")?.text()?.trim()
+            description = doc.selectFirst("#editdescription")?.formattedText()
                 ?: doc.selectFirst("meta[name=description]")?.attr("content")
                 ?: doc.selectFirst(".novel-description")?.text()
                 ?: ""

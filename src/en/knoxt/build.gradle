@@ -3,7 +3,7 @@ ext {
     extClass = '.KnoxT'
     themePkg = 'lightnovelwpnovel'
     baseUrl = 'https://knoxt.space'
-    overrideVersionCode = 1
+    overrideVersionCode = 2
     isNsfw = false
     isNovel = true
 }

@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.formattedText
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -200,10 +201,7 @@ class GalaxyNovels :
                 else -> SManga.UNKNOWN
             }
 
-            description = doc.selectFirst(".wor-single-summary__text")?.let { element ->
-                element.select("script, style").remove()
-                element.text().trim()
-            }
+            description = doc.selectFirst(".wor-single-summary__text")?.formattedText()
 
             val chapterCountText = doc.select(".wor-single-stats__item")
                 .firstOrNull { it.text().contains("عدد الفصول") }

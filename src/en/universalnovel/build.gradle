@@ -3,7 +3,7 @@ ext {
     extClass = '.UniversalNovel'
     themePkg = 'lightnovelwpnovel'
     baseUrl = 'https://universalnovel.com'
-    overrideVersionCode = 1
+    overrideVersionCode = 2
     isNsfw = false
     isNovel = true
 }
