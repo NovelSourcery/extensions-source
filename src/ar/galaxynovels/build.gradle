@@ -1,7 +1,7 @@
 ext {
     extName = 'Galaxy Novels'
     extClass = '.GalaxyNovels'
-    extVersionCode = 2
+    extVersionCode = 1
     isNsfw = false
     isNovel = true
 }
