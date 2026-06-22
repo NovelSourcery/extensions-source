@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.formattedText
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -86,7 +87,6 @@ class NovelBuddy :
         }
     }
 
-    // ======================== Popular ========================
     override fun popularMangaRequest(page: Int): Request {
         val url = "$apiUrl/titles/search".toHttpUrl().newBuilder()
         url.addQueryParameter("sort", "views")
@@ -97,7 +97,6 @@ class NovelBuddy :
 
     override fun popularMangaParse(response: Response): MangasPage = parseApiResponse(response)
 
-    // ======================== Latest ========================
     override fun latestUpdatesRequest(page: Int): Request {
         val url = "$apiUrl/titles/search".toHttpUrl().newBuilder()
         url.addQueryParameter("sort", "latest")
@@ -108,7 +107,6 @@ class NovelBuddy :
 
     override fun latestUpdatesParse(response: Response): MangasPage = parseApiResponse(response)
 
-    // ======================== Search ========================
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val url = "$apiUrl/titles/search".toHttpUrl().newBuilder()
 
@@ -193,7 +191,6 @@ class NovelBuddy :
         DemoFilter(),
     )
 
-    // ======================== Filters ========================
     private class OrderByFilter :
         Filter.Select<String>(
             "Order By",
@@ -300,7 +297,6 @@ class NovelBuddy :
             ),
         )
 
-    // ======================== Details ========================
     override fun mangaDetailsRequest(manga: SManga): Request = GET(buildUrl(manga.url), headers)
 
     override fun mangaDetailsParse(response: Response): SManga {
@@ -315,7 +311,7 @@ class NovelBuddy :
         return SManga.create().apply {
             title = document.selectFirst(".name h1")?.text()?.trim() ?: "Untitled"
             thumbnail_url = document.selectFirst(".img-cover img")?.attr("data-src")
-            description = document.selectFirst(".section-body.summary .content")?.text()?.trim()
+            description = document.selectFirst(".section-body.summary .content")?.formattedText()
         }
     }
 
@@ -354,7 +350,6 @@ class NovelBuddy :
         }
     }
 
-    // ======================== Chapters ========================
     override fun chapterListRequest(manga: SManga): Request = mangaDetailsRequest(manga)
 
     override fun chapterListParse(response: Response): List<SChapter> {
@@ -370,28 +365,24 @@ class NovelBuddy :
         val chapterApiUrl = "$apiUrl/titles/$novelId/chapters"
         val apiResponse = client.newCall(GET(chapterApiUrl, headers)).execute()
 
-        return try {
-            val apiData = json.parseToJsonElement(apiResponse.body.string()).jsonObject
-            val chapters = mutableListOf<SChapter>()
+        val apiData = json.parseToJsonElement(apiResponse.body.string()).jsonObject
+        val chapters = mutableListOf<SChapter>()
 
-            apiData["data"]?.jsonObject?.get("chapters")?.jsonArray?.forEach { item ->
-                val obj = item.jsonObject
-                val name = obj["name"]?.jsonPrimitive?.content ?: return@forEach
-                val url = obj["url"]?.jsonPrimitive?.content ?: return@forEach
+        apiData["data"]?.jsonObject?.get("chapters")?.jsonArray?.forEach { item ->
+            val obj = item.jsonObject
+            val name = obj["name"]?.jsonPrimitive?.content ?: return@forEach
+            val url = obj["url"]?.jsonPrimitive?.content ?: return@forEach
 
-                chapters.add(
-                    SChapter.create().apply {
-                        this.name = name
-                        this.url = URLDecoder.decode(url, "UTF-8").removePrefix("/").removePrefix(baseUrl)
-                    },
-                )
-            }
-
-            // API returns chapters in correct order
-            chapters
-        } catch (e: Exception) {
-            emptyList()
+            chapters.add(
+                SChapter.create().apply {
+                    this.name = name
+                    this.url = URLDecoder.decode(url, "UTF-8").removePrefix("/").removePrefix(baseUrl)
+                },
+            )
         }
+
+        // API returns chapters in correct order
+        return chapters
     }
 
     private fun extractNovelId(script: String): String? = try {
@@ -402,7 +393,6 @@ class NovelBuddy :
         null
     }
 
-    // ======================== Pages ========================
     override fun pageListRequest(chapter: SChapter): Request = GET(buildUrl(chapter.url), headers)
 
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
