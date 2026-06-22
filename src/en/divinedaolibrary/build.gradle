@@ -1,0 +1,11 @@
+ext {
+    extName = 'Divine Dao Library'
+    extClass = '.DivineDaoLibrary'
+    themePkg = 'fictioneer'
+    baseUrl = 'https://www.divinedaolibrary.com'
+    overrideVersionCode = 0
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"
