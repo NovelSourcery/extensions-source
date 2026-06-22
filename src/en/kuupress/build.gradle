@@ -1,7 +1,7 @@
 ext {
     extName = 'KuuPress'
     extClass = '.KuuPress'
-    extVersionCode = 5
+    extVersionCode = 6
     isNsfw = false
     isNovel = true
 }

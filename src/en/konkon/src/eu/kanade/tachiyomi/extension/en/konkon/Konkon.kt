@@ -17,6 +17,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.utils.getPreferencesLazy
+import keiyoushi.utils.stripChapterNumberPrefix
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -249,16 +250,12 @@ class Konkon :
 
     override fun chapterListParse(response: Response): List<SChapter> {
         val body = response.body.string()
-        return try {
-            val root = json.parseToJsonElement(body).jsonObject
-            val data = root["data"]?.jsonObject ?: JsonObject(emptyMap())
-            cacheBookmarkState(data.str("slug").orEmpty(), root)
-            parseChaptersFromNovelData(data)
-                .sortedByDescending { it.sortKey }
-                .map { it.chapter }
-        } catch (_: Exception) {
-            emptyList()
-        }
+        val root = json.parseToJsonElement(body).jsonObject
+        val data = root["data"]?.jsonObject ?: JsonObject(emptyMap())
+        cacheBookmarkState(data.str("slug").orEmpty(), root)
+        return parseChaptersFromNovelData(data)
+            .sortedByDescending { it.sortKey }
+            .map { it.chapter }
     }
 
     override fun fetchChapterList(manga: SManga): rx.Observable<List<SChapter>> = rx.Observable.fromCallable {
@@ -339,9 +336,17 @@ class Konkon :
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
 
     override suspend fun fetchPageText(page: Page): String {
-        val chapterUrl = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-
-        val response = client.newCall(GET(chapterUrl, headers)).execute()
+        // page.url may be the API stub (.../chapters/<id>) or the site chapter path
+        // (/read/chapter/<id>/<slug>); always resolve to the JSON content endpoint.
+        val contentUrl = if (page.url.contains("/api/public/chapters/")) {
+            page.url
+        } else {
+            val chapterId = page.url.substringBefore('?').trim('/').split('/')
+                .firstOrNull { seg -> seg.isNotEmpty() && seg.all(Char::isDigit) }
+                ?: page.url.substringAfterLast('/')
+            "$apiBase/chapters/$chapterId"
+        }
+        val response = client.newCall(GET(contentUrl, headers)).execute()
         val body = response.body.string()
         val resolvedUrl = response.request.url
 
@@ -378,7 +383,6 @@ class Konkon :
         SearchQueryFilter(),
     )
 
-    // ======================== Tracking ========================
 
     override val supportsChapterTracking = false
 
@@ -463,7 +467,6 @@ class Konkon :
         return java.net.URLDecoder.decode(raw, "UTF-8")
     }
 
-    // ======================== Settings ========================
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         SwitchPreferenceCompat(screen.context).apply {
@@ -571,7 +574,7 @@ class Konkon :
                             .trim('-')
                     }
                     url = "/read/chapter/$chapterId/$chapterSlug"
-                    name = visibleTitle.ifBlank { "Chapter $sortOrder" }
+                    name = visibleTitle.stripChapterNumberPrefix().ifBlank { "Chapter $sortOrder" }
                     chapter_number = chapterNumber
                     date_upload = parseDate(chapter.str("scheduled_for") ?: chapter.str("created_at"))
                 }
