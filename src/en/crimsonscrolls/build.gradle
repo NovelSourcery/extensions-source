@@ -1,0 +1,9 @@
+ext {
+    extName = 'Crimson Scrolls'
+    extClass = '.CrimsonScrolls'
+    extVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"
