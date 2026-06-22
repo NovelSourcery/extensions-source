@@ -1,9 +1,7 @@
 ext {
     extName = 'WordExcerpt'
     extClass = '.WordExcerpt'
-    themePkg = 'madaranovel'
-    baseUrl = 'https://wordexcerpt.com'
-    overrideVersionCode = 1
+    extVersionCode = 2
     isNsfw = false
     isNovel = true
 }
