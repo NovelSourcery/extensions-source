@@ -7,4 +7,4 @@ ext {
     isNovel = true
 }
 
-apply from: "$rootDir/common.gradle"
+apply plugin: "ns.plugins.extension.legacy"

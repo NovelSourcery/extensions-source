@@ -1,6 +1,6 @@
 package keiyoushi.gradle.configurations
 
-import keiyoushi.gradle.extensions.kei
+import keiyoushi.gradle.extensions.ns
 import org.gradle.api.Project
 import org.gradle.kotlin.dsl.configure
 import org.jetbrains.kotlin.gradle.dsl.HasConfigurableKotlinCompilerOptions
@@ -9,7 +9,7 @@ import org.jetbrains.kotlin.gradle.dsl.KotlinCommonCompilerOptions
 import tapmoc.configureJavaCompatibility
 
 fun Project.configureKotlin() {
-    configureJavaCompatibility(kei.versions.java.get().toInt())
+    configureJavaCompatibility(ns.versions.java.get().toInt())
 
     kotlin {
         compilerOptions {

@@ -4,7 +4,7 @@ import com.android.build.api.dsl.CompileOptions
 import com.android.build.api.dsl.DefaultConfig
 import com.android.build.api.dsl.LibraryDefaultConfig
 import keiyoushi.gradle.configurations.configureKotlin
-import keiyoushi.gradle.extensions.kei
+import keiyoushi.gradle.extensions.ns
 import keiyoushi.gradle.extensions.libs
 import keiyoushi.gradle.extensions.spotlessTaskName
 import org.gradle.api.Plugin
@@ -18,12 +18,12 @@ class PluginAndroidBase : Plugin<Project> {
         configureKotlin()
 
         android {
-            compileSdk = kei.versions.android.sdk.compile.get().toInt()
+            compileSdk = ns.versions.android.sdk.compile.get().toInt()
 
             defaultConfig {
-                minSdk = kei.versions.android.sdk.min.get().toInt()
+                minSdk = ns.versions.android.sdk.min.get().toInt()
                 if (this is ApplicationDefaultConfig) {
-                    targetSdk = kei.versions.android.sdk.target.get().toInt()
+                    targetSdk = ns.versions.android.sdk.target.get().toInt()
                 }
 
                 val proguardFile = file("proguard-rules.pro")

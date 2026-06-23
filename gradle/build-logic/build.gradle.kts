@@ -32,7 +32,7 @@ dependencies {
 
     // These allow us to reference the dependency catalog inside our compiled plugins
     compileOnly(files(libs::class.java.superclass.protectionDomain.codeSource.location))
-    compileOnly(files(kei::class.java.superclass.protectionDomain.codeSource.location))
+    compileOnly(files(ns::class.java.superclass.protectionDomain.codeSource.location))
 }
 
 samWithReceiver {
@@ -46,7 +46,7 @@ gradlePlugin {
             implementationClass = "PluginAndroidBase"
         }
         register("extension") {
-            id = kei.plugins.extension.legacy.get().pluginId
+            id = ns.plugins.extension.legacy.get().pluginId
             implementationClass = "PluginExtensionLegacy"
         }
         register("library") {

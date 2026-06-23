@@ -12,8 +12,11 @@ pluginManagement {
 
 dependencyResolutionManagement {
     versionCatalogs {
+        create("ns") {
+            from(files("gradle/ns.versions.toml"))
+        }
         create("kei") {
-            from(files("gradle/kei.versions.toml"))
+            from(files("gradle/ns.versions.toml"))
         }
     }
     @Suppress("UnstableApiUsage")
