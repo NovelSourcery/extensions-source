@@ -100,8 +100,7 @@ class PluginExtensionLegacy : Plugin<Project> {
                     } else {
                         signingConfigs.getByName("debug")
                     }
-                    isMinifyEnabled = true
-                    proguardFiles(rootProject.file("common/proguard-rules.pro"))
+                    isMinifyEnabled = false
                     @Suppress("UnstableApiUsage")
                     vcsInfo.include = false
                 }
