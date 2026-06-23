@@ -1,6 +1,8 @@
 package keiyoushi.lib.novelupdatesparsers.parsers
 
 import keiyoushi.lib.novelupdatesparsers.SiteParser
+import keiyoushi.lib.novelupdatesparsers.combined
+import net.dankito.readability4j.Readability4J
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
@@ -33,6 +35,11 @@ class GenericFallbackParser : SiteParser {
             .firstOrNull() ?: ""
 
         if (content.isEmpty()) {
+            val article = Readability4J(url.toString(), doc.outerHtml()).parse()
+            val r4jContent = article.content
+            if (!r4jContent.isNullOrEmpty()) {
+                return combined(article.title ?: title, r4jContent)
+            }
             doc.select("nav, header, footer, .hidden").remove()
             return doc.select("body").html()
         }
