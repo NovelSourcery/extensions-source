@@ -1,21 +1,19 @@
+import gzip
 import html
 import sys
 import json
 from pathlib import Path
+import re
 import shutil
+
+from google.protobuf import json_format
+
+import index_pb2
 
 REMOTE_REPO: Path = Path.cwd()
 LOCAL_REPO: Path = REMOTE_REPO.parent.joinpath("main/repo")
 
-# defensively parse delete list argument
-try:
-    to_delete: list[str] = json.loads(sys.argv[1])
-except Exception:
-    to_delete = []
-
-print(f"Remote repo: {REMOTE_REPO}")
-print(f"Local repo (main/repo): {LOCAL_REPO}")
-print(f"Modules to delete: {to_delete}")
+to_delete: list[str] = json.loads(sys.argv[1])
 
 for module in to_delete:
     apk_name = f"tsundoku-{module}-v*.*.*.apk"
@@ -27,77 +25,82 @@ for module in to_delete:
         print(file.name)
         file.unlink(missing_ok=True)
 
-# Copy APKs/icons from local generated repo into the remote repo, if present
-local_apk_dir = LOCAL_REPO.joinpath("apk")
-local_icon_dir = LOCAL_REPO.joinpath("icon")
-remote_apk_dir = REMOTE_REPO.joinpath("apk")
-remote_icon_dir = REMOTE_REPO.joinpath("icon")
+shutil.copytree(src=LOCAL_REPO.joinpath("apk"), dst=REMOTE_REPO.joinpath("apk"), dirs_exist_ok = True)
+shutil.copytree(src=LOCAL_REPO.joinpath("icon"), dst=REMOTE_REPO.joinpath("icon"), dirs_exist_ok = True)
 
-if local_apk_dir.exists():
-    print(f"Copying APKs from {local_apk_dir} to {remote_apk_dir}")
-    remote_apk_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(src=local_apk_dir, dst=remote_apk_dir, dirs_exist_ok=True)
-else:
-    print(f"Warning: local apk dir {local_apk_dir} does not exist; skipping APK copy")
+REMOTE_REPO.joinpath("index.json").unlink(missing_ok=True)
 
-if local_icon_dir.exists():
-    print(f"Copying icons from {local_icon_dir} to {remote_icon_dir}")
-    remote_icon_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(src=local_icon_dir, dst=remote_icon_dir, dirs_exist_ok=True)
-else:
-    print(f"Warning: local icon dir {local_icon_dir} does not exist; skipping icon copy")
+with REMOTE_REPO.joinpath("index.min.json").open() as remote_index_file:
+    remote_index = json.load(remote_index_file)
 
-# Load remote index.json if present, else default to empty list
-remote_index_path = REMOTE_REPO.joinpath("index.json")
-if remote_index_path.exists():
-    with remote_index_path.open() as remote_index_file:
-        try:
-            remote_index = json.load(remote_index_file)
-        except Exception:
-            print(f"Warning: failed to parse {remote_index_path}; using empty remote index")
-            remote_index = []
-else:
-    print(f"Warning: {remote_index_path} not found; starting with empty remote index")
-    remote_index = []
+with LOCAL_REPO.joinpath("index.min.json").open() as local_index_file:
+    local_index = json.load(local_index_file)
 
-# Load local index.min.json if present, else default to empty list
-local_index_path = LOCAL_REPO.joinpath("index.min.json")
-if local_index_path.exists():
-    with local_index_path.open() as local_index_file:
-        try:
-            local_index = json.load(local_index_file)
-        except Exception:
-            print(f"Warning: failed to parse {local_index_path}; using empty local index")
-            local_index = []
-else:
-    print(f"Warning: {local_index_path} not found; using empty local index")
-    local_index = []
-
-# Merge indices: remove deleted modules from remote_index then extend with local_index
-index = [
+legacy_index = [
     item for item in remote_index
-    if not any([item.get("pkg", "").endswith(f".{module}") for module in to_delete])
+    if not any([item["pkg"].endswith(f".{module}") for module in to_delete])
 ]
-index.extend(local_index)
-index.sort(key=lambda x: x.get("pkg", ""))
+legacy_index.extend(local_index)
+legacy_index.sort(key=lambda x: x["pkg"])
 
-# Write merged index.json
+def extract_extension_lib(version: str) -> str:
+    if match := re.search(r'(\d+)\.(\d+)', version):
+        return f"{match.group(1)}.{match.group(2)}"
+
+    raise ValueError(f"Version {version} doesn't contain MAJOR.MINOR")
+
+index = index_pb2.Index(
+    name = "NovelSourcery",
+    badgeLabel = "NS",
+    signingKey = "4281820d4866bb71bed3dec5224aad9cf4633d44a113682cfb0c3b1cfd71702d",
+    contact=index_pb2.Contact(
+        website="https://novelsourcery.github.io",
+        discord="https://discord.gg/JG2K2jTjd6"
+    ),
+    extensionList=index_pb2.ExtensionList(
+        extensions=[
+            index_pb2.Extension(
+                name=extension["name"].replace("Tachiyomi: ", ""),
+                packageName=extension["pkg"],
+                resources=index_pb2.Resources(
+                    apkUrl=f"https://raw.githubusercontent.com/novelsourcery/extensions/refs/heads/repo/apk/{extension["apk"]}",
+                    iconUrl=f"https://raw.githubusercontent.com/novelsourcery/extensions/refs/heads/repo/icon/{extension["pkg"]}.png",
+                ),
+                extensionLib=extract_extension_lib(extension["version"]),
+                versionCode=extension["code"],
+                versionName=extension["version"],
+                contentWarning=index_pb2.CONTENT_WARNING_NSFW if extension["nsfw"] == 1 else index_pb2.CONTENT_WARNING_SAFE,
+                sources=[
+                    index_pb2.Source(
+                        id=int(source["id"]),
+                        name=source["name"],
+                        language=source["lang"],
+                        homeUrl=source["baseUrl"],
+                    )
+                    for source in extension["sources"]
+                ]
+            )
+            for extension in legacy_index
+        ]
+    )
+)
+
 with REMOTE_REPO.joinpath("index.json").open("w", encoding="utf-8") as index_file:
-    json.dump(index, index_file, ensure_ascii=False, indent=2)
+    index_file.write(json_format.MessageToJson(index, always_print_fields_with_no_presence=False, preserving_proto_field_name=True))
 
-# Remove versionId from sources and write index.min.json
-for item in index:
-    for source in item.get("sources", []):
-        source.pop("versionId", None)
+with REMOTE_REPO.joinpath("index.pb").open("wb") as index_pb_file:
+    index_pb_file.write(index.SerializeToString())
+
+with REMOTE_REPO.joinpath("index.pb.gz").open("wb") as index_pb_file:
+    index_pb_file.write(gzip.compress(index.SerializeToString()))
 
 with REMOTE_REPO.joinpath("index.min.json").open("w", encoding="utf-8") as index_min_file:
-    json.dump(index, index_min_file, ensure_ascii=False, separators=(",", ":"))
+    json.dump(legacy_index, index_min_file, ensure_ascii=False, separators=(",", ":"))
 
-# Generate index.html listing
 with REMOTE_REPO.joinpath("index.html").open("w", encoding="utf-8") as index_html_file:
     index_html_file.write('<!DOCTYPE html>\n<html>\n<head>\n<meta charset="UTF-8">\n<title>apks</title>\n</head>\n<body>\n<pre>\n')
-    for entry in index:
-        apk_escaped = 'apk/' + html.escape(entry.get("apk", ""))
-        name_escaped = html.escape(entry.get("name", ""))
+    for entry in legacy_index:
+        apk_escaped = 'apk/' + html.escape(entry["apk"])
+        name_escaped = html.escape(entry["name"])
         index_html_file.write(f'<a href="{apk_escaped}">{name_escaped}</a>\n')
-    index_html_file.write('</pre>\n</body>\n</html>')
+    index_html_file.write('</pre>\n</body>\n</html>\n')
