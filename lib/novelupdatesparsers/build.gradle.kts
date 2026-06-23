@@ -1,5 +1,9 @@
 plugins {
-    id("lib-android")
+    alias(kei.plugins.library)
+}
+
+android {
+    namespace = "novelsourcery.lib.novelupdatesparsers"
 }
 
 dependencies {
