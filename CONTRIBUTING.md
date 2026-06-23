@@ -924,7 +924,7 @@ To do this, you need two files:
 
 The `AndroidManifest.xml` file will contain an `android:name` attribute that refers to the path of your `UrlActivity.kt` file. For example, if the extension is Riztranslation, the `android:name` will be `.id.riztranslation.UrlActivity`.
 
-Next, you have the `<data android:scheme="https" android:host="host" android:pathPattern="/..*" />` element; you can have it multiple times, which allows you to specify the URL that can be opened in Mihon. You can read more about this in Android's [`<data>` documentation](https://developer.android.com/guide/topics/manifest/data-element).
+Next, you have the `<data android:scheme="https" android:host="host" android:pathPattern="/..*" />` element; you can have it multiple times, which allows you to specify the URL that can be opened in Tsundoku. You can read more about this in Android's [`<data>` documentation](https://developer.android.com/guide/topics/manifest/data-element).
 
 Now, as for `UrlActivity`, you can just use the example below.
 
@@ -1069,7 +1069,7 @@ Make sure that your new theme's `build.gradle.kts` file follows this structure:
 
 ```kotlin
 plugins {
-    alias(kei.plugins.multisrc)
+    alias(ns.plugins.multisrc)
 }
 
 baseVersionCode = 1
@@ -1227,7 +1227,7 @@ Since most of the manga sources are going to use HTTPS, we need to disable SSL v
 to use the web debugger. For that, add this code to inside your source class:
 
 ```kotlin
-package eu.kanade.tachiyomi.extension.en.mysource
+package eu.kanade.tachiyomi.novelextension.en.mysource
 
 import android.annotation.SuppressLint
 import eu.kanade.tachiyomi.source.online.HttpSource
