@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Moderate issues
-        uses: keiyoushi/issue-moderator-action@9597245ba176cf43ed82edccc40a7479d0d8d050
+        uses: keiyoushi/issue-moderator-action@47efd0d5433617dd41614d0a00257fb5d3d59fbf
         with:
           repo-token: ${{ github.token }}
           member-token: ${{ secrets.MEMBER_TOKEN }}
@@ -42,6 +42,9 @@ jobs:
             ["Source request", "Domain changed"]
           existing-check-repo-url: https://raw.githubusercontent.com/novelsourcery/extensions/repo/index.min.json
 
+          url-search-sections: |
+            ["Source link", "Source new URL"]
+
           auto-close-rules: |
             [
               {
@@ -53,17 +56,17 @@ jobs:
               },
               {
                 "type": "both",
-                "regex": "(remanga\\.org|nhentai(\\.net)?|e([x-])?hentai(\\.org)?|hitomi\\.la|pururin(\\.me)?|hentai2read(\\.com)?|hentai20\\.io)",
+                "regex": "\\b(remanga\\.org|nhentai(\\.net)?|e([x-])?hentai(\\.org)?|hitomi\\.la|pururin(\\.me)?|hentai2read(\\.com)?|hentai20\\.io)\\b",
                 "ignoreCase": true,
                 "labels": ["invalid"],
                 "message": "{match} will not be added back as it has been removed [due to legal reasons](https://github.com/github/dmca)."
               },
               {
                 "type": "both",
-                "regex": "(kumanga\\.com)",
+                "regex": "\\b(kumanga\\.com|sakuramangas\\.org)\\b",
                 "ignoreCase": true,
                 "labels": ["invalid"],
-                "message": "{match} will not be added back as it is too difficult to maintain."
+                "message": "{match} will not be added back as it is too difficult to maintain.\n"
               },
             ]
           auto-close-ignore-label: do-not-autoclose
