@@ -5,8 +5,8 @@ import keiyoushi.gradle.extensions.alias
 import keiyoushi.gradle.extensions.baseVersionCode
 import keiyoushi.gradle.extensions.compileOnly
 import keiyoushi.gradle.extensions.implementation
-import keiyoushi.gradle.extensions.ns
 import keiyoushi.gradle.extensions.libs
+import keiyoushi.gradle.extensions.ns
 import keiyoushi.gradle.extensions.plugins
 import keiyoushi.gradle.tasks.GenerateKeepRulesTask
 import keiyoushi.gradle.utils.assertWithoutFlag
@@ -124,7 +124,7 @@ class PluginExtensionLegacy : Plugin<Project> {
             onVariants { variant ->
                 val variantName = variant.name.replaceFirstChar { it.uppercase() }
 
-                    @Suppress("UnstableApiUsage")
+                @Suppress("UnstableApiUsage")
                 val keepRules = variant.sources.keepRules
                 if (keepRules != null) {
                     val task = tasks.register<GenerateKeepRulesTask>("generate${variantName}KeepRules") {
@@ -134,7 +134,7 @@ class PluginExtensionLegacy : Plugin<Project> {
                     keepRules.addGeneratedSourceDirectory(task) { it.outputDir }
                 }
 
-                    variant.sources.manifests.addStaticManifestFile("AndroidManifest.xml")
+                variant.sources.manifests.addStaticManifestFile("AndroidManifest.xml")
             }
         }
 
