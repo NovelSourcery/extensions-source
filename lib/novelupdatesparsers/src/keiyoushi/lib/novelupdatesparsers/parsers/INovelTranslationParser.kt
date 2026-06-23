@@ -1,0 +1,17 @@
+package keiyoushi.lib.novelupdatesparsers.parsers
+
+import keiyoushi.lib.novelupdatesparsers.SiteParser
+import keiyoushi.lib.novelupdatesparsers.domainKey
+import okhttp3.Headers
+import okhttp3.HttpUrl
+import okhttp3.OkHttpClient
+import org.jsoup.nodes.Document
+
+class INovelTranslationParser : SiteParser {
+    override fun canHandle(doc: Document, url: HttpUrl) = url.domainKey() == "inoveltranslation"
+
+    override fun parse(doc: Document, url: HttpUrl, client: OkHttpClient, headers: Headers): String {
+        listOf("header", "section").forEach { doc.select(it).remove() }
+        return doc.select(".styles_content__JHK8G").html()
+    }
+}
