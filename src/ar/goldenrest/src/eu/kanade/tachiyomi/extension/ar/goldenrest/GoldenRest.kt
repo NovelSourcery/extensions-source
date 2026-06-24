@@ -47,7 +47,7 @@ class GoldenRest :
     override fun popularMangaParse(response: Response): MangasPage {
         val data = json.decodeFromString<ReleasesResponse>(response.body.string())
         val mangas = data.releases
-            .filter { it.manga != null }
+            .filter { it.manga?.is_novel == true }
             .map { release ->
                 release.manga!!.toSManga()
             }
@@ -141,10 +141,22 @@ class GoldenRest :
 
     override suspend fun fetchPageText(page: Page): String {
         val releaseId = page.url.substringAfterLast("/").substringBefore("?")
-        val mangaId = page.url.substringAfter("/mangas/").substringBefore("/")
 
         val releaseResponse = client.newCall(GET("$baseUrl/api/releases/$releaseId", apiHeaders)).execute()
         val releaseBody = releaseResponse.body.string()
+
+        val releaseData = try {
+            json.decodeFromString<ReleaseDto>(releaseBody)
+        } catch (_: Exception) {
+            null
+        }
+
+        val novelContent = releaseData?.content
+        if (!novelContent.isNullOrBlank()) {
+            return novelContent.lines()
+                .filter { it.isNotBlank() }
+                .joinToString("\n") { "<p>${it.trim()}</p>" }
+        }
 
         val downloadResponse = client.newCall(
             POST(
@@ -164,12 +176,6 @@ class GoldenRest :
 
         if (imageUrl != null) {
             return "<img src=\"$imageUrl\" />"
-        }
-
-        val releaseData = try {
-            json.decodeFromString<ReleaseDto>(releaseBody)
-        } catch (_: Exception) {
-            null
         }
 
         return buildString {
@@ -198,11 +204,28 @@ class GoldenRest :
             arrayOf("الكل", "مانها", "مانهوا", "مانغا", "ويبتون"),
         )
 
+    private val mangaClient by lazy {
+        network.cloudflareClient.newBuilder()
+            .addInterceptor { chain ->
+                val request = chain.request().newBuilder()
+                    .header("Accept", "image/webp,image/apng,image/*,*/*;q=0.8")
+                    .build()
+                chain.proceed(request)
+            }
+            .build()
+    }
+
+    private val coverUrl = "https://dilar.tube"
+
     private fun MangaDto.toSManga(): SManga = SManga.create().apply {
         url = "/mangas/$id"
         title = arabic_title?.takeIf { it.isNotBlank() } ?: this@toSManga.title
-        thumbnail_url = "https://golden.rest/uploads/$cover"
-        description = summary
+        thumbnail_url = if (cover.isNotBlank()) {
+            "$coverUrl/manga/cover/$id/medium_$cover"
+        } else {
+            ""
+        }
+        description = summary ?: ""
         author = this@toSManga.authors.firstOrNull()?.name
         artist = this@toSManga.artists.firstOrNull()?.name
         genre = this@toSManga.categories.joinToString(", ") { it.name }

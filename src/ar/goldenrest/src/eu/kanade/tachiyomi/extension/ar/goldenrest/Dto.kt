@@ -18,6 +18,7 @@ data class ReleaseDto(
     val team_name: String = "",
     val chapterization_id: Long = 0,
     val created_at: String = "",
+    val content: String? = null,
     val manga: MangaDto? = null,
 )
 
@@ -35,7 +36,7 @@ data class MangaSearchResponse(
 data class MangaDto(
     val id: Long = 0,
     val title: String = "",
-    val summary: String = "",
+    val summary: String? = null,
     val cover: String = "",
     val is_novel: Boolean = false,
     @SerialName("story_status") val storyStatus: Int = 0,

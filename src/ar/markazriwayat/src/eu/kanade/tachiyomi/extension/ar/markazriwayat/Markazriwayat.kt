@@ -56,6 +56,7 @@ class Markazriwayat :
                     "stop" -> SManga.ON_HIATUS
                     else -> SManga.UNKNOWN
                 }
+                author = item.id.toString()
             }
         }
         return MangasPage(novels, hasNextPage = body.page < body.totalPages)
@@ -109,6 +110,11 @@ class Markazriwayat :
     }
 
     override suspend fun getChapterList(manga: SManga): List<SChapter> {
+        val storedId = manga.author?.takeIf { it.isNotBlank() && it.all { c -> c.isDigit() } }
+        if (storedId != null) {
+            val apiChapters = fetchChaptersViaApi(storedId)
+            if (apiChapters.isNotEmpty()) return apiChapters
+        }
         val doc = client.newCall(GET(baseUrl + manga.url, headers)).execute().asJsoup()
         checkCaptcha(doc)
         val mangaId = doc.selectFirst("#manga-chapters-list")?.attr("data-manga-id")?.takeIf { it.isNotBlank() }
@@ -218,6 +224,7 @@ class Markazriwayat :
 
     @Serializable
     private data class LibraryItem(
+        val id: Int = 0,
         val title: String = "",
         val link: String = "",
         val cover: String = "",

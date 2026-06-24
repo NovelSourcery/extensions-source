@@ -14,6 +14,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.Request
 import okhttp3.Response
+import org.jsoup.nodes.Document
 
 class SeaNovel :
     HttpSource(),
@@ -26,9 +27,27 @@ class SeaNovel :
     override val isNovelSource = true
     override val client = network.client
 
+    private val junkPattern = Regex(
+        "^الفصل\\s+[\\d٠-٩]+\\s*[:：].+" +
+            "|^http" +
+            "|.*seanovel\\..*" +
+            "|.*بحر الروايات.*" +
+            "|اكتشف أفضل الروايات.*" +
+            "|أنت تقرأ الفصل.*" +
+            "|انتهى الفصل.*" +
+            "|تابع القراءة على.*" +
+            "|^الفصل\\s+(التالي|السابق).*" +
+            "|^تابع\\s+القراءة.*" +
+            "|^اشترك\\s+في.*" +
+            "|^<\\s*" +
+            "|^\\[.*\\]$",
+        RegexOption.IGNORE_CASE,
+    )
+
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
+        coerceInputValues = true
     }
 
     override fun popularMangaRequest(page: Int): Request {
@@ -52,12 +71,29 @@ class SeaNovel :
     override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val limit = 50
-        val offset = (page - 1) * limit
-        return GET("$baseUrl/api/novels?q=$query&limit=$limit&offset=$offset", headers)
+        val encodedQuery = java.net.URLEncoder.encode(query.trim(), "UTF-8")
+        return GET("$baseUrl/api/search-index?q=$encodedQuery&__page=$page", headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
+    override fun searchMangaParse(response: Response): MangasPage {
+        val url = response.request.url
+        val query = url.queryParameter("q") ?: ""
+        val page = url.queryParameter("__page")?.toIntOrNull() ?: 1
+        val body = response.body.string()
+        val allNovels = json.decodeFromString<List<NovelDto>>(body)
+        val filtered = if (query.isNotBlank()) {
+            allNovels.filter { novel ->
+                novel.titleAr.contains(query, ignoreCase = true) ||
+                    novel.titleOriginal.contains(query, ignoreCase = true)
+            }
+        } else {
+            allNovels
+        }
+        val limit = 50
+        val offset = (page - 1) * limit
+        val paginated = filtered.drop(offset).take(limit)
+        return MangasPage(paginated.map { it.toSManga() }, offset + limit < filtered.size)
+    }
 
     override fun mangaDetailsRequest(manga: SManga): Request {
         val slug = manga.url.substringAfterLast("/")
@@ -72,7 +108,7 @@ class SeaNovel :
 
     override fun chapterListRequest(manga: SManga): Request {
         val slug = manga.url.substringAfterLast("/")
-        return GET("$baseUrl/api/novel/$slug/chapters?page=1&limit=10000&sort=asc", headers)
+        return GET("$baseUrl/api/novel/$slug/chapters?offset=0&limit=100&sort=asc", headers)
     }
 
     override fun chapterListParse(response: Response): List<SChapter> {
@@ -80,6 +116,22 @@ class SeaNovel :
         val chapterResponse = json.decodeFromString<ChapterResponse>(body)
         val slug = response.request.url.toString().substringAfter("/novel/").substringBefore("/chapters")
         return chapterResponse.chapters.map { it.toSChapter(slug) }
+    }
+
+    override suspend fun getChapterList(manga: SManga): List<SChapter> {
+        val slug = manga.url.substringAfterLast("/")
+        val allChapters = mutableListOf<SChapter>()
+        var offset = 0
+        val limit = 100
+        do {
+            val request = GET("$baseUrl/api/novel/$slug/chapters?offset=$offset&limit=$limit&sort=asc", headers)
+            val response = client.newCall(request).execute()
+            val chapterResponse = json.decodeFromString<ChapterResponse>(response.body.string())
+            if (chapterResponse.chapters.isEmpty()) break
+            allChapters.addAll(chapterResponse.chapters.map { it.toSChapter(slug) })
+            offset += limit
+        } while (chapterResponse.hasMore)
+        return allChapters
     }
 
     override fun pageListParse(response: Response): List<Page> {
@@ -93,16 +145,71 @@ class SeaNovel :
         val doc = response.asJsoup()
         val html = doc.html()
 
-        val paragraphsMatch = Regex("\"initialParagraphs\":\\[((?:[^\\[\\]]|\\[(?:[^\\[\\]]|\\[[^\\[\\]]*\\])*\\])*)\\]").find(html)
-        if (paragraphsMatch != null) {
-            val paragraphsStr = paragraphsMatch.groupValues[1]
-            val paragraphs = json.decodeFromString<List<String>>("[$paragraphsStr]")
-            return paragraphs.joinToString("<br><br>") { "<p>$it</p>" }
+        val paragraphs = extractParagraphsFromRsc(html)
+        if (paragraphs != null && paragraphs.isNotEmpty()) {
+            val cleaned = paragraphs.filter { text ->
+                text.isNotBlank() && !junkPattern.containsMatchIn(text)
+            }
+            if (cleaned.isNotEmpty()) {
+                return cleaned.joinToString("<br><br>") { "<p>$it</p>" }
+            }
+        }
+
+        val paragraphsFromHtml = extractParagraphsFromHtml(doc)
+        if (paragraphsFromHtml.isNotEmpty()) {
+            return paragraphsFromHtml.joinToString("<br><br>") { "<p>$it</p>" }
         }
 
         val content = doc.selectFirst(".chapter-content, .content, .entry-content, article") ?: return ""
-        content.select("script, style, nav, footer, .ads, .navigation").remove()
+        content.select(
+            "script, style, nav, footer, header, .ads, .navigation, .chapter-nav, .prev-next, .share, .comments, .breadcrumb, .novel-info, .sidebar, .footer, .header, [role=navigation], [role=banner], [role=contentinfo]",
+        ).remove()
+        content.select("a[href*=\"/chapters/\"], a[href*=\"/novels/\"]").remove()
         return content.html().trim()
+    }
+
+    private fun extractParagraphsFromRsc(html: String): List<String>? {
+        val marker = "\"initialParagraphs\":"
+        val markerIdx = html.indexOf(marker) ?: return null
+        var idx = markerIdx + marker.length
+        while (idx < html.length && html[idx] == ' ') idx++
+        if (idx >= html.length || html[idx] != '[') return null
+        val start = idx
+        var depth = 0
+        var inStr = false
+        var i = idx
+        while (i < html.length) {
+            val c = html[i]
+            if (inStr) {
+                if (c == '\\' && i + 1 < html.length) {
+                    i += 2
+                    continue
+                }
+                if (c == '"') inStr = false
+            } else {
+                if (c == '"') {
+                    inStr = true
+                } else if (c == '[') {
+                    depth++
+                } else if (c == ']') {
+                    depth--
+                    if (depth == 0) break
+                }
+            }
+            i++
+        }
+        if (depth != 0) return null
+        val arrayText = html.substring(start, i + 1)
+            .replace("\\\"", "\"")
+        return try {
+            json.decodeFromString<List<String>>(arrayText)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun extractParagraphsFromHtml(doc: Document): List<String> = doc.select("p").map { it.text() }.filter { text ->
+        text.isNotBlank() && text.length > 3 && !junkPattern.containsMatchIn(text)
     }
 
     override fun imageUrlParse(response: Response): String = ""
@@ -124,8 +231,10 @@ class SeaNovel :
     }
 
     private fun ChapterDto.toSChapter(novelSlug: String = ""): SChapter = SChapter.create().apply {
-        url = "/novels/$novelSlug/chapters/$id"
+        val chapterId = id.toInt()
+        url = "/novels/$novelSlug/chapters/$chapterId"
         name = title
+        chapter_number = id.toFloat()
         date_upload = runCatching {
             java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US).parse(date)?.time
         }.getOrNull() ?: 0L
