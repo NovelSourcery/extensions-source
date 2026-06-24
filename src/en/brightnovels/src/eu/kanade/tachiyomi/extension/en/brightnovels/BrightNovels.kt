@@ -241,7 +241,7 @@ class BrightNovels :
         if (seriesSlug.isBlank()) {
             return extractChapterObjects(page, series)
                 .mapNotNull { chapterElement -> chapterToSChapter(chapterElement, seriesSlug, showPremium) }
-                .sortedByDescending { it.chapter_number }
+                .sortedBy { it.chapter_number }
         }
 
         val chapterElements = linkedMapOf<String, JsonElement>()
@@ -265,7 +265,7 @@ class BrightNovels :
 
         return chapterElements.values
             .mapNotNull { chapterToSChapter(it, seriesSlug, showPremium) }
-            .sortedByDescending { it.chapter_number }
+            .sortedBy { it.chapter_number }
     }
 
     override fun pageListRequest(chapter: SChapter): Request = inertiaRequest(absoluteUrl(chapter.url))
@@ -694,9 +694,14 @@ class BrightNovels :
         val chapterNumber = chapter["number"].asPrimitive()?.contentOrNull?.toFloatOrNull()
             ?: chapterSlug.toFloatOrNull()
             ?: -1f
-        val chapterName = chapter.string("name")
+        val rawName = chapter.string("name")
             ?: chapter.string("title")
             ?: "Chapter ${chapter.string("number") ?: ""}".trim()
+
+        val chapterName = rawName
+            .replace(Regex("""^\s*(?:chapter|chap|ch\.?|episode|ep\.?)?\s*\d+(?:\.\d+)?\s*[:\-–.)]*\s*""", RegexOption.IGNORE_CASE), "")
+            .trim()
+            .ifBlank { rawName }
 
         return SChapter.create().apply {
             name = chapterName
