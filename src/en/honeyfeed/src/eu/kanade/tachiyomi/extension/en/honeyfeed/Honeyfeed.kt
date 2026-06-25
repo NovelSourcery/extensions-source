@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.formattedText
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -97,7 +98,7 @@ class Honeyfeed :
 
         return SManga.create().apply {
             title = doc.selectFirst("div.mt8")?.text() ?: ""
-            description = doc.selectFirst(".wrap-novel-body")?.text()
+            description = doc.selectFirst(".wrap-novel-body")?.formattedText()
             thumbnail_url = doc.selectFirst(".wrap-img-novel-mask img")?.attr("src") ?: logoUrl
             status = when (doc.selectFirst("span.pr8")?.text()) {
                 "Ongoing" -> SManga.ONGOING

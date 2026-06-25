@@ -15,6 +15,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.formattedText
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -432,7 +433,7 @@ class LnCrawler :
         title = novel.title
         thumbnail_url = resolveCover(novel.preferedSource?.coverMinUrl ?: novel.preferedSource?.coverUrl)
         author = novel.preferedSource?.authors?.firstOrNull()
-        description = novel.preferedSource?.synopsis?.let { Jsoup.parse(it).text() }
+        description = novel.preferedSource?.synopsis?.let { Jsoup.parse(it).formattedText() }
         genre = novel.preferedSource?.tags?.take(5)?.joinToString(", ") ?: ""
     }
 

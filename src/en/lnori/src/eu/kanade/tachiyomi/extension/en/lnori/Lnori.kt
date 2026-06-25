@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.formattedText
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -499,9 +500,9 @@ class Lnori :
             description = document.selectFirst(
                 "p.description, .series-description, .synopsis, [itemprop='description'], " +
                     ".desc, .summary, [class*=description], [class*=synopsis]",
-            )?.text()?.trim() ?: run {
+            )?.formattedText() ?: run {
                 // Fallback: find paragraph with >80 chars that's likely the description
-                document.select("p").firstOrNull { it.text().length > 80 }?.text()?.trim()
+                document.select("p").firstOrNull { it.text().length > 80 }?.formattedText()
             }
 
             // Genres/Tags

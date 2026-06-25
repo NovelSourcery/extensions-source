@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.formattedText
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -204,7 +205,7 @@ class AsianNovel :
 
             author = document.selectFirst(".story__identity-meta .author")?.text()
 
-            description = document.selectFirst(".story__summary p")?.text()
+            description = document.selectFirst(".story__summary")?.formattedText()
 
             genre = document.select(".story__taxonomies .tag-pill").map { it.text() }.joinToString(", ")
 

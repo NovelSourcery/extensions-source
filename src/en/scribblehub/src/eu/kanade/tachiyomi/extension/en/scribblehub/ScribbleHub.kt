@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.formattedText
 import okhttp3.FormBody
 import okhttp3.Request
 import okhttp3.Response
@@ -142,7 +143,7 @@ class ScribbleHub :
                 else -> SManga.UNKNOWN
             }
 
-            description = doc.select(".wi_fic_desc").text().trim()
+            description = doc.selectFirst(".wi_fic_desc")?.formattedText().orEmpty()
         }
     }
 

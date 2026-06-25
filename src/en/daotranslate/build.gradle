@@ -3,7 +3,7 @@ ext {
     extClass = '.DaoTranslate'
     themePkg = 'lightnovelwpnovel'
     baseUrl = 'https://daotranslate.com'
-    overrideVersionCode = 1
+    overrideVersionCode = 2
     isNsfw = false
     isNovel = true
 }

@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.utils.formattedText
 import okhttp3.FormBody
 import okhttp3.Request
 import okhttp3.Response
@@ -106,7 +107,7 @@ open class LightNovelWorld(
             title = doc.selectFirst("h1.novel-title")?.text()?.trim() ?: "Untitled"
             thumbnail_url = doc.selectFirst("figure.cover > img")?.attr("data-src")
             author = doc.selectFirst(".author > a > span")?.text()
-            description = doc.selectFirst(".summary > .content")?.text()?.trim()
+            description = doc.selectFirst(".summary > .content")?.formattedText()
             genre = doc.select(".categories ul li").joinToString { it.text().trim() }
             status = when (doc.selectFirst(".header-stats span:last-child strong")?.text()?.trim()?.lowercase()) {
                 "ongoing" -> SManga.ONGOING

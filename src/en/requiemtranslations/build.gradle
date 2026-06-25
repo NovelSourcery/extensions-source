@@ -1,7 +1,7 @@
 ext {
     extName = 'Requiem Translations'
     extClass = '.RequiemTranslations'
-    overrideVersionCode = 1
+    overrideVersionCode = 2
     themePkg = 'lightnovelwpnovel'
     isNovel = true
 }

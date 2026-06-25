@@ -15,6 +15,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.utils.extractNextJs
+import keiyoushi.utils.formattedText
 import keiyoushi.utils.getPreferencesLazy
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -100,7 +101,7 @@ class PenguinSquad :
             url = "/novels/${response.request.url.pathSegments.last()}"
             title = doc.selectFirst("h1")?.text().orEmpty()
             thumbnail_url = doc.selectFirst("img[src*=/covers/]")?.absUrl("src")
-            description = doc.selectFirst("p[class*=line-clamp-3]")?.text()
+            description = doc.selectFirst("p[class*=line-clamp-3]")?.formattedText()
             genre = doc.select("span[data-slot=badge][data-variant=outline]")
                 .eachText()
                 .distinct()

@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.formattedText
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -492,7 +493,7 @@ class MVLEMPYR :
         }
     }
 
-    private fun cleanHtml(html: String): String = Jsoup.parse(html).text()
+    private fun cleanHtml(html: String): String = Jsoup.parse(html).formattedText()
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
     }

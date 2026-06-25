@@ -3,7 +3,7 @@ ext {
     extClass = '.TranslationWeaver'
     themePkg = 'lightnovelwpnovel'
     baseUrl = 'https://transweaver.com'
-    overrideVersionCode = 1
+    overrideVersionCode = 2
     isNsfw = false
     isNovel = true
 }

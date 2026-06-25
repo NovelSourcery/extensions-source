@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.formattedText
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -154,7 +155,7 @@ class ReadNovelMtl :
 
             author = document.selectFirst("a[href*=author=]")?.text()
 
-            description = document.selectFirst(".mb-4[style*=font-size]")?.text()
+            description = document.selectFirst(".mb-4[style*=font-size]")?.formattedText()
 
             genre = document.select(".d-flex.flex-wrap.gap-2 a.badge").map { it.text() }.joinToString(", ")
 

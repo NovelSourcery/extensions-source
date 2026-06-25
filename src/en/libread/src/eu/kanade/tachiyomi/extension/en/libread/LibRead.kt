@@ -8,6 +8,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.utils.formattedText
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
@@ -207,7 +208,7 @@ class LibRead :
             }
         }
         if (manga.description.isNullOrBlank()) {
-            manga.description = document.selectFirst("div.m-desc div.txt div.inner, div.desc-text")?.text()?.trim()
+            manga.description = document.selectFirst("div.m-desc div.txt div.inner, div.desc-text")?.formattedText()
         }
 
         return manga

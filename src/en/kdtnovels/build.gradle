@@ -3,7 +3,7 @@ ext {
     extClass = '.KdtNovels'
     themePkg = 'lightnovelwpnovel'
     baseUrl = 'https://kdtnovels.net'
-    overrideVersionCode = 1
+    overrideVersionCode = 2
     isNsfw = false
     isNovel = true
 }
