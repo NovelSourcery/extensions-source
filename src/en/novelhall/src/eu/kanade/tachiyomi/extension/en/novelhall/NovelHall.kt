@@ -18,7 +18,7 @@ class NovelHall :
     NovelSource {
 
     override val name = "NovelHall"
-    override val baseUrl = "https://www.novelhall.com"
+    override val baseUrl = "https://novelhall.com"
     override val lang = "en"
     override val supportsLatest = true
     override val isNovelSource = true
@@ -29,7 +29,6 @@ class NovelHall :
     // e.g. /genre/action/ shows pagination with /genre/action3/2/ → slug = "action3"
     private var lastGenreSlug: String? = null
     private var lastGenreName: String? = null
-
 
     override fun popularMangaRequest(page: Int): Request = GET(if (page <= 1) "$baseUrl/all2022.html" else "$baseUrl/all2022-$page.html", headers)
 
@@ -83,7 +82,6 @@ class NovelHall :
         return MangasPage(novels, hasNextPage)
     }
 
-
     override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/lastupdate.html", headers)
 
     // lastupdate.html is a single static page with no pagination.
@@ -91,7 +89,6 @@ class NovelHall :
         val document = Jsoup.parse(response.body.string())
         return MangasPage(parseNovelList(document).mangas, false)
     }
-
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (query.isNotBlank()) {
@@ -157,7 +154,6 @@ class NovelHall :
         return MangasPage(novels, false)
     }
 
-
     override fun mangaDetailsRequest(manga: SManga): Request {
         val url = if (manga.url.startsWith("http")) manga.url else baseUrl + manga.url
         return GET(url, headers)
@@ -208,7 +204,6 @@ class NovelHall :
         }
     }
 
-
     override fun chapterListRequest(manga: SManga): Request {
         val url = if (manga.url.startsWith("http")) manga.url else baseUrl + manga.url
         return GET(url, headers)
@@ -233,14 +228,12 @@ class NovelHall :
         return chapters.reversed()
     }
 
-
     override fun pageListRequest(chapter: SChapter): Request {
         val url = if (chapter.url.startsWith("http")) chapter.url else baseUrl + chapter.url
         return GET(url, headers)
     }
 
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
-
 
     override suspend fun fetchPageText(page: Page): String {
         val request = GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
@@ -300,7 +293,6 @@ class NovelHall :
     }
 
     override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
-
 
     override fun getFilterList(): FilterList = FilterList(
         Filter.Header("Note: Sort, Genre, and Search are mutually exclusive"),
