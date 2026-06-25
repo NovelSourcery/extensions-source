@@ -1,0 +1,9 @@
+ext {
+    extName = 'Novel Archive'
+    extClass = '.NovelArchive'
+    extVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"
