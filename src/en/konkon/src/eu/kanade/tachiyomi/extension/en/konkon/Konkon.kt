@@ -385,7 +385,6 @@ class Konkon :
         SearchQueryFilter(),
     )
 
-
     override val supportsChapterTracking = false
 
     override val supportsFavoritesTracking: Boolean
@@ -468,7 +467,6 @@ class Konkon :
         } ?: return null
         return java.net.URLDecoder.decode(raw, "UTF-8")
     }
-
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         SwitchPreferenceCompat(screen.context).apply {
