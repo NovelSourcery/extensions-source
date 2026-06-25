@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.formattedText
 import okhttp3.FormBody
 import okhttp3.Request
 import okhttp3.Response
@@ -24,7 +25,6 @@ class LightNovelTranslation :
     override val supportsLatest = true
     override val isNovelSource = true
     override val client = network.cloudflareClient
-    // ======================== Popular ========================
 
     override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/read/page/$page?sortby=most-liked", headers)
 
@@ -50,12 +50,10 @@ class LightNovelTranslation :
             mangas.size >= 20
         return MangasPage(mangas, hasNextPage)
     }
-    // ======================== Latest ========================
 
     override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/read/page/$page?sortby=most-recent", headers)
 
     override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
-    // ======================== Search ========================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val body = FormBody.Builder()
@@ -68,7 +66,6 @@ class LightNovelTranslation :
         val mangas = popularMangaParse(response).mangas
         return MangasPage(mangas, false)
     }
-    // ======================== Details ========================
 
     override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
 
@@ -94,39 +91,40 @@ class LightNovelTranslation :
             val descUrl = response.request.url.toString().replace("?tab=table_contents", "")
             try {
                 val descDoc = client.newCall(GET(descUrl, headers)).execute().asJsoup()
-                description = descDoc.selectFirst("div.novel_text p")?.text()?.trim()
+                description = descDoc.selectFirst("div.novel_text")?.formattedText()
             } catch (e: Exception) {
                 description = ""
             }
         }
     }
-    // ======================== Chapters ========================
 
     override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
 
     override fun chapterListParse(response: Response): List<SChapter> {
         val doc = response.asJsoup()
-        return doc.select("li.chapter-item.unlock").mapNotNull { element ->
+        return doc.select("li.chapter-item, ul.chapter-list li, li[class*=chapter-item]").mapNotNull { element ->
             try {
                 val link = element.selectFirst("a") ?: return@mapNotNull null
                 val chapterUrl = link.attr("href")
                 if (chapterUrl.isBlank()) return@mapNotNull null
 
+                val locked = !element.hasClass("unlock") &&
+                    (element.hasClass("lock") || element.selectFirst(".lock, .premium, i.fa-lock") != null)
+                val title = link.text().trim()
+
                 SChapter.create().apply {
                     url = chapterUrl.removePrefix(baseUrl)
-                    name = link.text().trim()
+                    name = if (locked) "🔒 $title" else title
                 }
             } catch (e: Exception) {
                 null
             }
-        }.reversed()
+        }.distinctBy { it.url }.reversed()
     }
-    // ======================== Pages ========================
 
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
 
     override fun imageUrlParse(response: Response): String = ""
-    // ======================== Novel Content ========================
 
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
