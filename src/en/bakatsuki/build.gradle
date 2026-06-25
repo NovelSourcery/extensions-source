@@ -1,0 +1,9 @@
+ext {
+    extName = 'Baka-Tsuki'
+    extClass = '.BakaTsuki'
+    extVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"
