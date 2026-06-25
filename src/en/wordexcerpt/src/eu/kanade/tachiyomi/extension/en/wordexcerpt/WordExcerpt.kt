@@ -47,7 +47,6 @@ class WordExcerpt :
         .add("Authorization", "Bearer $anonKey")
         .add("Accept", "application/json")
 
-
     @Serializable
     private class Novel(
         val id: String = "",
@@ -85,7 +84,6 @@ class WordExcerpt :
         }
     }
 
-
     private fun novelsListRequest(page: Int, order: String, extra: Map<String, String> = emptyMap()): Request {
         val from = (page - 1) * pageSize
         val to = from + pageSize - 1
@@ -117,7 +115,6 @@ class WordExcerpt :
 
     override fun searchMangaParse(response: Response): MangasPage = parseNovels(response)
 
-
     private fun slugOf(mangaUrl: String) = mangaUrl.trim('/')
 
     private fun novelBySlugRequest(slug: String): Request {
@@ -136,7 +133,6 @@ class WordExcerpt :
             ?: return SManga.create()
         return novel.toSManga()
     }
-
 
     override fun chapterListRequest(manga: SManga): Request = novelBySlugRequest(slugOf(manga.url))
 
@@ -166,7 +162,6 @@ class WordExcerpt :
             }
         }.reversed()
     }
-
 
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
 
