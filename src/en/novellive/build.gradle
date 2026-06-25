@@ -1,0 +1,15 @@
+ext {
+    extName = 'NovelLive'
+    extClass = '.NovelLive'
+    themePkg = 'readnovelfull'
+    baseUrl = 'https://novellive.app'
+    overrideVersionCode = 0
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"
+
+dependencies {
+    implementation(project(":lib:chapterutils"))
+}
