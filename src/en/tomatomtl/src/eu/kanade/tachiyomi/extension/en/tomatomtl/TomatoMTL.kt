@@ -118,8 +118,10 @@ class TomatoMTL :
         )
     }
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        val jsonResult = json.parseToJsonElement(response.body.string()).jsonObject
+    override fun popularMangaParse(response: Response): MangasPage = parseStatsResponse(response.body.string())
+
+    private fun parseStatsResponse(body: String): MangasPage {
+        val jsonResult = json.parseToJsonElement(body).jsonObject
 
         val success = jsonResult["success"]?.jsonPrimitive?.contentOrNull
         if (success != "true" && success?.toBoolean() != true) {
@@ -173,7 +175,7 @@ class TomatoMTL :
         val mangas = mangaData.mapIndexed { index, (url, cover, author) ->
             SManga.create().apply {
                 this.url = url
-                title = translatedTitles.getOrNull(index) ?: titlesToTranslate.getOrNull(index) ?: "Unknown"
+                title = cleanTitle(translatedTitles.getOrNull(index) ?: titlesToTranslate.getOrNull(index) ?: "Unknown")
                 thumbnail_url = cover
                 this.author = author
             }
@@ -244,17 +246,12 @@ class TomatoMTL :
 
     // ======================== Latest ========================
 
-    override fun latestUpdatesRequest(page: Int): Request {
-        val bodyJson = buildJsonObject {
-            put("query", "")
-            put("offset", (page - 1) * 20)
-            put("sort_order", "new_update")
-        }
-        val requestBody = bodyJson.toString().toRequestBody("application/json".toMediaType())
-        return POST("$baseUrl/api/search-proxy.php", headers, requestBody)
-    }
+    override fun latestUpdatesRequest(page: Int): Request = GET(
+        "$baseUrl/api/garden-stats.php?action=recent&period=all&page=$page&page_size=20",
+        headers,
+    )
 
-    override fun latestUpdatesParse(response: Response): MangasPage = searchMangaParse(response)
+    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
 
     // ======================== Search ========================
 
@@ -310,6 +307,11 @@ class TomatoMTL :
             return GET(url, headers)
         }
 
+        // search-proxy.php requires a non-empty query; with no query/category/source, show recent
+        if (query.isBlank()) {
+            return GET("$baseUrl/api/garden-stats.php?action=recent&period=all&page=$page&page_size=20", headers)
+        }
+
         // Regular search using search-proxy.php
         val bodyJson = buildJsonObject {
             put("query", query)
@@ -351,6 +353,10 @@ class TomatoMTL :
         val isGardenApi = requestUrl.contains("tomato-garden-api")
         val isCategoriesV1b = requestUrl.contains("categories_v1b.php")
         val isCategoriesV1 = requestUrl.contains("categories_v1")
+
+        if (requestUrl.contains("garden-stats.php")) {
+            return parseStatsResponse(responseBody)
+        }
 
         if (isCategoriesV1b) {
             // Direct API call with unencrypted JSON response (new endpoint)
@@ -467,7 +473,7 @@ class TomatoMTL :
             val mangas = mangaData.mapIndexed { index, (url, cover, author) ->
                 SManga.create().apply {
                     this.url = url
-                    title = translatedTitles.getOrNull(index) ?: titlesToTranslate.getOrNull(index) ?: "Unknown"
+                    title = cleanTitle(translatedTitles.getOrNull(index) ?: titlesToTranslate.getOrNull(index) ?: "Unknown")
                     thumbnail_url = cover
                     this.author = author
                 }
@@ -530,7 +536,7 @@ class TomatoMTL :
         val mangas = mangaData.mapIndexed { index, (url, cover, author) ->
             SManga.create().apply {
                 this.url = url
-                title = translatedTitles.getOrNull(index) ?: titlesToTranslate.getOrNull(index) ?: "Unknown"
+                title = cleanTitle(translatedTitles.getOrNull(index) ?: titlesToTranslate.getOrNull(index) ?: "Unknown")
                 thumbnail_url = cover
                 this.author = author
             }
@@ -577,7 +583,7 @@ class TomatoMTL :
             val mangas = mangaData.mapIndexed { index, (url, cover, author) ->
                 SManga.create().apply {
                     this.url = url
-                    title = translatedTitles.getOrNull(index) ?: titlesToTranslate.getOrNull(index) ?: "Unknown"
+                    title = cleanTitle(translatedTitles.getOrNull(index) ?: titlesToTranslate.getOrNull(index) ?: "Unknown")
                     thumbnail_url = cover
                     this.author = author
                 }
@@ -640,7 +646,7 @@ class TomatoMTL :
             val mangas = mangaData.mapIndexed { index, (url, cover, author) ->
                 SManga.create().apply {
                     this.url = url
-                    title = translatedTitles.getOrNull(index) ?: titlesToTranslate.getOrNull(index) ?: "Unknown"
+                    title = cleanTitle(translatedTitles.getOrNull(index) ?: titlesToTranslate.getOrNull(index) ?: "Unknown")
                     thumbnail_url = cover
                     this.author = author
                 }
@@ -703,7 +709,7 @@ class TomatoMTL :
             val mangas = mangaData.mapIndexed { index, (url, cover, author) ->
                 SManga.create().apply {
                     this.url = url
-                    title = translatedTitles.getOrNull(index) ?: titlesToTranslate.getOrNull(index) ?: "Unknown"
+                    title = cleanTitle(translatedTitles.getOrNull(index) ?: titlesToTranslate.getOrNull(index) ?: "Unknown")
                     thumbnail_url = cover
                     this.author = author
                 }
@@ -840,7 +846,7 @@ class TomatoMTL :
                                     // Translate title with HTML cleaning
                                     title = rawName?.let {
                                         val cleaned = cleanHtml(it)
-                                        translateSingleTitle(cleaned)
+                                        cleanTitle(translateSingleTitle(cleaned))
                                     } ?: manga.title
 
                                     // Author
@@ -965,13 +971,15 @@ class TomatoMTL :
             val authorsZh = extractJsVariable(html, "authors_zh")
 
             // Title - prefer JS variable, decode unicode escapes and HTML entities
-            title = if (!bookName.isNullOrBlank()) {
-                val withUnicodeDecoded = decodeUnicodeEscapes(bookName)
-                val cleaned = cleanHtml(withUnicodeDecoded)
-                translateSingleTitle(cleaned)
-            } else {
-                cleanHtml(document.selectFirst("h1.book-title, #book_name")?.text())
-            }
+            title = cleanTitle(
+                if (!bookName.isNullOrBlank()) {
+                    val withUnicodeDecoded = decodeUnicodeEscapes(bookName)
+                    val cleaned = cleanHtml(withUnicodeDecoded)
+                    translateSingleTitle(cleaned)
+                } else {
+                    cleanHtml(document.selectFirst("h1.book-title, #book_name")?.text())
+                },
+            )
 
             // Cover
             thumbnail_url = bookCover?.let { decodeUnicodeEscapes(it) }?.let { linkCover(it) }
@@ -1909,6 +1917,14 @@ class TomatoMTL :
 
     // ======================== Preferences ========================
 
+    private val titleIdRegex = Regex("""\s*\(\s*\d+\s*-\s*\d+\s*\)\s*$""")
+
+    private fun cleanTitle(title: String): String = if (preferences.getBoolean(STRIP_TITLE_ID_KEY, true)) {
+        title.replace(titleIdRegex, "").trim()
+    } else {
+        title
+    }
+
     private fun getTranslationMode(): String = preferences.getString(TRANSLATION_MODE_KEY, "bing") ?: "bing"
     private fun getLongcatApiKey(): String = preferences.getString(LONGCAT_API_KEY, "ak_23m7QG2Hh2lb1jD4053bV6Qf4NF7c") ?: "ak_23m7QG2Hh2lb1jD4053bV6Qf4NF7c"
 
@@ -1930,6 +1946,13 @@ class TomatoMTL :
             entryValues = arrayOf("bing", "google", "google2", "longcat", "gemini", "yandex", "none")
             setDefaultValue("bing")
             summary = "%s"
+        }.also(screen::addPreference)
+
+        SwitchPreferenceCompat(screen.context).apply {
+            key = STRIP_TITLE_ID_KEY
+            title = "Remove ID from title"
+            summary = "Strip a trailing ID like \" (1-228)\" from novel titles."
+            setDefaultValue(true)
         }.also(screen::addPreference)
 
         SwitchPreferenceCompat(screen.context).apply {
@@ -2151,6 +2174,7 @@ class TomatoMTL :
 
     companion object {
         private const val TRANSLATION_MODE_KEY = "translationMode"
+        private const val STRIP_TITLE_ID_KEY = "stripTitleId"
         private const val CACHE_SOURCES_KEY = "cacheSources"
         private const val SOURCES_CACHE_KEY = "sourcesCache"
         private const val LONGCAT_API_KEY = "longcatApiKey"
