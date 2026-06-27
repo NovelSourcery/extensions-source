@@ -16,6 +16,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import novelsourcery.lib.siteparsers.SiteParserRegistry
 import keiyoushi.utils.getPreferencesLazy
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -338,32 +339,31 @@ class Konkon :
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)).execute()
+        val chapterUrl = if (page.url.startsWith("http")) page.url else baseUrl + page.url
+
+        val response = client.newCall(GET(chapterUrl, headers)).execute()
         val body = response.body.string()
+        val resolvedUrl = response.request.url
 
-        return try {
-            val root = json.parseToJsonElement(body).jsonObject
-            val data = root["data"]?.jsonObject ?: JsonObject(emptyMap())
-            val content = data.str("content").orEmpty()
-            val authorNote = data.str("author_note").orEmpty().trim()
+        val doc = Jsoup.parse(body, resolvedUrl.toString())
 
-            if (content.isBlank()) {
-                return "No chapter content found."
-            }
-
-            if (authorNote.isBlank()) {
-                content
-            } else {
-                val note = Jsoup.parse(authorNote).text()
-                    .lines()
-                    .map { it.trim() }
-                    .filter { it.isNotBlank() }
-                    .joinToString("<br>")
-                "$content<hr /><p><strong>Author note:</strong></p><p>$note</p>"
-            }
-        } catch (_: Exception) {
-            "Failed to parse chapter content."
+        val title = doc.select("title").text().trim().lowercase()
+        val blockedTitles = listOf(
+            "bot verification",
+            "just a moment...",
+            "redirecting...",
+            "un instant...",
+            "you are being redirected...",
+        )
+        if (blockedTitles.contains(title)) {
+            throw Exception("Captcha detected, please open in webview.")
         }
+
+        if (!response.isSuccessful) {
+            throw Exception("Failed to fetch ${response.request.url}: ${response.code} ${response.message}")
+        }
+
+        return SiteParserRegistry.parse(doc, resolvedUrl, client, headers)
     }
 
     override fun getMangaUrl(manga: SManga): String {
