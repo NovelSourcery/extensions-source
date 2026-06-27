@@ -8,5 +8,5 @@ ext {
 apply plugin: "ns.plugins.extension.legacy"
 
 dependencies {
-    implementation(project(":lib:novelupdatesparsers"))
+    implementation(project(":lib:siteparsers"))
 }

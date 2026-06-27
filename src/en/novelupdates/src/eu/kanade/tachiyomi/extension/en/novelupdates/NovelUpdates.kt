@@ -16,7 +16,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
-import novelsourcery.lib.novelupdatesparsers.SiteParserRegistry
+import novelsourcery.lib.siteparsers.SiteParserRegistry
 import okhttp3.FormBody
 import okhttp3.Request
 import okhttp3.Response

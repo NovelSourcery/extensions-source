@@ -1,0 +1,23 @@
+package novelsourcery.lib.siteparsers.parsers
+
+import novelsourcery.lib.siteparsers.SiteParser
+import novelsourcery.lib.siteparsers.combined
+import novelsourcery.lib.siteparsers.domainKey
+import okhttp3.Headers
+import okhttp3.HttpUrl
+import okhttp3.OkHttpClient
+import org.jsoup.nodes.Document
+
+class SkyDemonOrderParser : SiteParser {
+    override fun canHandle(doc: Document, url: HttpUrl) = url.domainKey() == "skydemonorder"
+
+    override fun parse(doc: Document, url: HttpUrl, client: OkHttpClient, headers: Headers): String {
+        val ageCheck = doc.select("main").text().lowercase()
+        if (ageCheck.contains("age verification required")) {
+            throw Exception("Age verification required, please open in webview.")
+        }
+        val title = doc.select("header .font-medium.text-sm").first()?.text()?.trim() ?: ""
+        val content = doc.select("#chapter-body").html()
+        return combined(title, content)
+    }
+}
