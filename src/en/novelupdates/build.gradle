@@ -1,8 +1,12 @@
 ext {
     extName = 'Novel Updates'
     extClass = '.NovelUpdates'
-    extVersionCode = 5
+    extVersionCode = 6
     isNovel = true
 }
 
 apply plugin: "ns.plugins.extension.legacy"
+
+dependencies {
+    implementation(project(":lib:novelupdatesparsers"))
+}
