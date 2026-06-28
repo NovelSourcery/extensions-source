@@ -3,7 +3,7 @@ ext {
     extClass = '.NovelsKnight'
     themePkg = 'lightnovelwp'
     baseUrl = 'https://novelsknight.punchmanga.online'
-    overrideVersionCode = 1
+    overrideVersionCode = 2
     isNsfw = false
     isNovel = true
 }

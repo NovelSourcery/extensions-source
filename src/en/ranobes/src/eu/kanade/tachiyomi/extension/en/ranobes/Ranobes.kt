@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.formattedText
 import keiyoushi.utils.getPreferencesLazy
 import okhttp3.FormBody
 import okhttp3.Request
@@ -69,7 +70,7 @@ class Ranobes :
                     if (it.startsWith("http")) it else baseUrl + it
                 }
 
-                description = article.selectFirst("div.moreless__short")?.text()?.trim()
+                description = article.selectFirst("div.moreless__short")?.formattedText()
 
                 genre = article.select("div.rank-story-genre a").joinToString(", ") {
                     it.text().trim()
@@ -186,7 +187,7 @@ class Ranobes :
                     extractBackgroundUrl(it)
                 }
 
-                description = article.selectFirst("div.cont-in > div")?.text()?.trim()
+                description = article.selectFirst("div.cont-in > div")?.formattedText()
 
                 genre = article.selectFirst("div.r-rate div.grey")?.text()?.trim()
 
@@ -223,7 +224,7 @@ class Ranobes :
                     it.attr("src").ifEmpty { extractBackgroundUrl(it.attr("style") ?: "") }
                 }?.let { if (it.startsWith("http")) it else baseUrl + it }
 
-                description = article.selectFirst("div.moreless__short")?.text()?.trim()
+                description = article.selectFirst("div.moreless__short")?.formattedText()
 
                 genre = article.select("div.rank-story-genre a, .genre a").joinToString(", ") {
                     it.text().trim()

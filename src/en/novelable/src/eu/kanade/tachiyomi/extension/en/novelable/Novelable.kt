@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.formattedText
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -106,7 +107,7 @@ class Novelable :
             }
 
             // Description from summary section
-            description = document.selectFirst("div.summary p.content")?.text()
+            description = document.selectFirst("div.summary p.content")?.formattedText()
                 ?: document.selectFirst(".novel-synopsis, .novel-description, .description")?.text()
 
             // Genre/Tags from meta box

@@ -3,7 +3,7 @@ ext {
     extClass = '.BacaLightNovel'
     themePkg = 'lightnovelwpnovel'
     baseUrl = 'https://bacalightnovel.co'
-    overrideVersionCode = 1
+    overrideVersionCode = 2
     isNsfw = false
     isNovel = true
 }

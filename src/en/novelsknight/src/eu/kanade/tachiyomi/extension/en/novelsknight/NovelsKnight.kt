@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.formattedText
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -133,7 +134,7 @@ class NovelsKnight :
             thumbnail_url = doc.selectFirst("div.sertothumb img")?.attr("src")
 
             // Description from div.sersysn div.sersys
-            description = doc.selectFirst("div.sersysn div.sersys")?.text()?.trim()
+            description = doc.selectFirst("div.sersysn div.sersys")?.formattedText()
 
             // Author from span.sername:contains(Author) + span.serval
             author = doc.selectFirst("div.serl:has(span.sername:contains(Author)) span.serval")?.text()?.trim()

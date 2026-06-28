@@ -13,6 +13,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.formattedText
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -384,7 +385,7 @@ class RoyalRoad :
             ?: doc.select("a[href^=/profile/]").first()?.text() ?: ""
 
         // Description - get the hidden full description if available
-        val description = doc.selectFirst("div.description div.hidden-content")?.text()
+        val description = doc.selectFirst("div.description div.hidden-content")?.formattedText()
             ?: doc.selectFirst("div.description")?.text()
             ?: ""
 
