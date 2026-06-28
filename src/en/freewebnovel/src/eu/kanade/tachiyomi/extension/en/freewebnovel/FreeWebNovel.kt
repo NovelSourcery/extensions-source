@@ -1,7 +1,9 @@
 ﻿package eu.kanade.tachiyomi.novelextension.en.freewebnovel
 
 import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
+import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.SManga
+import okhttp3.Request
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
@@ -25,6 +27,26 @@ class FreeWebNovel :
     override val noAjax = true
     override val pageAsPath = true
     override val noPages = listOf("sort/most-popular")
+
+    // freewebnovel paginates the chapter list at /novel/<slug>?page=N (page 1 is the novel page);
+    // page count and total come from #indexselect (options are "C.1 - C.40" ranges).
+    override val chaptersPaginated = true
+
+    override fun chapterListPageRequest(manga: SManga, page: Int): Request {
+        val base = baseUrl + manga.url.trimEnd('/')
+        val url = if (page <= 1) base else "$base?$pageParam=$page"
+        return GET(url, headers)
+    }
+
+    // Real list is #idData; m-newest1/2 are the "latest chapters" widgets and must not be mixed in.
+    override fun chapterPageSelector() = "#idData li a"
+
+    // Chapter urls follow /novel/<slug>/chapter-N, so the fast list can be synthesized.
+    override fun chapterUrlFromNumber(manga: SManga, number: Int): String? {
+        val path = manga.url.trimEnd('/')
+        if (path.isBlank()) return null
+        return "$path/chapter-$number"
+    }
 
     override fun getTypeOptions() = listOf(
         "Most Popular" to "sort/most-popular",

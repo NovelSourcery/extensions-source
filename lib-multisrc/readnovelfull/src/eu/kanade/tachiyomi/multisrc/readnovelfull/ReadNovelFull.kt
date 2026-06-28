@@ -12,10 +12,12 @@ import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
+import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.lib.chapterutils.paginatedChapterList
 import keiyoushi.utils.setAltTitles
 import okhttp3.FormBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -79,6 +81,12 @@ abstract class ReadNovelFull(
     protected open val noAjax: Boolean = false
     protected open val pageAsPath: Boolean = false
     protected open val noPages: List<String> = emptyList()
+
+    // Set true on sites whose chapter list is split across multiple pages on the novel page
+    // (engine convention: a #indexselect page picker, chapters under div.m-newest2 ul.ul-list5).
+    // Enables the RefreshContext-aware paginated path in getChapterList below.
+    protected open val chaptersPaginated: Boolean = false
+    protected open val chapterListPageSize: Int = 100
 
     override fun headersBuilder() = super.headersBuilder()
         .add("Referer", "$baseUrl/")
@@ -579,6 +587,85 @@ abstract class ReadNovelFull(
 
     // ======================== Chapters ========================
 
+    // Number of chapter-list pages, read from the #indexselect page picker.
+    protected open fun chapterListPageCount(detailDoc: Document): Int = detailDoc.select("#indexselect option").size.coerceAtLeast(1)
+
+    // Site-reported total chapter count, used by paginatedChapterList to skip work when nothing
+    // changed. Derived from the last #indexselect option's upper bound (e.g. "2321-2334" -> 2334).
+    // 0 = unknown (no short-circuit).
+    protected open fun siteChapterTotal(detailDoc: Document): Int = detailDoc.select("#indexselect option").lastOrNull()?.text()
+        ?.let { Regex("""(\d+)\D*$""").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+        ?: 0
+
+    // Request for page [page] of the chapter list. Page 1 is the novel page itself.
+    protected open fun chapterListPageRequest(manga: SManga, page: Int): Request {
+        val path = manga.url.trimEnd('/')
+        val url = if (page <= 1) baseUrl + path else "$baseUrl$path/$page"
+        return GET(url, headers)
+    }
+
+    protected open fun chapterPageSelector(): String = "#idData li a, div.m-newest2 ul.ul-list5 li a"
+
+    // Parse one paginated chapter-list page in document order (numbering/reversal done by caller).
+    protected open fun parseChapterPage(document: Document): List<SChapter> = document.select(chapterPageSelector()).mapNotNull { element ->
+        val chapterUrl = element.attr("abs:href")
+        if (chapterUrl.isBlank()) return@mapNotNull null
+        SChapter.create().apply {
+            setUrlWithoutDomain(chapterUrl)
+            name = element.attr("title").ifEmpty { element.text().trim() }
+        }
+    }
+
+    override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
+        if (!chaptersPaginated) {
+            return super.getChapterList(manga, context)
+        }
+
+        val detailDoc = client.newCall(chapterListPageRequest(manga, 1)).execute().asJsoup()
+        val pageCount = chapterListPageCount(detailDoc)
+
+        // Fast mode (default): synthesize the list from the latest chapter number and a stable chapter
+        // url pattern, skipping the per-page index fetches. Only when the source provides a pattern.
+        if (!accurateChapters) {
+            synthesizeChapters(manga, siteChapterTotal(detailDoc))?.let { return it }
+        }
+
+        // Chapter pages are oldest-first; keep fetch order, number by position, present newest-first.
+        val ascending = paginatedChapterList(
+            context = context,
+            siteTotal = siteChapterTotal(detailDoc),
+            assumedPageSize = chapterListPageSize,
+            sortChapters = { it },
+            fetchPage = { page ->
+                val doc = if (page == 1) {
+                    detailDoc
+                } else {
+                    client.newCall(chapterListPageRequest(manga, page)).execute().asJsoup()
+                }
+                Pair(parseChapterPage(doc), page < pageCount)
+            },
+        )
+        ascending.forEachIndexed { i, ch -> ch.chapter_number = (i + 1).toFloat() }
+        return ascending.reversed()
+    }
+
+    private val accurateChapters get() = preferences.getBoolean(PREF_ACCURATE_CHAPTERS, false)
+
+    // Domain-relative url of chapter [number] when the site has a stable pattern (e.g.
+    // /<slug>/chapter-N). Return null (default) to disable fast mode and always page through the list.
+    protected open fun chapterUrlFromNumber(manga: SManga, number: Int): String? = null
+
+    private fun synthesizeChapters(manga: SManga, total: Int): List<SChapter>? {
+        if (total <= 0 || chapterUrlFromNumber(manga, total) == null) return null
+        return (total downTo 1).map { number ->
+            SChapter.create().apply {
+                url = chapterUrlFromNumber(manga, number) ?: return null
+                name = "Chapter $number"
+                chapter_number = number.toFloat()
+            }
+        }
+    }
+
     override fun chapterListParse(response: Response): List<SChapter> {
         val document = response.asJsoup()
         val novelPath = response.request.url.encodedPath
@@ -635,7 +722,7 @@ abstract class ReadNovelFull(
                 name = element.attr("title").ifEmpty { element.text().trim() }
                 chapter_number = (index + 1).toFloat()
             }
-        }
+        }.reversed()
     }
 
     // ======================== Pages ========================
@@ -820,10 +907,23 @@ abstract class ReadNovelFull(
             setDefaultValue(false)
         }
         screen.addPreference(rawHtmlPref)
+
+        if (chaptersPaginated) {
+            screen.addPreference(
+                SwitchPreferenceCompat(screen.context).apply {
+                    key = PREF_ACCURATE_CHAPTERS
+                    title = "Accurate chapter list"
+                    summary = "Fetch every index page for real chapter titles. Slower on long novels. " +
+                        "When off (default), the list is built quickly from the latest chapter number."
+                    setDefaultValue(false)
+                },
+            )
+        }
     }
 
     companion object {
         private const val PREF_RAW_HTML = "pref_raw_html"
+        private const val PREF_ACCURATE_CHAPTERS = "pref_accurate_chapters"
         private val DATE_FORMAT = SimpleDateFormat("MMM dd, yyyy", Locale.US)
     }
 }
