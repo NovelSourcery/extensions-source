@@ -39,6 +39,8 @@ import uy.kohesive.injekt.injectLazy
 import java.text.SimpleDateFormat
 import java.util.Locale
 
+private val INVISIBLE_CHARS = Regex("[\\u200B\\u200C\\u200D\\u2060\\uFEFF]")
+
 private fun htmlToPlainTextPreserveBreaks(html: String): String {
     val document = Jsoup.parseBodyFragment(html)
     val body = document.body()
@@ -424,7 +426,7 @@ class Fenrirealm :
     ) {
         fun toSManga(baseUrl: String): SManga = SManga.create().apply {
             url = "/series/$slug"
-            this.title = this@NovelDto.title
+            this.title = this@NovelDto.title.replace(INVISIBLE_CHARS, "").trim()
             thumbnail_url = if (!cover.isNullOrEmpty()) {
                 if (cover.startsWith("http")) cover else "$baseUrl/$cover"
             } else {

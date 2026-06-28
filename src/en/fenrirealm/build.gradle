@@ -1,7 +1,7 @@
 ext {
     extName = 'Fenrirealm'
     extClass = '.Fenrirealm'
-    extVersionCode = 6
+    extVersionCode = 7
     isNsfw = false
     isNovel = true
 }
