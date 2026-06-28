@@ -22,6 +22,7 @@ import novelsourcery.lib.siteparsers.parsers.LeafStudioParser
 import novelsourcery.lib.siteparsers.parsers.MachineSlicedBreadParser
 import novelsourcery.lib.siteparsers.parsers.MiriluParser
 import novelsourcery.lib.siteparsers.parsers.MythoriaTalesParser
+import novelsourcery.lib.siteparsers.parsers.NoBadNovelParser
 import novelsourcery.lib.siteparsers.parsers.NovelPlexParser
 import novelsourcery.lib.siteparsers.parsers.NovelWorldTranslationsParser
 import novelsourcery.lib.siteparsers.parsers.NovelsHubParser
@@ -73,6 +74,7 @@ object SiteParserRegistry {
         MachineSlicedBreadParser(),
         MiriluParser(),
         MythoriaTalesParser(),
+        NoBadNovelParser(),
         NovelPlexParser(),
         NovelsHubParser(),
         NovelWorldTranslationsParser(),
