@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.formattedText
 import keiyoushi.utils.setAltTitles
 import okhttp3.Request
 import okhttp3.Response
@@ -149,7 +150,7 @@ open class LightNovelWPNovel(
                 ?: doc.selectFirst(".post-title h1")?.text()?.trim()?.takeIf { it.isNotBlank() }
                 ?: "Unknown Title"
 
-            description = doc.selectFirst(".entry-content, [itemprop=description]")?.text()?.trim() ?: ""
+            description = doc.selectFirst(".entry-content, [itemprop=description]")?.formattedText()?.trim() ?: ""
 
             val authorElement = doc.select(".spe span:contains(Author), .serl:contains(Author)").first()
             author = authorElement?.nextElementSibling()?.text()?.trim()
@@ -177,12 +178,6 @@ open class LightNovelWPNovel(
                     .map { it.trim() }
                     .filter { it.isNotBlank() }
                 setAltTitles(titles)
-                description = buildString {
-                    append(description.orEmpty())
-                    if (isNotEmpty()) append("\n\n")
-                    append("Alternative Titles: ")
-                    append(titles.joinToString(", "))
-                }.trim()
             }
 
             status = when {
