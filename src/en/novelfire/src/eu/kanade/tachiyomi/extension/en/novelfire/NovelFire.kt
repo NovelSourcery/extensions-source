@@ -174,8 +174,7 @@ class NovelFire :
         return if (path.startsWith("/")) path else "/$path"
     }
 
-    private fun absoluteUrl(path: String): String =
-        baseUrl.trimEnd('/') + "/" + path.removePrefix(baseUrl).trimStart('/')
+    private fun absoluteUrl(path: String): String = baseUrl.trimEnd('/') + "/" + path.removePrefix(baseUrl).trimStart('/')
 
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET(absoluteUrl(page.url), headers)).execute()
