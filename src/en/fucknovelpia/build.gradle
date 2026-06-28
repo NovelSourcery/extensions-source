@@ -1,0 +1,8 @@
+ext {
+    extName = 'FUCKNOVELPIA'
+    extClass = '.FUCKNOVELPIA'
+    extVersionCode = 3
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"
