@@ -112,6 +112,7 @@ object SiteParserRegistry {
 
         val doc = Jsoup.parse(processed)
         doc.select("noscript").remove()
+        doc.select("ins").remove()
         doc.select("img").forEach { el ->
             val lazySrc = el.attr("data-lazy-src")
             if (lazySrc.isNotEmpty()) el.attr("src", lazySrc)
