@@ -1,7 +1,7 @@
 ext {
     extName = 'MVLEMPYR'
     extClass = '.MVLEMPYR'
-    extVersionCode = 1
+    extVersionCode = 3
     isNsfw = false
     isNovel = true
 }

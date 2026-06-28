@@ -11,6 +11,8 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.formattedText
+import keiyoushi.utils.setAltTitles
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -280,8 +282,8 @@ class MVLEMPYR :
             null
         }
 
-        description = synopsisText?.let { cleanHtml(it) }
-            ?: cleanHtml(excerptRendered.ifBlank { contentRendered })
+        description = synopsisText?.let { formatDescription(it) }
+            ?: formatDescription(excerptRendered.ifBlank { contentRendered })
     }
 
     override fun mangaDetailsParse(response: Response): SManga {
@@ -294,18 +296,15 @@ class MVLEMPYR :
                 .find { it.selectFirst("span")?.text()?.contains("Associated Names", ignoreCase = true) == true }
                 ?.selectFirst("span:last-child, a")?.text()?.trim()
 
-            var desc = doc.selectFirst("div.synopsis.w-richtext")?.text()?.trim() ?: ""
+            description = doc.selectFirst("div.synopsis.w-richtext")?.formattedText()?.trim() ?: ""
             if (!associatedNamesText.isNullOrBlank()) {
-                // Split by common delimiters and clean
                 val altTitles = associatedNamesText.split(",", ";", "/", "|")
                     .mapNotNull { it.trim().takeIf { s -> s.isNotBlank() && s != title } }
                     .distinct()
                 if (altTitles.isNotEmpty()) {
-                    desc = "Alternative Titles: ${altTitles.joinToString(", ")}\n\n$desc"
+                    setAltTitles(altTitles)
                 }
             }
-
-            description = desc
             author = doc.select("div.additionalinfo.tm10 > div.textwrapper")
                 .find { it.selectFirst("span")?.text()?.contains("Author") == true }
                 ?.selectFirst("a, span:last-child")?.text() ?: ""
@@ -370,7 +369,7 @@ class MVLEMPYR :
             page++
         }
 
-        return chapters.reversed()
+        return chapters.sortedByDescending { it.chapter_number }
     }
 
     override fun pageListParse(response: Response): List<Page> {
@@ -379,18 +378,17 @@ class MVLEMPYR :
     }
 
     override suspend fun fetchPageText(page: Page): String {
-        val url = if (page.url.startsWith("http")) {
-            page.url
-        } else {
-            "$chapSite${page.url}"
-        }
+        // Chapter text is served from the main site (the WP host is Cloudflare-blocked). The text
+        // span has a dynamic id, so target it by class.
+        val url = if (page.url.startsWith("http")) page.url else "$baseUrl${page.url}"
         val response = client.newCall(GET(url, headers)).execute()
         val doc = Jsoup.parse(response.body.string())
-        // Content is in #chapter-content #chapter based on API docs
-        return doc.selectFirst("#chapter-content #chapter")?.html()
-            ?: doc.selectFirst("#chapter")?.html()
-            ?: doc.selectFirst(".ChapterContent")?.html()
-            ?: ""
+        val content = doc.selectFirst("#chapter .ct-span")
+            ?: doc.selectFirst("#chapter .oxy-stock-content-styles")
+            ?: doc.selectFirst("#chapter")
+            ?: return ""
+        content.select("script, style, ins, .adsbygoogle, .code-block, .ad").remove()
+        return content.html()
     }
 
     override fun imageUrlParse(response: Response): String = ""
@@ -493,6 +491,8 @@ class MVLEMPYR :
     }
 
     private fun cleanHtml(html: String): String = Jsoup.parse(html).text()
+
+    private fun formatDescription(html: String): String = Jsoup.parse(html).formattedText()
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
     }
