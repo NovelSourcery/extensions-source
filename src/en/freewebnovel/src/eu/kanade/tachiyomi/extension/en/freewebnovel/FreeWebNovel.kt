@@ -49,6 +49,7 @@ class FreeWebNovel :
     }
 
     override fun getTypeOptions() = listOf(
+        "All" to "all",
         "Most Popular" to "sort/most-popular",
         "Latest Novels" to "sort/latest-novels",
         "Chinese Novel" to "sort/latest-novels/chinese-novel",
