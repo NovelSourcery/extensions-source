@@ -27,6 +27,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -161,8 +162,22 @@ class NovelFire :
 
     override fun imageUrlParse(response: Response): String = ""
 
+    // Normalize an href (absolute, root-relative or bare-relative) to a leading-slash path so
+    // baseUrl + url always joins with a single slash, even when delegated via a mirror base URL.
+    private fun String.toNovelPath(): String {
+        val httpUrl = toHttpUrlOrNull()
+        val path = if (httpUrl != null) {
+            httpUrl.encodedPath + (httpUrl.encodedQuery?.let { "?$it" } ?: "")
+        } else {
+            removePrefix(baseUrl)
+        }
+        return if (path.startsWith("/")) path else "/$path"
+    }
+
+    private fun absoluteUrl(path: String): String = baseUrl.trimEnd('/') + "/" + path.removePrefix(baseUrl).trimStart('/')
+
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        val response = client.newCall(GET(absoluteUrl(page.url), headers)).execute()
         return parseChapterContent(response)
     }
 
@@ -284,7 +299,8 @@ class NovelFire :
                     ?: element.selectFirst("h4")?.text()?.takeIf { it.isNotBlank() }
                     ?: return@mapNotNull null
 
-                val novelUrl = element.selectFirst("a")?.attr("href")?.takeIf { it.isNotBlank() }
+                val novelUrl = element.selectFirst("a")?.absUrl("href")?.takeIf { it.isNotBlank() }
+                    ?: element.selectFirst("a")?.attr("href")?.takeIf { it.isNotBlank() }
                     ?: return@mapNotNull null
 
                 val coverElement = element.selectFirst(".novel-cover > img")
@@ -292,7 +308,7 @@ class NovelFire :
 
                 SManga.create().apply {
                     this.title = title
-                    this.url = novelUrl.removePrefix(baseUrl)
+                    this.url = novelUrl.toNovelPath()
                     // Default cover fallback
                     thumbnail_url = when {
                         coverUrl.isNullOrEmpty() -> "$baseUrl/images/no-cover.jpg"
@@ -383,7 +399,7 @@ class NovelFire :
     )
 
     override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
-        val response = client.newCall(GET(baseUrl + manga.url, headers)).execute()
+        val response = client.newCall(GET(absoluteUrl(manga.url), headers)).execute()
         val body = response.body.string()
         val doc = Jsoup.parse(body)
         checkCloudflare(doc)
@@ -572,14 +588,14 @@ class NovelFire :
         val chapters = doc.select(".chapter-list li").mapNotNull { element ->
             val linkElement = element.selectFirst("a") ?: return@mapNotNull null
             val chapterName = linkElement.attr("title").ifEmpty { linkElement.text() }
-            val chapterUrl = linkElement.attr("href")
+            val chapterUrl = linkElement.absUrl("href").ifEmpty { linkElement.attr("href") }
             val chapterDate: Long = dateFormat.tryParse(
                 linkElement.selectFirst(".chapter-update[datetime]")?.attr("datetime"),
             )
             chapterUrl.takeIf { it.isNotEmpty() }?.let {
                 SChapter.create().apply {
                     name = chapterName
-                    url = it.removePrefix(baseUrl)
+                    url = it.toNovelPath()
                     date_upload = chapterDate
                 }
             }
