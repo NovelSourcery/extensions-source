@@ -560,7 +560,10 @@ class FictionZone :
 
         val breakToken = "__FZ_BR__"
         val paragraphToken = "__FZ_P__"
-        val doc = Jsoup.parseBodyFragment(Parser.unescapeEntities(normalized, false))
+        // Keep plain newlines that sit between/inside tags: doc.text() would otherwise drop them,
+        // leaving only the <br>/<p> structure and collapsing the synopsis spacing.
+        val withBreaks = normalized.replace("\n", "<br>")
+        val doc = Jsoup.parseBodyFragment(Parser.unescapeEntities(withBreaks, false))
         doc.select("br").forEach { it.after(breakToken) }
         doc.select("p, div, li").forEach { it.after(paragraphToken) }
 
