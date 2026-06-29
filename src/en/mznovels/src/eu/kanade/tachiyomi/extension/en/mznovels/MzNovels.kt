@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.formattedText
 import kotlinx.serialization.json.Json
 import okhttp3.Request
 import okhttp3.Response
@@ -218,7 +219,7 @@ class MzNovels :
             }
 
             // Summary
-            description = doc.selectFirst("p.summary-text")?.html()?.trim() ?: "<no description>"
+            description = doc.selectFirst("p.summary-text")?.formattedText()?.trim() ?: "<no description>"
 
             // Rating (optional)
             val ratingStr = doc.selectFirst("span.rating-score")?.text()
@@ -267,9 +268,9 @@ class MzNovels :
             pageNo++
         }
 
-        // Reverse to oldest-first order
-        return chapters.reversed().mapIndexed { index, chapter ->
-            chapter.apply { chapter_number = index + 1f }
+        // Chapter list is newest-first on the site; keep that order and number descending.
+        return chapters.mapIndexed { index, chapter ->
+            chapter.apply { chapter_number = (chapters.size - index).toFloat() }
         }
     }
     // ======================== Chapter Content ========================
