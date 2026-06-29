@@ -22,6 +22,7 @@ import novelsourcery.lib.siteparsers.parsers.LeafStudioParser
 import novelsourcery.lib.siteparsers.parsers.MachineSlicedBreadParser
 import novelsourcery.lib.siteparsers.parsers.MiriluParser
 import novelsourcery.lib.siteparsers.parsers.MythoriaTalesParser
+import novelsourcery.lib.siteparsers.parsers.NoBadNovelParser
 import novelsourcery.lib.siteparsers.parsers.NovelPlexParser
 import novelsourcery.lib.siteparsers.parsers.NovelWorldTranslationsParser
 import novelsourcery.lib.siteparsers.parsers.NovelsHubParser
@@ -73,6 +74,7 @@ object SiteParserRegistry {
         MachineSlicedBreadParser(),
         MiriluParser(),
         MythoriaTalesParser(),
+        NoBadNovelParser(),
         NovelPlexParser(),
         NovelsHubParser(),
         NovelWorldTranslationsParser(),
@@ -110,6 +112,7 @@ object SiteParserRegistry {
 
         val doc = Jsoup.parse(processed)
         doc.select("noscript").remove()
+        doc.select("ins").remove()
         doc.select("img").forEach { el ->
             val lazySrc = el.attr("data-lazy-src")
             if (lazySrc.isNotEmpty()) el.attr("src", lazySrc)

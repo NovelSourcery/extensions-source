@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.novelextension.en.epubkfcok
+package eu.kanade.tachiyomi.novelextension.en.fucknovelpia
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
@@ -17,11 +17,12 @@ import org.jsoup.nodes.Element
 import java.text.SimpleDateFormat
 import java.util.Locale
 
-class EpubKfcok :
+class FUCKNOVELPIA :
     HttpSource(),
     NovelSource {
 
-    override val name = "EPUB KFCok"
+    override val name = "FUCKNOVELPIA"
+    override val id: Long = 4776466639710929174
     override val baseUrl = "https://fucknovelpia.com"
     override val lang = "all"
     override val supportsLatest = true

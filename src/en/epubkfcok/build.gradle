@@ -1,8 +1,0 @@
-ext {
-    extName = 'EPUB KFCok'
-    extClass = '.EpubKfcok'
-    extVersionCode = 2
-    isNovel = true
-}
-
-apply plugin: "ns.plugins.extension.legacy"
