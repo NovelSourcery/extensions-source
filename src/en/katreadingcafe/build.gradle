@@ -1,0 +1,9 @@
+ext {
+    extName = 'KatReadingCafe'
+    extClass = '.KatReadingCafe'
+    overrideVersionCode = 0
+    themePkg = 'lightnovelwpnovel'
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"
