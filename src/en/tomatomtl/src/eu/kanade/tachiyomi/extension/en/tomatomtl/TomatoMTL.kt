@@ -1308,54 +1308,48 @@ class TomatoMTL :
                 val chapterNames = mutableListOf<String>()
 
                 try {
-                    val catalogJson = json.parseToJsonElement(responseBody).jsonObject
-                    val iv = catalogJson["iv"]?.jsonPrimitive?.contentOrNull
-                    val enc = catalogJson["enc"]?.jsonPrimitive?.contentOrNull
+                    // The catalog endpoint now returns a plain JSON array of chapters.
+                    val chapterArray = resolveCatalogArray(responseBody)
 
-                    if (iv != null && enc != null) {
-                        val decrypted = decryptContent(iv, enc)
-                        Log.d("TomatoMTL", "Decrypted catalog: ${decrypted.take(500)}...")
+                    chapterArray?.forEachIndexed { index, element ->
+                        try {
+                            val chapterObj = element.jsonObject
+                            val rawTitle = chapterObj["title"]?.jsonPrimitive?.contentOrNull
+                                ?: chapterObj["name"]?.jsonPrimitive?.contentOrNull
+                                ?: "Chapter ${index + 1}"
+                            val chapterId = chapterObj["id"]?.jsonPrimitive?.contentOrNull
+                                ?: chapterObj["item_id"]?.jsonPrimitive?.contentOrNull
+                                ?: chapterObj["chapter_id"]?.jsonPrimitive?.contentOrNull
+                                ?: return@forEachIndexed
 
-                        val chapterArray = json.parseToJsonElement(decrypted).jsonArray
+                            // Decode unicode escapes and HTML entities in title
+                            val withUnicodeDecoded = decodeUnicodeEscapes(rawTitle)
+                            val chapterTitle = cleanHtml(withUnicodeDecoded)
 
-                        chapterArray.forEachIndexed { index, element ->
-                            try {
-                                val chapterObj = element.jsonObject
-                                val rawTitle = chapterObj["title"]?.jsonPrimitive?.contentOrNull
-                                    ?: chapterObj["name"]?.jsonPrimitive?.contentOrNull
-                                    ?: "Chapter ${index + 1}"
-                                val chapterId = chapterObj["id"]?.jsonPrimitive?.contentOrNull
-                                    ?: return@forEachIndexed
-
-                                // Decode unicode escapes and HTML entities in title
-                                val withUnicodeDecoded = decodeUnicodeEscapes(rawTitle)
-                                val chapterTitle = cleanHtml(withUnicodeDecoded)
-
-                                chapters.add(
-                                    SChapter.create().apply {
-                                        url = "/book/$bookId/$chapterId"
-                                        name = chapterTitle
-                                        chapter_number = (index + 1).toFloat()
-                                    },
-                                )
-                                chapterNames.add(chapterTitle)
-                            } catch (e: Exception) {
-                                Log.e("TomatoMTL", "Error parsing catalog chapter $index: ${e.message}")
-                            }
+                            chapters.add(
+                                SChapter.create().apply {
+                                    url = "/book/$bookId/$chapterId"
+                                    name = chapterTitle
+                                    chapter_number = (index + 1).toFloat()
+                                },
+                            )
+                            chapterNames.add(chapterTitle)
+                        } catch (e: Exception) {
+                            Log.e("TomatoMTL", "Error parsing catalog chapter $index: ${e.message}")
                         }
+                    }
 
-                        // Translate chapter names in batch if needed
-                        if (chapters.isNotEmpty() && chapterNames.any { needsTranslation(it) }) {
-                            try {
-                                val translatedNames = translateTitles(chapterNames)
-                                chapters.forEachIndexed { index, chapter ->
-                                    if (index < translatedNames.size) {
-                                        chapter.name = translatedNames[index]
-                                    }
+                    // Translate chapter names in batch if needed
+                    if (chapters.isNotEmpty() && chapterNames.any { needsTranslation(it) }) {
+                        try {
+                            val translatedNames = translateTitles(chapterNames)
+                            chapters.forEachIndexed { index, chapter ->
+                                if (index < translatedNames.size) {
+                                    chapter.name = translatedNames[index]
                                 }
-                            } catch (e: Exception) {
-                                Log.e("TomatoMTL", "Error translating chapter names: ${e.message}")
                             }
+                        } catch (e: Exception) {
+                            Log.e("TomatoMTL", "Error translating chapter names: ${e.message}")
                         }
                     }
                 } catch (e: Exception) {
@@ -1375,6 +1369,29 @@ class TomatoMTL :
                 emptyList<SChapter>()
             }
         }
+    }
+
+    // Resolve the chapter array from a /catalog response. Handles the current plain-array
+    // payload and the legacy encrypted {iv, enc} object (whose decrypted body is an array,
+    // or an object nesting the array under "data"/"chapters").
+    private fun resolveCatalogArray(responseBody: String): JsonArray? {
+        Log.d("TomatoMTL", "Catalog raw: ${responseBody.take(400)}")
+        val root = json.parseToJsonElement(responseBody)
+        if (root is JsonArray) return root
+        if (root !is JsonObject) return null
+
+        val iv = root["iv"]?.jsonPrimitive?.contentOrNull
+        val enc = root["enc"]?.jsonPrimitive?.contentOrNull
+        if (iv != null && enc != null) {
+            val decrypted = decryptContent(iv, enc)
+            Log.d("TomatoMTL", "Decrypted catalog: ${decrypted.take(500)}...")
+            return when (val el = json.parseToJsonElement(decrypted)) {
+                is JsonArray -> el
+                is JsonObject -> el["data"]?.jsonArray ?: el["chapters"]?.jsonArray
+                else -> null
+            }
+        }
+        return root["data"]?.jsonArray ?: root["chapters"]?.jsonArray
     }
 
     private fun isChapterUrl(href: String): Boolean {
