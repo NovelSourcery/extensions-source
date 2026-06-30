@@ -3,7 +3,7 @@ ext {
     extClass = '.LibRead'
     themePkg = 'readnovelfull'
     baseUrl = 'https://libread.com'
-    overrideVersionCode = 2
+    overrideVersionCode = 3
     isNsfw = false
     isNovel = true
 }
