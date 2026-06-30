@@ -6,6 +6,7 @@ import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
+import eu.kanade.tachiyomi.network.interceptor.rateLimit
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
@@ -21,6 +22,7 @@ import keiyoushi.lib.chapterutils.paginatedChapterList
 import keiyoushi.utils.setAltTitles
 import okhttp3.FormBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Interceptor
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
@@ -29,6 +31,7 @@ import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.text.SimpleDateFormat
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 /**
  * ReadNovelFull multisrc base class.
@@ -57,7 +60,39 @@ abstract class ReadNovelFull(
 
     override val supportsLatest = true
 
-    override val client = network.cloudflareClient
+    // Sliding-window rate limit: the first [rateLimitPermits] requests in any [rateLimitPeriodSeconds]
+    // window dispatch immediately, the rest are throttled. This lets the common case (one page in fast
+    // mode, or a few pages when only a handful of chapters are new) go through with no delay while still
+    // pacing the rare full accurate walk (every index page) below Cloudflare's 429 burst threshold.
+    protected open val rateLimitPermits: Int = 4
+    protected open val rateLimitPeriodSeconds: Long = 2
+
+    // Max retries when the site answers 429; each retry waits the Retry-After interval.
+    protected open val maxRetriesOn429: Int = 3
+
+    override val client = network.cloudflareClient.newBuilder()
+        .addInterceptor(::retryOnTooManyRequests)
+        .rateLimit(permits = rateLimitPermits, period = rateLimitPeriodSeconds, unit = TimeUnit.SECONDS)
+        .build()
+
+    private fun retryOnTooManyRequests(chain: Interceptor.Chain): Response {
+        val request = chain.request()
+        var response = chain.proceed(request)
+        var attempts = 0
+        while (response.code == 429 && attempts < maxRetriesOn429) {
+            val waitSeconds = response.header("Retry-After")?.toLongOrNull()?.coerceIn(1, 60) ?: 5
+            response.close()
+            try {
+                Thread.sleep(waitSeconds * 1000)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                break
+            }
+            response = chain.proceed(request)
+            attempts++
+        }
+        return response
+    }
 
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
@@ -621,7 +656,7 @@ abstract class ReadNovelFull(
             return super.getChapterList(manga, context)
         }
 
-        val detailDoc = client.newCall(chapterListPageRequest(manga, 1)).execute().asJsoup()
+        val detailDoc = fetchChapterListPage(manga, 1)
         val pageCount = chapterListPageCount(detailDoc)
 
         // Fast mode (default): synthesize the list from the latest chapter number and a stable chapter
@@ -630,23 +665,39 @@ abstract class ReadNovelFull(
             synthesizeChapters(manga, siteChapterTotal(detailDoc))?.let { return it }
         }
 
-        // Chapter pages are oldest-first; keep fetch order, number by position, present newest-first.
-        val ascending = paginatedChapterList(
+        val chapters = paginatedChapterList(
             context = context,
             siteTotal = siteChapterTotal(detailDoc),
             assumedPageSize = chapterListPageSize,
             sortChapters = { it },
             fetchPage = { page ->
-                val doc = if (page == 1) {
-                    detailDoc
-                } else {
-                    client.newCall(chapterListPageRequest(manga, page)).execute().asJsoup()
-                }
+                val doc = if (page == 1) detailDoc else fetchChapterListPage(manga, page)
                 Pair(parseChapterPage(doc), page < pageCount)
             },
         )
-        ascending.forEachIndexed { i, ch -> ch.chapter_number = (i + 1).toFloat() }
-        return ascending.reversed()
+        // Number each chapter from its own sequence number and present newest-first, independent of
+        // the order pages arrive in (which varies by site and across the incremental merge).
+        chapters.forEach { it.chapter_number = chapterSequenceNumber(it) }
+        return chapters.sortedByDescending { it.chapter_number }
+    }
+
+    // Chapter sequence number taken from the trailing number of the chapter url (e.g. /chapter-3753),
+    // falling back to the first number in the name. Used to order the accurate list deterministically.
+    protected open fun chapterSequenceNumber(chapter: SChapter): Float {
+        CHAPTER_URL_NUMBER.find(chapter.url)?.groupValues?.get(1)?.toFloatOrNull()?.let { return it }
+        return CHAPTER_NAME_NUMBER.find(chapter.name)?.groupValues?.get(1)?.toFloatOrNull() ?: 0f
+    }
+
+    // Fetch one chapter-list page, failing loudly on a non-success response so a throttled/blocked
+    // page is never parsed as an empty list (which would silently drop a block of chapters).
+    private fun fetchChapterListPage(manga: SManga, page: Int): Document {
+        val response = client.newCall(chapterListPageRequest(manga, page)).execute()
+        if (!response.isSuccessful) {
+            val code = response.code
+            response.close()
+            throw Exception("Failed to load chapter list page $page (HTTP $code)")
+        }
+        return response.asJsoup()
     }
 
     private val accurateChapters get() = preferences.getBoolean(PREF_ACCURATE_CHAPTERS, false)
@@ -925,5 +976,7 @@ abstract class ReadNovelFull(
         private const val PREF_RAW_HTML = "pref_raw_html"
         private const val PREF_ACCURATE_CHAPTERS = "pref_accurate_chapters"
         private val DATE_FORMAT = SimpleDateFormat("MMM dd, yyyy", Locale.US)
+        private val CHAPTER_URL_NUMBER = Regex("""(\d+)\D*$""")
+        private val CHAPTER_NAME_NUMBER = Regex("""(\d+(?:\.\d+)?)""")
     }
 }
