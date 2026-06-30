@@ -1,11 +1,11 @@
 ﻿package eu.kanade.tachiyomi.novelextension.en.libread
 
 import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
+import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
-import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.util.asJsoup
 import okhttp3.Request
@@ -24,6 +24,28 @@ class LibRead :
     override val pageAsPath = true
 
     // LibRead uses /sort/ prefix; pagination handled by base class when pageAsPath=true
+
+    // Same engine as FreeWebNovel: ajax chapter endpoint is dead and the chapter list is
+    // paginated at /libread/<slug>?page=N (page 1 is the novel page); page count and total
+    // come from #indexselect ("C.1 - C.40" ranges).
+    override val noAjax = true
+    override val chaptersPaginated = true
+
+    override fun chapterListPageRequest(manga: SManga, page: Int): Request {
+        val base = baseUrl + manga.url.trimEnd('/')
+        val url = if (page <= 1) base else "$base?$pageParam=$page"
+        return GET(url, headers)
+    }
+
+    override fun chapterPageSelector() = "#idData li a"
+
+    // Chapter urls follow /libread/<slug>/chapter-0<N> (literal leading zero), so the fast list
+    // can be synthesized.
+    override fun chapterUrlFromNumber(manga: SManga, number: Int): String? {
+        val path = manga.url.trimEnd('/')
+        if (path.isBlank()) return null
+        return "$path/chapter-0$number"
+    }
 
     override fun popularMangaSelector() = "div.ul-list1 div.li, ul.ul-list2 li"
 
@@ -211,33 +233,6 @@ class LibRead :
         }
 
         return manga
-    }
-
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val document = response.asJsoup()
-
-        val chapters = document.select("select#idData option, ul#idData li a").mapIndexedNotNull { index, element ->
-            val chapterUrl = if (element.tagName() == "option") {
-                val value = element.attr("value")
-                if (value.isNotBlank() && value != "0") {
-                    if (value.startsWith("/")) value else "/$value"
-                } else {
-                    null
-                }
-            } else {
-                element.attr("href")
-            }
-
-            if (chapterUrl.isNullOrBlank()) return@mapIndexedNotNull null
-
-            SChapter.create().apply {
-                setUrlWithoutDomain(chapterUrl)
-                name = element.text().trim().ifEmpty { "Chapter ${index + 1}" }
-                chapter_number = (index + 1).toFloat()
-            }
-        }
-
-        return chapters.reversed()
     }
 
     // Content parsing
