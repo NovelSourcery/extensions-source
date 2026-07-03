@@ -174,7 +174,12 @@ class NovelFire :
         return if (path.startsWith("/")) path else "/$path"
     }
 
-    private fun absoluteUrl(path: String): String = baseUrl.trimEnd('/') + "/" + path.removePrefix(baseUrl).trimStart('/')
+    private fun absoluteUrl(path: String): String {
+        // Pass through already-absolute urls (a mirror base or a differing host would otherwise
+        // glue into baseUrl, producing a broken host like "novelfire.nethttps://...").
+        if (path.startsWith("http://") || path.startsWith("https://")) return path
+        return baseUrl.trimEnd('/') + "/" + path.trimStart('/')
+    }
 
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET(absoluteUrl(page.url), headers)).execute()
