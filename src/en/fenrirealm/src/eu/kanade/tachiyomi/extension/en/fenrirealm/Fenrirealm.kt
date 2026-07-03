@@ -15,10 +15,11 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.setAltTitles
+import keiyoushi.utils.setNumber
+import keiyoushi.utils.setVolume
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.descriptors.PrimitiveKind
 import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.descriptors.SerialDescriptor
@@ -117,6 +118,7 @@ object FlexibleStringSerializer : KSerializer<String?> {
     }
 }
 
+@Suppress("unused", "SpellCheckingInspection")
 class Fenrirealm :
     HttpSource(),
     NovelSource,
@@ -141,7 +143,7 @@ class Fenrirealm :
     private val apiBaseUrl = "$baseUrl/api/new/v2"
 
     // Chapter Number Prefix
-    private val titlePrefixRE = Regex("^chapter [0-9]+(?: [^[:alnum:]] |)", RegexOption.IGNORE_CASE)
+    private val titlePrefixRE = Regex("""^\s*Ch(?:apter|\.)?\s+\d+\s*(?:\W+\s+)?""", RegexOption.IGNORE_CASE)
 
     override fun popularMangaRequest(page: Int): Request = GET("$apiBaseUrl/home/popular-series", headers)
 
@@ -261,29 +263,28 @@ class Fenrirealm :
         val slug = response.request.url.pathSegments.dropLast(1).lastOrNull() ?: ""
 
         return chapters.sortedWith(
-            compareBy({ it.group?.index ?: 0 }, { it.number }),
+            compareBy({ it.group?.index ?: 0 }, { it.number }, { it.part ?: 1 }),
         ).mapIndexedNotNull { index, chapter ->
-            val isLocked = chapter.locked?.price?.let { it > 0 } ?: false
+            val isLocked = (chapter.locked?.price ?: 0) > 0
             if (hideLockedChapters && isLocked) return@mapIndexedNotNull null
 
             SChapter.create().apply {
                 url = buildString {
                     append("/series/$slug")
-                    chapter.group?.slug?.let {
-                        append("/$it")
-                    }
+                    chapter.group?.slug?.let { append("/$it") }
                     append("/chapter-${chapter.number}")
+                    chapter.part?.let { append("-$it") }
                 }
 
                 name = buildString {
                     if (isLocked) append("🔒 ")
 
-                    val group = chapter.group
-                    when {
-                        group?.abbr != null -> append("${group.abbr} Ch. ${chapter.number}")
-                        group?.index != null -> append("Vol. ${group.index} Ch. ${chapter.number}")
-                        else -> append("Chapter ${chapter.number}")
+                    when (val vol = chapter.group?.index) {
+                        null -> append("Chapter ${chapter.number}")
+                        else -> append("Vol. $vol Ch. ${chapter.number}")
                     }
+
+                    chapter.part?.let { append(".$it") }
 
                     chapter.title
                         ?.replace(titlePrefixRE, "")
@@ -291,8 +292,19 @@ class Fenrirealm :
                         ?.takeIf(String::isNotBlank)
                         ?.let { append(" - $it") }
                 }
+                @Suppress("DEPRECATION")
                 chapter_number = (index + 1).toFloat()
                 date_upload = parseDate(chapter.createdAt)
+
+                setNumber(
+                    buildString {
+                        append(chapter.number)
+                        chapter.part?.let { append(".$it") }
+                    },
+                )
+
+                chapter.group?.index
+                    ?.let { setVolume(it.toString()) }
             }
         }.asReversed()
     }
@@ -415,7 +427,7 @@ class Fenrirealm :
         val tags: List<TagDto>? = null,
         val cover: String? = null,
         @SerialName("cover_data_url") val coverDataUrl: String? = null,
-        val author: AuthorDto? = null,
+        @SerialName("user") val author: AuthorDto? = null,
         @SerialName("chapters_count") val chaptersCount: Int? = null,
         val status: String? = null,
         val subscribers: Int? = null,
@@ -445,9 +457,8 @@ class Fenrirealm :
             val apiDescription = this@NovelDto.description?.let { htmlToPlainTextPreserveBreaks(it) }.orEmpty()
 
             this.description = buildString {
-                val synopsis = apiDescription
-                if (synopsis.isNotBlank()) {
-                    append(synopsis)
+                if (apiDescription.isNotBlank()) {
+                    append(apiDescription)
                 }
                 chaptersCount?.let {
                     if (isNotEmpty()) append("\n")
@@ -484,8 +495,9 @@ class Fenrirealm :
                     append(note)
                 }
             }
-            this@NovelDto.author?.let { authorDto ->
-                this.author = authorDto.name ?: authorDto.username
+
+            this.author = this@NovelDto.author?.let { authorDto ->
+                authorDto.name ?: authorDto.username
             }
 
             genre = buildList {
@@ -638,6 +650,7 @@ class Fenrirealm :
     @Serializable
     data class ChapterApiDto(
         val number: Int,
+        val part: Int?,
         val title: String? = null,
         val slug: String? = null,
         val group: GroupDto? = null,
