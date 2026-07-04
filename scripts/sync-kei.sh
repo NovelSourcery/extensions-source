@@ -59,7 +59,7 @@ git checkout -b "$WORKBRANCH"
 
 echo
 echo "Changes to pull in ($LAST_SYNC..$TARGET, excluding src/ and lib-multisrc/):"
-git diff --stat --no-renames "$LAST_SYNC" "$TARGET" -- . "${EXCLUDE_PATHSPECS[@]}"
+git --no-pager diff --stat --no-renames "$LAST_SYNC" "$TARGET" -- . "${EXCLUDE_PATHSPECS[@]}"
 echo
 
 mapfile -d '' -t FILES < <(git diff -z --name-only --no-renames "$LAST_SYNC" "$TARGET" -- . "${EXCLUDE_PATHSPECS[@]}")
