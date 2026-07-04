@@ -368,6 +368,7 @@ class Konkon :
             throw Exception("Failed to fetch ${response.request.url}: ${response.code} ${response.message}")
         }
 
+        doc.body().text(body)
         return SiteParserRegistry.parse(doc, resolvedUrl, client, headers)
     }
 

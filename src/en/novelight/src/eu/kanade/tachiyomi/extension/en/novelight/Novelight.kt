@@ -15,6 +15,8 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.utils.formattedText
+import keiyoushi.utils.setNumber
+import keiyoushi.utils.setVolume
 import keiyoushi.utils.stripChapterNumberPrefix
 import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
@@ -111,6 +113,8 @@ class Novelight :
     @Serializable
     private class HtmlPayload(val html: String = "")
 
+    private val chapterNumberPattern: Regex = Regex("""^\s*(?:\d+\s*vol\.?\s*)?\d+\s*chapter\s*[-–—]?\s*""", RegexOption.IGNORE_CASE)
+
     override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
         val rawBody = client.newCall(GET(baseUrl + manga.url, headers)).execute().body.string()
         val detailDoc = Jsoup.parse(rawBody, baseUrl)
@@ -130,7 +134,7 @@ class Novelight :
             return context.existingChapters
         }
 
-        fun ajaxPage(sitePage: Int): List<SChapter> {
+        fun ajaxPage(sitePage: Int): List<ChapterDto> {
             val ajaxUrl = "$baseUrl/book/ajax/chapter-pagination".toHttpUrl().newBuilder()
                 .apply { if (csrf != null) addQueryParameter("csrfmiddlewaretoken", csrf) }
                 .addQueryParameter("book_id", bookId)
@@ -148,26 +152,39 @@ class Novelight :
                 val titleEl = a.selectFirst(".title")
                 val fullTitle = titleEl?.text()?.trim().orEmpty()
                 // The chapter number is embedded in the title, e.g. "130 chapter - Bronze Blood".
+                val volume = Regex("""(\d+)\s*vol\.""", RegexOption.IGNORE_CASE)
+                    .find(fullTitle)?.groupValues?.get(1)?.toIntOrNull()
                 val number = Regex("""(\d+)\s*chapter""", RegexOption.IGNORE_CASE)
-                    .find(fullTitle)?.groupValues?.get(1)?.toFloatOrNull() ?: -1f
+                    .find(fullTitle)?.groupValues?.get(1)?.toIntOrNull() ?: -1
                 val title = titleEl?.selectFirst("span")?.text()?.trim()
                     ?.takeIf { it.isNotBlank() }
                     ?: fullTitle
-                        .replace(Regex("""^\s*\d+\s*vol\.?\s*\d+\s*chapter\s*[-–—]?\s*""", RegexOption.IGNORE_CASE), "")
+                        .replace(chapterNumberPattern, "")
                         .stripChapterNumberPrefix()
                 val locked = a.selectFirst(".cost") != null
                 if (hideLocked && locked) return@mapNotNull null
                 val href = a.attr("href").ifBlank { return@mapNotNull null }
-                SChapter.create().apply {
-                    name = if (locked) "🔒 $title" else title
-                    url = "/" + href.trimStart('/')
-                    chapter_number = number
-                    date_upload = parseDate(a.selectFirst(".date")?.text()?.trim())
-                }
+                ChapterDto(
+                    name = buildString {
+                        if (locked) append("🔒 ")
+                        when (volume) {
+                            null -> append("Chapter $number")
+                            else -> append("Vol. $volume Ch. $number")
+                        }
+
+                        title.replace(chapterNumberPattern, "")
+                            .takeIf { !isNullOrBlank() }
+                            .let { append(" - $it") }
+                    },
+                    url = "/" + href.trimStart('/'),
+                    chapter = number,
+                    volume = volume,
+                    date = a.selectFirst(".date")?.text()?.trim(),
+                )
             }
         }
 
-        suspend fun ajaxPageRetry(sitePage: Int): List<SChapter> {
+        suspend fun ajaxPageRetry(sitePage: Int): List<ChapterDto> {
             repeat(3) {
                 try {
                     return ajaxPage(sitePage)
@@ -180,12 +197,27 @@ class Novelight :
 
         // Fetch pages sequentially with a small delay; concurrent/too-fast requests trip the
         // site's rate limiting and pages come back empty.
-        val chapters = mutableListOf<SChapter>()
+        val chapters = mutableListOf<ChapterDto>()
         for (p in 1..totalPages) {
             chapters += ajaxPageRetry(p)
             delay(100)
         }
-        return chapters.sortedBy { it.chapter_number }
+
+        return chapters.sortedWith(compareBy({ it.chapter }, { it.volume ?: 0 })).map {
+            SChapter.create().apply {
+                name = it.name
+                url = it.url
+                chapter_number = it.chapter.toFloat()
+                date_upload = parseDate(it.date)
+                scanlator = when (it.volume) {
+                    null -> "standalone"
+                    else -> "volume"
+                }
+
+                setNumber(it.chapter.toString())
+                it.volume?.let { setVolume(toString()) }
+            }
+        }.asReversed()
     }
 
     override fun chapterListParse(response: Response): List<SChapter> = emptyList()
@@ -240,4 +272,12 @@ class Novelight :
         private const val PREF_HIDE_LOCKED = "pref_hide_locked"
         private val DATE_FORMAT = SimpleDateFormat("dd.MM.yyyy", Locale.US)
     }
+
+    data class ChapterDto(
+        val name: String,
+        val url: String,
+        val chapter: Int,
+        val volume: Int?,
+        val date: String?,
+    )
 }
