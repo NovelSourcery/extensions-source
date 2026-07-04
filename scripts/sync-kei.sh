@@ -5,9 +5,12 @@ set -euo pipefail
 # (remote: kei), excluding extension source we don't want in our history
 # (src/, lib-multisrc/).
 #
-# Does NOT commit anything automatically. It fetches kei, applies the
-# relevant diff to the working tree/index, and updates .kei-sync, leaving
-# everything staged for manual review/splitting into commits.
+# Does NOT commit anything automatically. It fetches kei and applies each
+# changed file's diff independently, staging whatever applies cleanly (or
+# with 3-way conflict markers) and leaving genuinely unresolvable files
+# untouched, with their raw diff saved for manual merging. .kei-sync is
+# only advanced automatically when every file applied; otherwise you
+# advance it yourself once the leftovers are dealt with.
 #
 # The .kei-sync file (tracked in git) is the source of truth for "how far
 # we've synced" so it survives clones/fresh machines. The kei-sync/kei-last
@@ -19,6 +22,7 @@ REMOTE=kei
 BRANCH=main
 SYNC_FILE=.kei-sync
 EXCLUDE_PATHSPECS=(':!src' ':!lib-multisrc')
+REJECT_DIR="$(git rev-parse --git-dir 2>/dev/null || echo .git)/kei-sync-pending"
 
 cd "$(git rev-parse --show-toplevel)"
 
@@ -55,14 +59,12 @@ git checkout -b "$WORKBRANCH"
 
 echo
 echo "Changes to pull in ($LAST_SYNC..$TARGET, excluding src/ and lib-multisrc/):"
-git diff --stat "$LAST_SYNC" "$TARGET" -- . "${EXCLUDE_PATHSPECS[@]}"
+git diff --stat --no-renames "$LAST_SYNC" "$TARGET" -- . "${EXCLUDE_PATHSPECS[@]}"
 echo
 
-PATCH=$(mktemp)
-trap 'rm -f "$PATCH"' EXIT
-git diff "$LAST_SYNC" "$TARGET" -- . "${EXCLUDE_PATHSPECS[@]}" > "$PATCH"
+mapfile -d '' -t FILES < <(git diff -z --name-only --no-renames "$LAST_SYNC" "$TARGET" -- . "${EXCLUDE_PATHSPECS[@]}")
 
-if [[ ! -s "$PATCH" ]]; then
+if [[ ${#FILES[@]} -eq 0 ]]; then
     echo "No relevant changes outside excluded paths."
     echo "$TARGET" > "$SYNC_FILE"
     git add "$SYNC_FILE"
@@ -70,14 +72,39 @@ if [[ ! -s "$PATCH" ]]; then
     exit 0
 fi
 
-git apply --index --3way "$PATCH"
+rm -rf "$REJECT_DIR"
+APPLIED=()
+FAILED=()
 
-echo "$TARGET" > "$SYNC_FILE"
-git add "$SYNC_FILE"
-git tag -f kei-sync "$TARGET" >/dev/null
+for f in "${FILES[@]}"; do
+    if git diff --no-renames "$LAST_SYNC" "$TARGET" -- "$f" | git apply --index --3way - 2>/dev/null; then
+        APPLIED+=("$f")
+    else
+        FAILED+=("$f")
+        mkdir -p "$REJECT_DIR/$(dirname "$f")"
+        git diff --no-renames "$LAST_SYNC" "$TARGET" -- "$f" > "$REJECT_DIR/$f.patch"
+    fi
+done
 
 echo
-echo "Applied through $TARGET on branch $WORKBRANCH. Changes are staged, nothing committed."
-echo "Review and split into commits as usual, then open a PR."
+echo "Applied cleanly or with conflict markers: ${#APPLIED[@]} file(s)."
+
+if [[ ${#FAILED[@]} -eq 0 ]]; then
+    echo "$TARGET" > "$SYNC_FILE"
+    git add "$SYNC_FILE"
+    git tag -f kei-sync "$TARGET" >/dev/null
+    echo
+    echo "All files applied. Staged on branch $WORKBRANCH, nothing committed."
+    echo "Review (check for 3-way conflict markers with: git diff --check), split into commits, then open a PR."
+else
+    echo "Needs manual merge: ${#FAILED[@]} file(s):"
+    printf '  %s\n' "${FAILED[@]}"
+    echo
+    echo "Raw upstream diffs for these are saved under $REJECT_DIR/ for reference."
+    echo "$SYNC_FILE was NOT advanced (still $LAST_SYNC) since not everything applied."
+    echo "Once you've manually reconciled the files above, advance it yourself:"
+    echo "  echo $TARGET > $SYNC_FILE && git add $SYNC_FILE && git tag -f kei-sync $TARGET"
+fi
+
 echo
 echo "If this sync needs to be redone: git reset --hard kei-last, delete this branch, and re-run."
