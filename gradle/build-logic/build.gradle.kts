@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.samWithReceiver)
+    alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.spotless)
     `java-gradle-plugin`
 }
@@ -27,6 +28,8 @@ dependencies {
     compileOnly(gradleKotlinDsl())
     compileOnly(libs.android.gradle)
     compileOnly(libs.kotlin.gradle)
+    implementation(libs.ksp.gradle)
+    implementation(libs.kotlin.json)
     implementation(libs.spotless.gradle)
     implementation(libs.tapmoc.gradle)
 
@@ -46,8 +49,8 @@ gradlePlugin {
             implementationClass = "PluginAndroidBase"
         }
         register("extension") {
-            id = ns.plugins.extension.legacy.get().pluginId
-            implementationClass = "PluginExtensionLegacy"
+            id = ns.plugins.extension.get().pluginId
+            implementationClass = "PluginExtension"
         }
         register("library") {
             id = kei.plugins.library.get().pluginId
