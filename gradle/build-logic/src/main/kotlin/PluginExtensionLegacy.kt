@@ -1,6 +1,8 @@
 import com.android.build.api.dsl.ApplicationExtension
 import com.android.build.api.variant.ApplicationAndroidComponentsExtension
 import com.android.build.gradle.tasks.PackageAndroidArtifact
+import keiyoushi.gradle.extensions.KeiyoushiMultisrcExtension
+import keiyoushi.gradle.extensions.VALID_LIB_VERSIONS
 import keiyoushi.gradle.extensions.alias
 import keiyoushi.gradle.extensions.baseVersionCode
 import keiyoushi.gradle.extensions.compileOnly
@@ -32,12 +34,21 @@ class PluginExtensionLegacy : Plugin<Project> {
         }
 
         assertWithoutFlag(!extra.has("pkgNameSuffix")) { "Gradle configuration cannot contain 'pkgNameSuffix'" }
-        assertWithoutFlag(!extra.has("libVersion")) { "Gradle configuration cannot contain 'libVersion'" }
+        assertWithoutFlag(extra.has("libVersion")) { "Gradle configuration must contain 'libVersion'" }
+        assertWithoutFlag(libVersion in VALID_LIB_VERSIONS) {
+            "libVersion $libVersion is not supported. Supported versions: $VALID_LIB_VERSIONS"
+        }
 
         assertWithoutFlag(extName.max().code < 0x180) { "Extension name should be romanized" }
 
         val theme: Project? = if (extra.has("themePkg")) project(":lib-multisrc:$themePkg") else null
-        if (theme != null) evaluationDependsOn(theme.path)
+        if (theme != null) {
+            evaluationDependsOn(theme.path)
+            val themeLibVersion = theme.extensions.getByType(KeiyoushiMultisrcExtension::class.java).libVersion.get()
+            assertWithoutFlag(themeLibVersion == libVersion) {
+                "Multisrc libVersion ($themeLibVersion) and extension libVersion ($libVersion) must match."
+            }
+        }
 
         android {
             namespace = "eu.kanade.tachiyomi.novelextension"
@@ -59,7 +70,7 @@ class PluginExtensionLegacy : Plugin<Project> {
             defaultConfig {
                 applicationIdSuffix = project.parent?.name + "." + project.name
                 versionCode = if (theme == null) extVersionCode else theme.baseVersionCode + overrideVersionCode
-                versionName = "1.4.$versionCode"
+                versionName = "$libVersion.$versionCode"
                 base {
                     archivesName.set("tsundoku-$applicationIdSuffix-v$versionName")
                 }
@@ -70,7 +81,7 @@ class PluginExtensionLegacy : Plugin<Project> {
                     "nsfw" to if (isNsfw) 1 else 0,
                     "tachiyomix.name" to extName,
                     "tachiyomix.contentWarning" to if (isNsfw) 2 else 0,
-                    "tachiyomix.extensionLib" to "1.4",
+                    "tachiyomix.extensionLib" to libVersion,
                 )
                 if (theme != null && baseUrl.isNotEmpty()) {
                     val split = baseUrl.split("://")
@@ -143,7 +154,16 @@ class PluginExtensionLegacy : Plugin<Project> {
         dependencies {
             if (theme != null) implementation(theme) // Overrides core launcher icons
             implementation(project(":core"))
-            compileOnly(libs.bundles.common)
+        }
+
+        afterEvaluate {
+            dependencies {
+                if (libVersion == "1.6") {
+                    compileOnly(libs.bundles.common16)
+                } else {
+                    compileOnly(libs.bundles.common)
+                }
+            }
         }
 
         afterEvaluate {
@@ -171,6 +191,9 @@ private fun Project.base(block: BasePluginExtension.() -> Unit) {
 
 private val Project.extName: String
     get() = extra.get("extName") as String
+
+private val Project.libVersion: String
+    get() = extra.get("libVersion") as String
 
 private val Project.extVersionCode: Int
     get() = extra.get("extVersionCode") as Int

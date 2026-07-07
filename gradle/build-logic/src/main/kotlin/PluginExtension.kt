@@ -42,7 +42,7 @@ class PluginExtension : Plugin<Project> {
         }
 
         val keiyoushi = extensions.create("keiyoushi", KeiyoushiExtension::class.java)
-        keiyoushi.libVersion.convention("1.4")
+        keiyoushi.libVersion.convention("1.6")
         val applicationIdSuffix = "${project.parent?.name}.${project.name}"
 
         android {
