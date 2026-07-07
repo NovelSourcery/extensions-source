@@ -6,7 +6,7 @@ plugins {
 }
 
 baseVersionCode = 9
-libVersion = "1.4"
+libVersion = "1.6"
 
 dependencies {
     implementation(project(":lib:chapterutils"))
