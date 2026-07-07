@@ -128,7 +128,7 @@ class PluginExtensionLegacy : Plugin<Project> {
                 if (keepRules != null) {
                     val task = tasks.register<GenerateKeepRulesTask>("generate${variantName}KeepRules") {
                         this.applicationId.set(variant.applicationId)
-                        this.extClass.set(this@with.extClass)
+                        this.className.set(this@with.extClass)
                     }
                     keepRules.addGeneratedSourceDirectory(task) { it.outputDir }
                 }
