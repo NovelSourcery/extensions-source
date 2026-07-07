@@ -25,7 +25,7 @@ class PluginMultiSrc : Plugin<Project> {
         }
 
         val keiyoushi = extensions.create("keiyoushi", KeiyoushiMultisrcExtension::class.java)
-        keiyoushi.libVersion.convention("1.4")
+        keiyoushi.libVersion.convention("1.6")
 
         android {
             namespace = "eu.kanade.tachiyomi.multisrc.${project.name}"

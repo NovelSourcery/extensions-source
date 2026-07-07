@@ -14,6 +14,10 @@ var Project.baseVersionCode: Int
     get() = the<KeiyoushiMultisrcExtension>().baseVersionCode.get()
     set(value) { the<KeiyoushiMultisrcExtension>().baseVersionCode.set(value) }
 
+var Project.libVersion: String
+    get() = the<KeiyoushiMultisrcExtension>().libVersion.get()
+    set(value) { the<KeiyoushiMultisrcExtension>().libVersion.set(value) }
+
 internal fun Project.plugins(block: PluginManager.() -> Unit) {
     pluginManager.apply(block)
 }
