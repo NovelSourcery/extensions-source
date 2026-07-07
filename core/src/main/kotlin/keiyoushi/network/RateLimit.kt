@@ -69,6 +69,18 @@ fun OkHttpClient.Builder.rateLimit(
     shouldLimit: (HttpUrl) -> Boolean = { true },
 ): RateLimitBuilder = RateLimitBuilder(this, listOf(RateLimitRule(permits, period, interval, shouldLimit)))
 
+/**
+ * Convenience for a [eu.kanade.tachiyomi.source.RateLimited]-declaring source's self-throttle:
+ * up to [permits] requests within any [minimumDelayMillis] window, sliding. This is the fallback
+ * that keeps working even if the host app's own rate limiting is missing or disabled - bundled
+ * into this module means it's dexed into the extension's own APK, not the app's.
+ *
+ * Uses [permits]/[period] rather than [interval] deliberately: an [interval] floor would force a
+ * minimum gap between *every* dispatch regardless of the permits budget, which would silently
+ * defeat any permits value above 1 (every request would still wait out the full interval).
+ */
+fun OkHttpClient.Builder.rateLimit(minimumDelayMillis: Long, permits: Int = 1): RateLimitBuilder = rateLimit(permits = permits, period = minimumDelayMillis.milliseconds)
+
 internal class RateLimitRule(
     val permits: Int,
     val period: Duration,
