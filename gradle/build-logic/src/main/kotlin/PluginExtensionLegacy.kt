@@ -68,6 +68,9 @@ class PluginExtensionLegacy : Plugin<Project> {
                     "appName" to "Tsundoku: $extName",
                     "extClass" to extClass,
                     "nsfw" to if (isNsfw) 1 else 0,
+                    "tachiyomix.name" to extName,
+                    "tachiyomix.contentWarning" to if (isNsfw) 2 else 0,
+                    "tachiyomix.extensionLib" to "1.4",
                 )
                 if (theme != null && baseUrl.isNotEmpty()) {
                     val split = baseUrl.split("://")
