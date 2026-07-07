@@ -10,6 +10,10 @@ internal val Project.libs get() = the<LibrariesForLibs>()
 internal val Project.ns get() = the<LibrariesForNs>()
 internal val Project.kei get() = ns
 
+var Project.baseVersionCode: Int
+    get() = the<KeiyoushiMultisrcExtension>().baseVersionCode.get()
+    set(value) { the<KeiyoushiMultisrcExtension>().baseVersionCode.set(value) }
+
 internal fun Project.plugins(block: PluginManager.() -> Unit) {
     pluginManager.apply(block)
 }
