@@ -195,8 +195,17 @@ class PluginExtension : Plugin<Project> {
         dependencies {
             addProvider("implementation", keiyoushi.theme.map { project(":lib-multisrc:$it") })
             implementation(project(":core"))
-            compileOnly(libs.bundles.common)
             ksp(project(":compiler"))
+        }
+
+        afterEvaluate {
+            dependencies {
+                if (keiyoushi.libVersion.get() == "1.6") {
+                    compileOnly(libs.bundles.common16)
+                } else {
+                    compileOnly(libs.bundles.common)
+                }
+            }
         }
 
         afterEvaluate {

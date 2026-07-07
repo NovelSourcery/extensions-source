@@ -44,7 +44,6 @@ class PluginMultiSrc : Plugin<Project> {
         }
 
         dependencies {
-            compileOnly(libs.bundles.common)
             implementation(project(":core"))
         }
 
@@ -52,6 +51,14 @@ class PluginMultiSrc : Plugin<Project> {
             val libVersionValue = keiyoushi.libVersion.get()
             assertWithoutFlag(libVersionValue in VALID_LIB_VERSIONS) {
                 "libVersion $libVersionValue is not supported. Supported versions: $VALID_LIB_VERSIONS"
+            }
+
+            dependencies {
+                if (libVersionValue == "1.6") {
+                    compileOnly(libs.bundles.common16)
+                } else {
+                    compileOnly(libs.bundles.common)
+                }
             }
         }
     }
