@@ -49,8 +49,12 @@ gradlePlugin {
             implementationClass = "PluginAndroidBase"
         }
         register("extension") {
-            id = ns.plugins.extension.get().pluginId
+            id = ns.plugins.extension.asProvider().get().pluginId
             implementationClass = "PluginExtension"
+        }
+        register("extension-legacy") {
+            id = ns.plugins.extension.legacy.get().pluginId
+            implementationClass = "PluginExtensionLegacy"
         }
         register("library") {
             id = kei.plugins.library.get().pluginId
