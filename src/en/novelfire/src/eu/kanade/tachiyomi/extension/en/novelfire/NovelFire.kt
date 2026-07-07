@@ -9,6 +9,7 @@ import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
+import eu.kanade.tachiyomi.source.RateLimited
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -21,6 +22,7 @@ import keiyoushi.lib.chapterutils.checkCloudflare
 import keiyoushi.lib.chapterutils.paginatedChapterList
 import keiyoushi.lib.chapterutils.shouldReturnExisting
 import keiyoushi.lib.chapterutils.sortByChapterNumber
+import keiyoushi.network.rateLimit
 import keiyoushi.utils.tryParse
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -47,14 +49,25 @@ import java.text.SimpleDateFormat
 class NovelFire :
     HttpSource(),
     NovelSource,
-    ConfigurableSource {
+    ConfigurableSource,
+    RateLimited {
 
     override val name = "NovelFire"
     override val baseUrl = "https://novelfire.net"
     override val lang = "en"
     override val supportsLatest = true
 
-    override val client = network.client
+    // NovelFire actively detects and blocks rapid requests server-side (see
+    // NovelFireThrottlingError below), so this self-throttle is a real floor, not a formality -
+    // it keeps working even if the host app's own rate limiting is missing, disabled, or stripped
+    // by a hostile fork.
+    override val minimumDelayMillis = 1000L
+    override val recommendedDelayMillis = 1500L
+    override val recommendedPermits = 2
+
+    override val client = network.client.newBuilder()
+        .rateLimit(minimumDelayMillis, recommendedPermits)
+        .build()
     private val json: Json by injectLazy()
 
     override val isNovelSource = true
