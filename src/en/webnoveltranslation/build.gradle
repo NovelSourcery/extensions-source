@@ -1,4 +1,5 @@
 ext {
+    libVersion = '1.4'
     extName = 'WebNovel Translation'
     extClass = '.WebNovelTranslation'
     themePkg = 'madaranovel'

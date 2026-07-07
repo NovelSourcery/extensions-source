@@ -1,4 +1,5 @@
 ext {
+    libVersion = '1.4'
     extName = 'WeTried Translations'
     extClass = '.WeTriedTls'
     extVersionCode = 1

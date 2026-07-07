@@ -1,4 +1,5 @@
 ext {
+    libVersion = '1.4'
     extName = 'Bright Novels'
     extClass = '.BrightNovels'
     extVersionCode = 4

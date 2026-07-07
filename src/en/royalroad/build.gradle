@@ -1,4 +1,5 @@
 ext {
+    libVersion = '1.4'
     extName = 'Royal Road'
     extClass = '.RoyalRoad'
     extVersionCode = 3

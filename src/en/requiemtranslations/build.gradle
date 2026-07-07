@@ -1,4 +1,5 @@
 ext {
+    libVersion = '1.4'
     extName = 'Requiem Translations'
     extClass = '.RequiemTranslations'
     overrideVersionCode = 1
