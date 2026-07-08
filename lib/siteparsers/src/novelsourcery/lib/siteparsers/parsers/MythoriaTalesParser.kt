@@ -75,12 +75,23 @@ class MythoriaTalesParser : SiteParser {
         }
         if (chapterTitle.isEmpty()) chapterTitle = "Chapter $chapterNum"
 
-        val content = contentSegment
+        val lines = contentSegment
             // Convert markdown images to HTML before paragraph processing
             .replace(Regex("""!\[([^\]]*)\]\(([^)]+)\)"""), """<img src="$2" alt="$1">""")
             .lineSequence()
             .map { it.trim() }
             .filter { it.isNotEmpty() }
+            .fold(mutableListOf<String>()) { acc, line ->
+                // If the line starts with a lowercase letter, merge it with the previous item
+                if (acc.isNotEmpty() && line[0].isLowerCase() && !acc.last().startsWith("<img")) {
+                    acc[acc.lastIndex] = "${acc.last()} $line"
+                } else {
+                    acc.add(line)
+                }
+                acc
+            }
+
+        val content = lines
             .joinToString("\n") { line ->
                 // Don't wrap img tags in p tags
                 if (line.startsWith("<img")) line else "<p>$line</p>"
