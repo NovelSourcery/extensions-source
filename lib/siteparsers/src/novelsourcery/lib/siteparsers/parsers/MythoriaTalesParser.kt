@@ -75,12 +75,21 @@ class MythoriaTalesParser : SiteParser {
         }
         if (chapterTitle.isEmpty()) chapterTitle = "Chapter $chapterNum"
 
-        val content = contentSegment.lineSequence()
-            .map { it.trim() }
+        val content = contentSegment
+            // Convert markdown images to HTML before paragraph processing
+            .replace(Regex("""!\[([^\]]*)\]\(([^)]+)\)"""), """<img src="$2" alt="$1">""")
+            // Split on double newlines for paragraphs, single newlines are just line wrapping
+            .split(Regex("""\n\s*\n"""))
+            .map { it.trim().replace("\n", " ") }
             .filter { it.isNotEmpty() }
-            .joinToString("\n") { "<p>$it</p>" }
-            .replace(Regex("""\[dialogue\s+speaker="([^"]*)"\](.*?)\[/dialogue\]""", RegexOption.IGNORE_CASE), "$1: $2")
-            .replace(Regex("""\[sfx\].*?\[/sfx\]""", RegexOption.IGNORE_CASE), "")
+            .joinToString("\n") { para ->
+                if (para.startsWith("<img")) para else "<p>$para</p>"
+            }
+            .replace(
+                Regex("""\[dialogue\s+speaker="([^"]*)"\](.*?)\[/dialogue\]""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)),
+                "$1: $2",
+            )
+            .replace(Regex("""\[sfx\](.*?)\[/sfx\]""", RegexOption.IGNORE_CASE), "$1")
             .replace(Regex("""\[/?(dialogue|sfx)[^\]]*\]""", RegexOption.IGNORE_CASE), "")
 
         return combined(chapterTitle, content)
