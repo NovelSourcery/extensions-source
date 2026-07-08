@@ -78,12 +78,12 @@ class MythoriaTalesParser : SiteParser {
         val content = contentSegment
             // Convert markdown images to HTML before paragraph processing
             .replace(Regex("""!\[([^\]]*)\]\(([^)]+)\)"""), """<img src="$2" alt="$1">""")
-            // Split on double newlines for paragraphs, single newlines are just line wrapping
-            .split(Regex("""\n\s*\n"""))
-            .map { it.trim().replace("\n", " ") }
+            .lineSequence()
+            .map { it.trim() }
             .filter { it.isNotEmpty() }
-            .joinToString("\n") { para ->
-                if (para.startsWith("<img")) para else "<p>$para</p>"
+            .joinToString("\n") { line ->
+                // Don't wrap img tags in p tags
+                if (line.startsWith("<img")) line else "<p>$line</p>"
             }
             .replace(
                 Regex("""\[dialogue\s+speaker="([^"]*)"\](.*?)\[/dialogue\]""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)),
