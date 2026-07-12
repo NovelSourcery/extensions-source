@@ -42,7 +42,14 @@ set -euo pipefail
 #                                   already-incorporated upstream change,
 #                                   e.g. a proto field we added by hand --
 #                                   those never leave this bucket, judge by
-#                                   the printed diff size, not the label).
+#                                   the printed diff size, not the label --
+#                                   or, better, by the [marked: ...]
+#                                   annotation: if .git/kei-sync-decisions.jsonl
+#                                   exists (written by the kei-sync-vscode
+#                                   helper at the moment you actually
+#                                   resolve a conflict) and `jq` is
+#                                   installed, that real decision is used
+#                                   instead of a diff-size guess.
 #                                   If something should never be touched by
 #                                   sync again, put it in .kei-sync-ignore.
 #                                   Safe to re-run any time; makes no
@@ -73,14 +80,60 @@ EXCLUDE_PATHSPECS=(':!src' ':!lib-multisrc')
 GIT_DIR="$(git rev-parse --git-dir 2>/dev/null || echo .git)"
 REJECT_DIR="$GIT_DIR/kei-sync-pending"
 LOG_FILE="$GIT_DIR/kei-sync.log"
+DECISIONS_FILE="$GIT_DIR/kei-sync-decisions.jsonl"
+
+print_help() {
+    cat <<'EOF'
+Usage: scripts/sync-kei.sh [--status]
+
+Pulls shared code/build-system/library changes from upstream keiyoushi
+(remote: kei) into this fork, excluding extension source (src/,
+lib-multisrc/) and anything listed in .kei-sync-ignore.
+
+  (no args)   Apply mode. Applies each changed file's diff (clean apply,
+              3-way conflict markers, or left untouched with a saved
+              patch under .git/kei-sync-pending/ if it can't apply at
+              all). Commits the .kei-sync bump automatically once every
+              file at least applied. Creates a throwaway branch
+              kei-sync-<sha>; nothing is pushed.
+
+  --status    Read-only. Reports which pending files already match
+              upstream, are untouched, or diverge from both. Safe to
+              re-run any time; exits non-zero while anything's pending.
+
+  -h, --help  Show this help.
+
+Files:
+  .kei-sync                  Tracked. Last-synced kei/main commit.
+  .kei-sync-ignore            Tracked, optional. Paths permanently excluded
+                              from sync, one per line, '#' comments allowed.
+  .git/kei-sync-pending/      Untracked. Raw diffs (+stderr) for files that
+                              couldn't be applied at all, regenerated each run.
+  .git/kei-sync.log           Untracked. Timestamped record of every run.
+  .git/kei-sync-decisions.jsonl
+                              Untracked, optional. Written by the
+                              kei-sync-vscode helper; read by --status to
+                              annotate Diverged entries with your actual
+                              resolution decision instead of guessing from
+                              diff size.
+EOF
+}
 
 cd "$(git rev-parse --show-toplevel)"
 
 MODE=apply
-if [[ "${1:-}" == "--status" ]]; then
-    MODE=status
-elif [[ -n "${1:-}" ]]; then
-    echo "error: unknown argument '$1' (only --status is supported)" >&2
+case "${1:-}" in
+    "") ;;
+    --status) MODE=status ;;
+    -h|--help) print_help; exit 0 ;;
+    *)
+        echo "error: unknown argument '$1' (supported: --status, -h/--help)" >&2
+        exit 1
+        ;;
+esac
+
+if [[ -n "${2:-}" ]]; then
+    echo "error: unexpected extra argument '$2'" >&2
     exit 1
 fi
 
@@ -167,21 +220,50 @@ fi
 if [[ "$MODE" == status ]]; then
     mapfile -d '' -t FILES < <(git diff -z --name-only --no-renames "$LAST_SYNC" "$TARGET" -- . "${EXCLUDE_PATHSPECS[@]}")
 
+    HAVE_DECISIONS=0
+    if [[ -f "$DECISIONS_FILE" ]] && command -v jq >/dev/null 2>&1; then
+        HAVE_DECISIONS=1
+        STATUS_BRANCH=$(git branch --show-current)
+    fi
+
+    decision_annotation() {
+        # Prints "[marked: <decision> - <note>]" for the most recent
+        # matching-branch decision on path "$1", or nothing if there isn't
+        # one. .kei-sync-decisions.jsonl is written by the kei-sync-vscode
+        # helper at the moment a conflict is actually resolved -- when
+        # present, it's more trustworthy than guessing from diff size.
+        [[ "$HAVE_DECISIONS" -eq 1 ]] || return 0
+        local line
+        line=$(jq -c --arg p "$1" --arg b "$STATUS_BRANCH" \
+            'select(.path == $p and .syncBranch == $b)' "$DECISIONS_FILE" 2>/dev/null | tail -n1)
+        [[ -n "$line" ]] || return 0
+        local dec note
+        dec=$(jq -r '.decision' <<<"$line" 2>/dev/null)
+        note=$(jq -r '.note' <<<"$line" 2>/dev/null)
+        if [[ -n "$note" && "$note" != "null" ]]; then
+            echo " [marked: $dec - $note]"
+        else
+            echo " [marked: $dec]"
+        fi
+    }
+
     for f in "${FILES[@]}"; do
         if git diff --quiet "$TARGET" -- "$f" 2>/dev/null; then
             RESOLVED+=("$f")
         elif git diff --quiet "$LAST_SYNC" -- "$f" 2>/dev/null; then
             UNTOUCHED+=("$f")
         elif [[ -f "$f" ]] && grep -q '^<<<<<<< ' -- "$f" 2>/dev/null; then
-            DIVERGED+=("$f (unresolved conflict markers)")
+            DIVERGED+=("$f (unresolved conflict markers)$(decision_annotation "$f")")
         else
             # Small diffs here are often a fork customization living
             # alongside an already-incorporated upstream change (e.g. a
             # proto field we added by hand) -- those will never disappear
             # from this bucket, by design. Large diffs are more likely
-            # genuinely unresolved. Eyeball it, don't just trust the count.
+            # genuinely unresolved. Eyeball it, don't just trust the count
+            # -- or check for a [marked: ...] annotation, which reflects
+            # an actual decision instead of a guess.
             STAT=$(git diff --no-renames --numstat "$TARGET" -- "$f" 2>/dev/null | awk '{print "+"$1" -"$2" vs upstream"}')
-            DIVERGED+=("$f ($STAT)")
+            DIVERGED+=("$f ($STAT)$(decision_annotation "$f")")
         fi
     done
 
@@ -272,17 +354,21 @@ for f in "${FILES[@]}"; do
         continue
     fi
 
-    if git diff --no-renames "$LAST_SYNC" "$TARGET" -- "$f" | git apply --index --3way - 2>/dev/null; then
+    APPLY_ERR=$(mktemp)
+    if git diff --no-renames "$LAST_SYNC" "$TARGET" -- "$f" | git apply --index --3way - 2>"$APPLY_ERR"; then
         APPLIED+=("$f")
+        rm -f "$APPLY_ERR"
     elif [[ -n "$(git status --porcelain -- "$f")" ]]; then
         # git apply --3way exits non-zero even on a successful 3-way merge
         # with conflicts -- a dirty status here means it left usable
         # conflict markers in place rather than failing outright.
         CONFLICTED+=("$f")
+        rm -f "$APPLY_ERR"
     else
         FAILED+=("$f")
         mkdir -p "$REJECT_DIR/$(dirname "$f")"
         git diff --no-renames "$LAST_SYNC" "$TARGET" -- "$f" > "$REJECT_DIR/$f.patch"
+        mv "$APPLY_ERR" "$REJECT_DIR/$f.patch.err" 2>/dev/null || rm -f "$APPLY_ERR"
     fi
 done
 
