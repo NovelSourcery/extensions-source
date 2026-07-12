@@ -40,6 +40,18 @@ class KolNovel :
             it.select("p").sumOf { p -> p.text().length }
         } ?: return ""
 
+        // Remove English-only spam paragraphs (keep Arabic content)
+        content.select("p").forEach { p ->
+            val text = p.text()
+            if (text.isNotEmpty()) {
+                val arabicCount = text.count { it in '\u0600'..'\u06FF' || it in '\u0750'..'\u077F' || it in '\uFB50'..'\uFDFF' || it in '\uFE70'..'\uFEFF' }
+                val totalCount = text.replace("\\s".toRegex(), "").length
+                if (totalCount > 0 && arabicCount.toFloat() / totalCount < 0.2f) {
+                    p.remove()
+                }
+            }
+        }
+
         return content.html()
     }
 }
