@@ -1,4 +1,4 @@
-package keiyoushi.gradle.utils
+package io.github.keiyoushi.gradle.internal
 
 /**
  * Throws an [AssertionError] calculated by [lazyMessage] if the [value] is false.

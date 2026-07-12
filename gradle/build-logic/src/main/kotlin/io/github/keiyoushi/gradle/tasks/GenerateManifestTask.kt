@@ -1,7 +1,7 @@
-package keiyoushi.gradle.tasks
+package io.github.keiyoushi.gradle.tasks
 
-import ContentWarning
-import keiyoushi.gradle.extensions.DeeplinkFilter
+import io.github.keiyoushi.gradle.api.ContentWarning
+import io.github.keiyoushi.gradle.api.DeeplinkFilter
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.ListProperty
@@ -12,15 +12,12 @@ import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.TaskAction
 
 @CacheableTask
-abstract class GenerateExtensionManifestTask : DefaultTask() {
+abstract class GenerateManifestTask : DefaultTask() {
     @get:Input
     abstract val filters: ListProperty<DeeplinkFilter>
 
     @get:Input
     abstract val extensionName: Property<String>
-
-    @get:Input
-    abstract val className: Property<String>
 
     @get:Input
     abstract val contentWarning: Property<ContentWarning>
@@ -35,7 +32,7 @@ abstract class GenerateExtensionManifestTask : DefaultTask() {
     fun generate() {
         val filterList = filters.get()
         val name = extensionName.get().escapeXml()
-        val cls = className.get()
+        val cls = "ExtensionGenerated"
         val lib = extensionLib.get()
         val cw = contentWarning.get()
         val nsfw = if (cw == ContentWarning.SAFE) "0" else "1"
