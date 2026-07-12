@@ -1,0 +1,35 @@
+# Fork-only content that never exists upstream -- excluded from sync-kei.sh's
+# diff scope and its --status "local-only files" report. See:
+#   scripts/sync-kei.sh --help
+#
+# This is for PERMANENT exclusions only. For a one-off judgment call made
+# while resolving a specific sync, use the kei-sync-vscode helper instead
+# (scripts/kei-sync-vscode/), which records per-attempt decisions rather
+# than a standing exclusion.
+
+# Shared fork-only libraries (chapterutils, clipstudioreader, siteparsers,
+# synchrony, unpacker)
+lib
+
+# Fork-only sync tooling -- never exists in kei's tree
+scripts
+
+# Sync bookkeeping files -- obviously never exist upstream
+.kei-sync
+.kei-sync-ignore
+
+# Fork-only novel-specific core utilities and legacy DSL support
+core/src/main/AndroidManifest.xml
+core/src/main/kotlin/eu/kanade/tachiyomi/source/NovelSource.kt
+core/src/main/kotlin/eu/kanade/tachiyomi/source/SourceTracker.kt
+core/src/main/kotlin/keiyoushi/utils/ChapterName.kt
+core/src/main/kotlin/keiyoushi/utils/Jsoup.kt
+core/src/main/kotlin/keiyoushi/utils/SChapterExt.kt
+core/src/main/kotlin/keiyoushi/utils/SMangaExt.kt
+gradle/build-logic/src/main/kotlin/PluginExtensionLegacy.kt
+gradle/ns.versions.toml
+
+# Fork-only repo policy/config
+common.gradle
+.github/CODEOWNERS
+.github/workflows/stale_issue_moderator.yml

@@ -56,6 +56,20 @@ set -euo pipefail
 #                                   changes and exits non-zero while
 #                                   anything is still pending.
 #
+# Both modes also print, up front, every rename kei's history shows for this
+# range (using a low 10% similarity threshold -- default git rename detection
+# is 50%, which misses heavily-rewritten renames entirely, exactly the ones
+# most likely to carry fork customizations someone needs to re-port) and
+# every pure deletion (no matching replacement). For a rename whose old path
+# has local changes, the fork's own edit to that old file (just our changes,
+# not the whole file) is saved to
+# .git/kei-sync-pending/<oldpath>.fork-customizations.diff -- a ready-made
+# checklist of what to port into the new file, instead of having to
+# reconstruct it from memory. --status additionally compares the CURRENT
+# working tree (not just the pending range) against kei's tree to catch
+# files we're still carrying that no longer exist upstream at all -- usually
+# the old half of a rename that never got deleted.
+#
 # Both modes append a timestamped record (range, branch, per-file buckets)
 # to .git/kei-sync.log, so "what commit did I last run this against" is
 # always answerable without digging through branch names or reject-dir
@@ -76,7 +90,7 @@ REMOTE=kei
 BRANCH=main
 SYNC_FILE=.kei-sync
 IGNORE_FILE=.kei-sync-ignore
-EXCLUDE_PATHSPECS=(':!src' ':!lib-multisrc')
+IGNORE_PATHS=('src' 'lib-multisrc')
 GIT_DIR="$(git rev-parse --git-dir 2>/dev/null || echo .git)"
 REJECT_DIR="$GIT_DIR/kei-sync-pending"
 LOG_FILE="$GIT_DIR/kei-sync.log"
@@ -98,17 +112,27 @@ lib-multisrc/) and anything listed in .kei-sync-ignore.
               kei-sync-<sha>; nothing is pushed.
 
   --status    Read-only. Reports which pending files already match
-              upstream, are untouched, or diverge from both. Safe to
-              re-run any time; exits non-zero while anything's pending.
+              upstream, are untouched, or diverge from both, plus any files
+              you're still carrying that no longer exist upstream at all.
+              Safe to re-run any time; exits non-zero while anything's
+              pending.
 
   -h, --help  Show this help.
+
+Both modes print detected renames (10% similarity threshold -- catches
+heavily-rewritten renames default git detection misses) and pure deletions
+up front. For a rename with local changes on the old side, the fork's own
+edit to that file is saved separately so it's obvious what needs porting
+into the new file, instead of relying on memory.
 
 Files:
   .kei-sync                  Tracked. Last-synced kei/main commit.
   .kei-sync-ignore            Tracked, optional. Paths permanently excluded
                               from sync, one per line, '#' comments allowed.
   .git/kei-sync-pending/      Untracked. Raw diffs (+stderr) for files that
-                              couldn't be applied at all, regenerated each run.
+                              couldn't be applied at all, plus
+                              <path>.fork-customizations.diff for renames
+                              with local changes. Regenerated each run.
   .git/kei-sync.log           Untracked. Timestamped record of every run.
   .git/kei-sync-decisions.jsonl
                               Untracked, optional. Written by the
@@ -160,9 +184,37 @@ if [[ -f "$IGNORE_FILE" ]]; then
         line="${line#"${line%%[![:space:]]*}"}"
         line="${line%"${line##*[![:space:]]}"}"
         [[ -z "$line" ]] && continue
-        EXCLUDE_PATHSPECS+=(":!$line")
+        IGNORE_PATHS+=("$line")
     done < "$IGNORE_FILE"
 fi
+
+EXCLUDE_PATHSPECS=()
+for p in "${IGNORE_PATHS[@]}"; do
+    EXCLUDE_PATHSPECS+=(":!$p")
+done
+
+regex_escape() {
+    printf '%s' "$1" | sed 's/[.[\*^$()+?{}|\/]/\\&/g'
+}
+
+# True if "$1" is under (or exactly) one of IGNORE_PATHS.
+is_ignored_path() {
+    local p="$1" ig
+    for ig in "${IGNORE_PATHS[@]}"; do
+        [[ "$p" == "$ig" || "$p" == "$ig"/* ]] && return 0
+    done
+    return 1
+}
+
+filter_ignored() {
+    local result ig esc
+    result=$(cat)
+    for ig in "${IGNORE_PATHS[@]}"; do
+        esc=$(regex_escape "$ig")
+        result=$(grep -vE "^${esc}(/|\$)" <<< "$result" || true)
+    done
+    printf '%s\n' "$result"
+}
 
 ORIGINAL_BRANCH=$(git branch --show-current)
 LAST_SYNC=$(<"$SYNC_FILE")
@@ -206,6 +258,92 @@ write_log() {
     echo "Logged to $LOG_FILE"
 }
 
+# Renames are the highest-risk case: a low similarity threshold (kei's own
+# rename detection defaults to 50%, which misses heavily-rewritten renames
+# entirely -- exactly the ones most likely to carry fork customizations that
+# need manual porting) so a real rename shows up as a "revert to a bare
+# deletion patch" here without this report, easy to silently lose track of.
+report_renames_and_deletions() {
+    local raw
+    raw=$(git diff -M10% --name-status "$LAST_SYNC" "$TARGET" -- . "${EXCLUDE_PATHSPECS[@]}")
+    [[ -z "$raw" ]] && return 0
+
+    local renames=() pure_deletions=()
+    local rstatus rrest
+    while IFS=$'\t' read -r rstatus rrest; do
+        case "$rstatus" in
+            R*)
+                renames+=("$((10#${rstatus#R}))|${rrest%%$'\t'*}|${rrest#*$'\t'}")
+                ;;
+            D)
+                pure_deletions+=("$rrest")
+                ;;
+        esac
+    done <<< "$raw"
+
+    if [[ ${#renames[@]} -gt 0 ]]; then
+        echo "Renames detected upstream (${#renames[@]}) -- make sure both sides get handled:"
+        local r sim old new
+        for r in "${renames[@]}"; do
+            sim="${r%%|*}"; r="${r#*|}"
+            old="${r%%|*}"; new="${r#*|}"
+            if git diff --quiet "$LAST_SYNC" -- "$old" 2>/dev/null; then
+                echo "  $old -> $new (${sim}% similar, no local changes, applies automatically)"
+            else
+                mkdir -p "$REJECT_DIR/$(dirname "$old")"
+                git diff --no-renames "$LAST_SYNC" -- "$old" > "$REJECT_DIR/$old.fork-customizations.diff"
+                echo "  $old -> $new (${sim}% similar, HAS local fork customizations)"
+                echo "      our changes to the old file: $REJECT_DIR/$old.fork-customizations.diff -- port these into $new before deleting $old"
+            fi
+        done
+        echo
+    fi
+
+    if [[ ${#pure_deletions[@]} -gt 0 ]]; then
+        echo "Pure deletions upstream (${#pure_deletions[@]}, no matching replacement detected) -- consider deleting your copy too:"
+        printf '  %s\n' "${pure_deletions[@]}"
+        echo
+    fi
+}
+
+# Compares our CURRENT working tree (not just the pending sync range) against
+# kei's TARGET tree, to catch files we're still carrying that kei doesn't
+# have at all -- most often the "old half" of a rename that never got
+# deleted. Split into orphaned (existed in kei as of our last sync, so it's
+# very likely a leftover) vs. fork-original (never existed upstream, so it's
+# probably intentional -- but flagged so that's a conscious call, not an
+# accident, and so it can be added to .kei-sync-ignore if it should stay).
+report_local_only_files() {
+    local ours target last_sync
+    ours=$( (git ls-files --cached --others --exclude-standard) | while IFS= read -r f; do
+        [[ -e "$f" ]] && printf '%s\n' "$f"
+    done | filter_ignored | sort -u)
+    target=$(git ls-tree -r --name-only "$TARGET" | sort -u)
+    last_sync=$(git ls-tree -r --name-only "$LAST_SYNC" | sort -u)
+
+    local not_in_target orphaned fork_original
+    not_in_target=$(comm -23 <(printf '%s\n' "$ours") <(printf '%s\n' "$target"))
+    [[ -z "$not_in_target" ]] && return 0
+
+    orphaned=$(comm -12 <(printf '%s\n' "$not_in_target") <(printf '%s\n' "$last_sync"))
+    fork_original=$(comm -23 <(printf '%s\n' "$not_in_target") <(printf '%s\n' "$last_sync"))
+
+    if [[ -n "$orphaned" ]]; then
+        local -a orphaned_arr
+        mapfile -t orphaned_arr <<< "$orphaned"
+        echo "Orphaned (existed in kei as of our last sync point, gone from kei's tree now -- likely needs deleting):"
+        printf '  %s\n' "${orphaned_arr[@]}"
+        echo
+    fi
+    if [[ -n "$fork_original" ]]; then
+        local -a fork_original_arr
+        mapfile -t fork_original_arr <<< "$fork_original"
+        echo "Fork-original (never existed upstream at all -- confirm intentional, or add to $IGNORE_FILE):"
+        printf '  %s\n' "${fork_original_arr[@]}"
+        echo
+    fi
+}
+
 echo "Fetching $REMOTE..."
 git fetch "$REMOTE" --quiet
 
@@ -218,6 +356,8 @@ if [[ "$LAST_SYNC" == "$TARGET" ]]; then
 fi
 
 if [[ "$MODE" == status ]]; then
+    report_renames_and_deletions
+
     mapfile -d '' -t FILES < <(git diff -z --name-only --no-renames "$LAST_SYNC" "$TARGET" -- . "${EXCLUDE_PATHSPECS[@]}")
 
     HAVE_DECISIONS=0
@@ -279,8 +419,10 @@ if [[ "$MODE" == status ]]; then
         echo "Diverged (differs from both the old base and upstream): ${#DIVERGED[@]} file(s):"
         printf '  %s\n' "${DIVERGED[@]}"
     fi
-
     echo
+
+    report_local_only_files
+
     write_log "status-check"
 
     if [[ ${#UNTOUCHED[@]} -eq 0 && ${#DIVERGED[@]} -eq 0 ]]; then
@@ -307,7 +449,11 @@ else
     git checkout -q -b "$WORKBRANCH"
 fi
 
+rm -rf "$REJECT_DIR"
+
 echo
+report_renames_and_deletions
+
 echo "Changes to pull in ($LAST_SYNC..$TARGET, excluding src/, lib-multisrc/, and $IGNORE_FILE entries):"
 git --no-pager diff --stat --no-renames "$LAST_SYNC" "$TARGET" -- . "${EXCLUDE_PATHSPECS[@]}"
 echo
@@ -323,8 +469,6 @@ if [[ ${#FILES[@]} -eq 0 ]]; then
     write_log "synced (no relevant changes)"
     exit 0
 fi
-
-rm -rf "$REJECT_DIR"
 
 for f in "${FILES[@]}"; do
     # Binary files can't be 3-way merged textually. If our copy hasn't
