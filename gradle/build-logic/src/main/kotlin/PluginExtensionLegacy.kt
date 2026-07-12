@@ -1,17 +1,17 @@
 import com.android.build.api.dsl.ApplicationExtension
 import com.android.build.api.variant.ApplicationAndroidComponentsExtension
 import com.android.build.gradle.tasks.PackageAndroidArtifact
-import keiyoushi.gradle.extensions.KeiyoushiMultisrcExtension
-import keiyoushi.gradle.extensions.VALID_LIB_VERSIONS
-import keiyoushi.gradle.extensions.alias
-import keiyoushi.gradle.extensions.baseVersionCode
-import keiyoushi.gradle.extensions.compileOnly
-import keiyoushi.gradle.extensions.implementation
-import keiyoushi.gradle.extensions.libs
-import keiyoushi.gradle.extensions.ns
-import keiyoushi.gradle.extensions.plugins
-import keiyoushi.gradle.tasks.GenerateKeepRulesTask
-import keiyoushi.gradle.utils.assertWithoutFlag
+import io.github.keiyoushi.gradle.api.dsl.KeiyoushiThemeExtension
+import io.github.keiyoushi.gradle.internal.GenerateLegacyKeepRulesTask
+import io.github.keiyoushi.gradle.internal.VALID_LIB_VERSIONS
+import io.github.keiyoushi.gradle.internal.assertWithoutFlag
+import io.github.keiyoushi.gradle.internal.extensions.alias
+import io.github.keiyoushi.gradle.internal.extensions.baseVersionCode
+import io.github.keiyoushi.gradle.internal.extensions.compileOnly
+import io.github.keiyoushi.gradle.internal.extensions.implementation
+import io.github.keiyoushi.gradle.internal.extensions.libs
+import io.github.keiyoushi.gradle.internal.extensions.ns
+import io.github.keiyoushi.gradle.internal.extensions.plugins
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.plugins.BasePluginExtension
@@ -44,7 +44,7 @@ class PluginExtensionLegacy : Plugin<Project> {
         val theme: Project? = if (extra.has("themePkg")) project(":lib-multisrc:$themePkg") else null
         if (theme != null) {
             evaluationDependsOn(theme.path)
-            val themeLibVersion = theme.extensions.getByType(KeiyoushiMultisrcExtension::class.java).libVersion.get()
+            val themeLibVersion = theme.extensions.getByType(KeiyoushiThemeExtension::class.java).libVersion.get()
             assertWithoutFlag(themeLibVersion == libVersion) {
                 "Multisrc libVersion ($themeLibVersion) and extension libVersion ($libVersion) must match."
             }
@@ -140,7 +140,7 @@ class PluginExtensionLegacy : Plugin<Project> {
                 @Suppress("UnstableApiUsage")
                 val keepRules = variant.sources.keepRules
                 if (keepRules != null) {
-                    val task = tasks.register<GenerateKeepRulesTask>("generate${variantName}KeepRules") {
+                    val task = tasks.register<GenerateLegacyKeepRulesTask>("generate${variantName}KeepRules") {
                         this.applicationId.set(variant.applicationId)
                         this.className.set(this@with.extClass)
                     }
