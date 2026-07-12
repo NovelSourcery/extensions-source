@@ -287,7 +287,16 @@ report_renames_and_deletions() {
         for r in "${renames[@]}"; do
             sim="${r%%|*}"; r="${r#*|}"
             old="${r%%|*}"; new="${r#*|}"
-            if git diff --quiet "$LAST_SYNC" -- "$old" 2>/dev/null; then
+            if [[ ! -e "$old" ]]; then
+                # Already gone locally -- either auto-applied cleanly earlier,
+                # or already handled by hand. Nothing to diff; just sanity
+                # check the replacement actually exists.
+                if [[ -e "$new" ]]; then
+                    echo "  $old -> $new (${sim}% similar, already deleted locally)"
+                else
+                    echo "  $old -> $new (${sim}% similar, already deleted locally -- WARNING: $new doesn't exist either)"
+                fi
+            elif git diff --quiet "$LAST_SYNC" -- "$old" 2>/dev/null; then
                 echo "  $old -> $new (${sim}% similar, no local changes, applies automatically)"
             else
                 mkdir -p "$REJECT_DIR/$(dirname "$old")"
