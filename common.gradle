@@ -10,7 +10,7 @@ Project theme = ext.has("themePkg") ? project(":lib-multisrc:$themePkg") : null
 if (theme != null) evaluationDependsOn(theme.path)
 
 android {
-    compileSdk = AndroidConfig.compileSdk
+    compileSdk = 34
 
     namespace = "eu.kanade.tachiyomi.novelextension"
 
@@ -29,8 +29,8 @@ android {
     }
 
     defaultConfig {
-        minSdk = AndroidConfig.minSdk
-        targetSdk = AndroidConfig.targetSdk
+        minSdk = 21
+        targetSdk = 34
         applicationIdSuffix = project.parent.name + "." + project.name
         versionCode = theme == null ? extVersionCode : theme.baseVersionCode + overrideVersionCode
         versionName = "1.4.$versionCode"
