@@ -7,9 +7,17 @@
 # (scripts/kei-sync-vscode/), which records per-attempt decisions rather
 # than a standing exclusion.
 
-# Shared fork-only libraries (chapterutils, clipstudioreader, siteparsers,
-# synchrony, unpacker)
-lib
+# Shared fork-only libraries -- specific subdirs, not a blanket `lib`
+# exclusion, so any NEW lib/ content kei adds in the future still shows up
+# normally (we generally want kei's lib/ updates verbatim -- these are
+# libraries authored/borrowed as a group, not modified per-file the way our
+# own novel-specific bits are, so a name match here would mean we made it,
+# not that kei's version should be skipped).
+lib/chapterutils
+lib/clipstudioreader
+lib/siteparsers
+lib/synchrony
+lib/unpacker
 
 # Fork-only sync tooling -- never exists in kei's tree
 scripts
@@ -28,6 +36,12 @@ core/src/main/kotlin/keiyoushi/utils/SChapterExt.kt
 core/src/main/kotlin/keiyoushi/utils/SMangaExt.kt
 gradle/build-logic/src/main/kotlin/PluginExtensionLegacy.kt
 gradle/ns.versions.toml
+
+# kei's own kei.versions.toml -- we never carry this. Our fork registers the
+# "kei" version catalog name against gradle/ns.versions.toml instead (see
+# settings.gradle.kts), so kei-verbatim code that references the "kei"
+# catalog still resolves correctly without needing this file.
+gradle/kei.versions.toml
 
 # Fork-only repo policy/config
 common.gradle

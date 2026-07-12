@@ -85,9 +85,17 @@ set -euo pipefail
 # we've synced" so it survives clones/fresh machines. The kei-sync/kei-last
 # tags are just a local convenience derived from it for `git log`/`git diff`
 # against kei's own commit graph.
+#
+# Syncs pull up to a PINNED local branch (default: kei), not the live
+# kei/main tip -- that remote-tracking ref moves every time anyone fetches,
+# which makes "what am I about to pull in" a moving target. Advance the pin
+# yourself, on your own schedule:
+#   git fetch kei && git branch -f kei kei/main
+# Override which local ref to pin against with --branch <ref>.
 
 REMOTE=kei
-BRANCH=main
+UPSTREAM_BRANCH=main
+PIN_REF=kei
 SYNC_FILE=.kei-sync
 IGNORE_FILE=.kei-sync-ignore
 IGNORE_PATHS=('src' 'lib-multisrc')
@@ -98,7 +106,7 @@ DECISIONS_FILE="$GIT_DIR/kei-sync-decisions.jsonl"
 
 print_help() {
     cat <<'EOF'
-Usage: scripts/sync-kei.sh [--status]
+Usage: scripts/sync-kei.sh [--status] [--branch <ref>]
 
 Pulls shared code/build-system/library changes from upstream keiyoushi
 (remote: kei) into this fork, excluding extension source (src/,
@@ -117,6 +125,14 @@ lib-multisrc/) and anything listed in .kei-sync-ignore.
               Safe to re-run any time; exits non-zero while anything's
               pending.
 
+  --branch <ref>
+              Local ref to pull up to (default: kei). Deliberately NOT
+              kei/main -- that remote-tracking ref moves every time anyone
+              fetches, which makes it impossible to control when new
+              upstream commits become visible to a sync. Advance the pin
+              yourself when you're ready:
+                git fetch kei && git branch -f kei kei/main
+
   -h, --help  Show this help.
 
 Both modes print detected renames (10% similarity threshold -- catches
@@ -126,7 +142,8 @@ edit to that file is saved separately so it's obvious what needs porting
 into the new file, instead of relying on memory.
 
 Files:
-  .kei-sync                  Tracked. Last-synced kei/main commit.
+  .kei-sync                  Tracked. Last-synced commit (as of the pinned
+                              branch at the time of that sync).
   .kei-sync-ignore            Tracked, optional. Paths permanently excluded
                               from sync, one per line, '#' comments allowed.
   .git/kei-sync-pending/      Untracked. Raw diffs (+stderr) for files that
@@ -146,20 +163,21 @@ EOF
 cd "$(git rev-parse --show-toplevel)"
 
 MODE=apply
-case "${1:-}" in
-    "") ;;
-    --status) MODE=status ;;
-    -h|--help) print_help; exit 0 ;;
-    *)
-        echo "error: unknown argument '$1' (supported: --status, -h/--help)" >&2
-        exit 1
-        ;;
-esac
-
-if [[ -n "${2:-}" ]]; then
-    echo "error: unexpected extra argument '$2'" >&2
-    exit 1
-fi
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --status) MODE=status; shift ;;
+        --branch)
+            [[ -n "${2:-}" ]] || { echo "error: --branch requires a value" >&2; exit 1; }
+            PIN_REF="$2"
+            shift 2
+            ;;
+        -h|--help) print_help; exit 0 ;;
+        *)
+            echo "error: unknown argument '$1' (supported: --status, --branch <ref>, -h/--help)" >&2
+            exit 1
+            ;;
+    esac
+done
 
 if [[ "$MODE" == apply && -n "$(git status --porcelain)" ]]; then
     echo "error: working tree is not clean, commit or stash first." >&2
@@ -194,7 +212,7 @@ for p in "${IGNORE_PATHS[@]}"; do
 done
 
 regex_escape() {
-    printf '%s' "$1" | sed 's/[.[\*^$()+?{}|\/]/\\&/g'
+    printf '%s' "$1" | sed 's/[.[\*^$()+?{}|]/\\&/g'
 }
 
 # True if "$1" is under (or exactly) one of IGNORE_PATHS.
@@ -214,6 +232,27 @@ filter_ignored() {
         result=$(grep -vE "^${esc}(/|\$)" <<< "$result" || true)
     done
     printf '%s\n' "$result"
+}
+
+# True if the blob at "$1:$2" is byte-identical to the current working-tree
+# file at path "$2" (or both are absent). Deliberately NOT `git diff --quiet
+# <rev> -- <path>` -- that form only compares the commit against the INDEX,
+# so an untracked file (never `git add`ed -- exactly what a hand-recreated
+# rename target looks like right after a failed apply) reads as "doesn't
+# exist" even though it's sitting right there on disk with the right
+# content, silently misclassifying it.
+blob_matches_worktree() {
+    local rev="$1" path="$2"
+    local in_commit=1 on_disk=1
+    git cat-file -e "$rev:$path" 2>/dev/null && in_commit=0
+    [[ -e "$path" ]] && on_disk=0
+    if [[ $in_commit -ne 0 && $on_disk -ne 0 ]]; then
+        return 0
+    fi
+    if [[ $in_commit -ne 0 || $on_disk -ne 0 ]]; then
+        return 1
+    fi
+    diff -q <(git show "$rev:$path") "$path" >/dev/null 2>&1
 }
 
 ORIGINAL_BRANCH=$(git branch --show-current)
@@ -240,7 +279,7 @@ write_log() {
     {
         echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
         echo "mode: $MODE"
-        echo "remote: $REMOTE/$BRANCH"
+        echo "pin: $PIN_REF"
         echo "range: $LAST_SYNC..$TARGET"
         [[ -n "$WORKBRANCH" ]] && echo "workbranch: $WORKBRANCH"
         echo "status: $status"
@@ -296,7 +335,7 @@ report_renames_and_deletions() {
                 else
                     echo "  $old -> $new (${sim}% similar, already deleted locally -- WARNING: $new doesn't exist either)"
                 fi
-            elif git diff --quiet "$LAST_SYNC" -- "$old" 2>/dev/null; then
+            elif blob_matches_worktree "$LAST_SYNC" "$old"; then
                 echo "  $old -> $new (${sim}% similar, no local changes, applies automatically)"
             else
                 mkdir -p "$REJECT_DIR/$(dirname "$old")"
@@ -356,10 +395,35 @@ report_local_only_files() {
 echo "Fetching $REMOTE..."
 git fetch "$REMOTE" --quiet
 
-TARGET=$(git rev-parse "$REMOTE/$BRANCH")
+# A branch literally named the same as the remote (our default, "kei") is
+# genuinely ambiguous to bare `git rev-parse` -- resolve refs/heads/<ref>
+# explicitly so we always mean the local branch, never something under
+# refs/remotes/kei/*.
+if git rev-parse --verify --quiet "refs/heads/$PIN_REF" >/dev/null; then
+    PIN_RESOLVED="refs/heads/$PIN_REF"
+elif git rev-parse --verify --quiet "$PIN_REF" >/dev/null 2>/dev/null; then
+    PIN_RESOLVED="$PIN_REF"
+else
+    echo "error: '$PIN_REF' doesn't resolve to anything. It's meant to be a local branch you" >&2
+    echo "advance yourself, on your own schedule -- not the live $REMOTE/$UPSTREAM_BRANCH tip," >&2
+    echo "which moves every time anyone fetches. Bootstrap it once, then advance it whenever" >&2
+    echo "you're actually ready to pull in a new batch:" >&2
+    echo "  git branch $PIN_REF $REMOTE/$UPSTREAM_BRANCH" >&2
+    echo "  git branch -f $PIN_REF $REMOTE/$UPSTREAM_BRANCH   # to advance it later" >&2
+    exit 1
+fi
+
+TARGET=$(git rev-parse "$PIN_RESOLVED")
+
+BEHIND=$(git rev-list --count "$PIN_RESOLVED..$REMOTE/$UPSTREAM_BRANCH" 2>/dev/null || echo 0)
+if [[ "$BEHIND" -gt 0 ]]; then
+    echo "($PIN_REF is $BEHIND commit(s) behind the live $REMOTE/$UPSTREAM_BRANCH tip -- advance it"
+    echo " yourself with 'git branch -f $PIN_REF $REMOTE/$UPSTREAM_BRANCH' when you're ready for those.)"
+    echo
+fi
 
 if [[ "$LAST_SYNC" == "$TARGET" ]]; then
-    echo "Already up to date with $REMOTE/$BRANCH ($TARGET)."
+    echo "Already up to date with $PIN_REF ($TARGET)."
     write_log "up-to-date"
     exit 0
 fi
@@ -397,9 +461,9 @@ if [[ "$MODE" == status ]]; then
     }
 
     for f in "${FILES[@]}"; do
-        if git diff --quiet "$TARGET" -- "$f" 2>/dev/null; then
+        if blob_matches_worktree "$TARGET" "$f"; then
             RESOLVED+=("$f")
-        elif git diff --quiet "$LAST_SYNC" -- "$f" 2>/dev/null; then
+        elif blob_matches_worktree "$LAST_SYNC" "$f"; then
             UNTOUCHED+=("$f")
         elif [[ -f "$f" ]] && grep -q '^<<<<<<< ' -- "$f" 2>/dev/null; then
             DIVERGED+=("$f (unresolved conflict markers)$(decision_annotation "$f")")
@@ -411,7 +475,18 @@ if [[ "$MODE" == status ]]; then
             # genuinely unresolved. Eyeball it, don't just trust the count
             # -- or check for a [marked: ...] annotation, which reflects
             # an actual decision instead of a guess.
-            STAT=$(git diff --no-renames --numstat "$TARGET" -- "$f" 2>/dev/null | awk '{print "+"$1" -"$2" vs upstream"}')
+            if [[ -e "$f" ]] && git cat-file -e "$TARGET:$f" 2>/dev/null; then
+                # grep -c exits 1 (not an error) when the count is zero, which -- since this
+                # sits inside a variable assignment -- would otherwise abort the whole script
+                # under set -e the moment a file has zero pure additions or zero pure removals.
+                ADD_COUNT=$(diff <(git show "$TARGET:$f") "$f" 2>/dev/null | grep -c '^>' || true)
+                DEL_COUNT=$(diff <(git show "$TARGET:$f") "$f" 2>/dev/null | grep -c '^<' || true)
+                STAT="+$ADD_COUNT -$DEL_COUNT vs upstream"
+            elif [[ -e "$f" ]]; then
+                STAT="+$(wc -l < "$f") -0 vs upstream (new to us, not upstream)"
+            else
+                STAT="-$(git cat-file -p "$TARGET:$f" 2>/dev/null | wc -l) vs upstream (upstream has it, we don't)"
+            fi
             DIVERGED+=("$f ($STAT)$(decision_annotation "$f")")
         fi
     done
@@ -485,7 +560,7 @@ for f in "${FILES[@]}"; do
     # wholesale; otherwise it needs a human to pick between them.
     NUMSTAT_F1=$(git diff --no-renames --numstat "$LAST_SYNC" "$TARGET" -- "$f" | cut -f1)
     if [[ "$NUMSTAT_F1" == "-" ]]; then
-        if git diff --quiet "$LAST_SYNC" -- "$f" 2>/dev/null; then
+        if blob_matches_worktree "$LAST_SYNC" "$f"; then
             if git cat-file -e "$TARGET:$f" 2>/dev/null; then
                 mkdir -p "$(dirname "$f")"
                 git show "$TARGET:$f" > "$f"
