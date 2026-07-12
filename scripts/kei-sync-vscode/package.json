@@ -1,0 +1,26 @@
+{
+  "name": "kei-sync-helper",
+  "displayName": "Kei Sync Helper",
+  "description": "Local-only helper that records the actual decision made when resolving a conflict during extensions-source's kei-sync workflow, instead of scripts/sync-kei.sh --status having to guess from diff size afterward.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "extensionDependencies": [
+    "vscode.git"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "keiSync.finalize",
+        "title": "Kei Sync: Finalize"
+      }
+    ]
+  }
+}
