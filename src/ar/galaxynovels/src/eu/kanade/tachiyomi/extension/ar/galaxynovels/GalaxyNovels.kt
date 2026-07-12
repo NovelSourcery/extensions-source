@@ -101,7 +101,9 @@ class GalaxyNovels :
             SManga.create().apply {
                 this.title = title
                 url = link.attr("href").removePrefix(baseUrl)
-                thumbnail_url = card.selectFirst("img.wor-cover-img")?.attr("src").toAbsoluteUrl()
+                val img = card.selectFirst("img.wor-cover-img")
+                thumbnail_url = img?.attr("data-src")?.toAbsoluteUrl()
+                    ?: img?.attr("src")?.toAbsoluteUrl()
             }
         }
 
@@ -165,7 +167,8 @@ class GalaxyNovels :
                 SManga.create().apply {
                     this.title = title
                     url = relativeUrl
-                    thumbnail_url = imgElement?.attr("src").toAbsoluteUrl()
+                    thumbnail_url = imgElement?.attr("data-src")?.toAbsoluteUrl()
+                        ?: imgElement?.attr("src")?.toAbsoluteUrl()
                 }
             } else {
                 null
@@ -185,7 +188,9 @@ class GalaxyNovels :
         return SManga.create().apply {
             title = doc.selectFirst("h1")?.text()?.trim() ?: "No Title"
 
-            thumbnail_url = doc.selectFirst("img.wor-cover-img")?.attr("src").toAbsoluteUrl()
+            val img = doc.selectFirst("img.wor-cover-img")
+            thumbnail_url = img?.attr("data-src")?.toAbsoluteUrl()
+                ?: img?.attr("src")?.toAbsoluteUrl()
 
             author = doc.selectFirst(".wor-single-hero__meta-text span")?.text()?.trim()
 
