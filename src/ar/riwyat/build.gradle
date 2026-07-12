@@ -3,7 +3,7 @@ ext {
     extClass = '.Riwyat'
     themePkg = 'madaranovel'
     baseUrl = 'https://cenele.com'
-    overrideVersionCode = 2
+    overrideVersionCode = 3
     isNsfw = false
     isNovel = true
 }

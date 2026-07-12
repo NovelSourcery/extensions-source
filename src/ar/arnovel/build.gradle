@@ -3,7 +3,7 @@ ext {
     extClass = '.ArNovel'
     themePkg = 'madaranovel'
     baseUrl = 'https://ar-no.com'
-    overrideVersionCode = 1
+    overrideVersionCode = 2
     isNsfw = false
     isNovel = true
 }
