@@ -3,7 +3,7 @@ ext {
     extClass = '.KolNovel'
     themePkg = 'lightnovelwpnovel'
     baseUrl = 'https://kolnovel.com'
-    overrideVersionCode = 2
+    overrideVersionCode = 3
     isNsfw = false
     isNovel = true
 }
