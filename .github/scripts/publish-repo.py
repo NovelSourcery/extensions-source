@@ -35,9 +35,9 @@ REPO_APK_DIR.mkdir(parents=True, exist_ok=True)
 REPO_JAR_DIR.mkdir(parents=True, exist_ok=True)
 REPO_ICON_DIR.mkdir(parents=True, exist_ok=True)
 
-APK_BASE_URL = "https://raw.githubusercontent.com/novelsourcery/extensions/refs/heads/repo/apk"
-JAR_BASE_URL = "https://raw.githubusercontent.com/novelsourcery/extensions/refs/heads/repo/jar"
-ICON_BASE_URL = "https://raw.githubusercontent.com/novelsourcery/extensions/refs/heads/repo/icon"
+APK_BASE_URL = "https://cdn.jsdelivr.net/gh/novelsourcery/extensions@repo/apk"
+JAR_BASE_URL = "https://cdn.jsdelivr.net/gh/novelsourcery/extensions@repo/jar"
+ICON_BASE_URL = "https://cdn.jsdelivr.net/gh/novelsourcery/extensions@repo/icon"
 
 to_delete: list[str] = json.loads(sys.argv[1])
 
