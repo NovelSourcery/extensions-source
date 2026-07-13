@@ -12,8 +12,25 @@
 # or the shorter rule will partially consume the longer one's match first.
 # '#' starts a comment only at the beginning of a line; empty lines ignored.
 
-keiyoushi/extensions-source	novelsourcery/extensions-source
-keiyoushi/extensions	novelsourcery/extensions
+# Matching is case-insensitive (see apply_rewrite), so a single rule covers
+# e.g. both "keiyoushi/..." and "Keiyoushi/..."; replacement text is always
+# output exactly as written below regardless of which casing matched.
+
+# The real org is "NovelSourcery" (capitalized) -- that's the casing used
+# in plain github.com/... links (issue templates, CONTRIBUTING.md). The
+# lowercase "novelsourcery" below is deliberately separate: confirmed fine
+# for raw.githubusercontent.com/jsdelivr/github.io/github.repository-yaml-
+# comparison URL types specifically, not a casing mistake to "fix" into
+# matching the org name. Each org-name rule below is scoped to the specific
+# surrounding context it's known correct in (a domain prefix, or the
+# `github.repository ==` comparison) rather than matching the bare
+# "keiyoushi/..." substring everywhere -- an unscoped rule can only pick one
+# output casing, but this string legitimately needs different casing in
+# different contexts, so a generic rule is guaranteed to be wrong somewhere.
+keiyoushi extension	NovelSourcery extension
+github\.com/keiyoushi/extensions-source	github.com/NovelSourcery/extensions-source
+github\.com/keiyoushi/extensions	github.com/NovelSourcery/extensions
+github\.repository == 'keiyoushi/extensions-source'	github.repository == 'novelsourcery/extensions-source'
 156378334\+keiyoushi-bot@users\.noreply\.github\.com
 keiyoushi-bot	github-actions
 cdn\.jsdelivr\.net/gh/keiyoushi	cdn.jsdelivr.net/gh/novelsourcery
