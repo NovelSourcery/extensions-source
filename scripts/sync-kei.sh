@@ -98,6 +98,7 @@ UPSTREAM_BRANCH=main
 PIN_REF=kei
 SYNC_FILE=.kei-sync
 IGNORE_FILE=.kei-sync-ignore
+REWRITE_FILE=.kei-sync-rewrite
 IGNORE_PATHS=('src' 'lib-multisrc')
 GIT_DIR="$(git rev-parse --git-dir 2>/dev/null || echo .git)"
 REJECT_DIR="$GIT_DIR/kei-sync-pending"
@@ -210,6 +211,89 @@ EXCLUDE_PATHSPECS=()
 for p in "${IGNORE_PATHS[@]}"; do
     EXCLUDE_PATHSPECS+=(":!$p")
 done
+
+# Permanent local overrides (repo name, product branding, signing key, CDN
+# URLs, ...) that live on the same lines upstream routinely touches for its
+# own reasons (e.g. its own version-bump commits). Without this, every such
+# commit re-triggers a conflict on a line whose resolution is always "keep
+# ours" -- diff-context tricks can't fix it because the *target* line itself
+# is what changed on both sides. REWRITE_RULES holds pattern/replacement
+# pairs (extended regex, applied in file order -- put longer/more-specific
+# patterns first so a shorter pattern doesn't consume part of a longer one's
+# match first); RSEP is a delimiter unlikely to appear in a pattern or
+# replacement (unlike '/' or '@', which show up in URLs and emails).
+REWRITE_RULES=()
+RSEP=$'\x01'
+if [[ -f "$REWRITE_FILE" ]]; then
+    while IFS=$'\t' read -r pattern replacement || [[ -n "$pattern" ]]; do
+        [[ -z "$pattern" || "$pattern" == \#* ]] && continue
+        REWRITE_RULES+=("$pattern" "$replacement")
+    done < "$REWRITE_FILE"
+fi
+
+# Applies REWRITE_RULES to stdin, in order. Pass-through if there are none.
+apply_rewrite() {
+    if [[ ${#REWRITE_RULES[@]} -eq 0 ]]; then
+        cat
+        return
+    fi
+    local cmd=(sed -E) i=0
+    while [[ $i -lt ${#REWRITE_RULES[@]} ]]; do
+        cmd+=(-e "s${RSEP}${REWRITE_RULES[$i]}${RSEP}${REWRITE_RULES[$((i+1))]}${RSEP}g")
+        i=$((i+2))
+    done
+    "${cmd[@]}"
+}
+
+# Patch for path "$1" to feed into `git apply`, computed between LAST_SYNC
+# and TARGET. When REWRITE_RULES is empty this is just the plain git diff
+# (identical to the old behavior). Otherwise both blobs are piped through
+# apply_rewrite first, so a hunk that only exists because of a permanently-
+# overridden value (see .kei-sync-rewrite) never gets generated at all --
+# handles missing-on-either-side (added/deleted) blobs correctly. Prints
+# nothing if the rewritten blobs are identical (i.e. the only difference was
+# something we've permanently overridden).
+build_patch() {
+    local f="$1"
+    if [[ ${#REWRITE_RULES[@]} -eq 0 ]]; then
+        git diff --no-renames "$LAST_SYNC" "$TARGET" -- "$f"
+        return
+    fi
+    local tmp_base tmp_target base_exists=1 target_exists=1
+    local base_sha="0000000000000000000000000000000000000000"
+    local target_sha="0000000000000000000000000000000000000000"
+    tmp_base=$(mktemp)
+    tmp_target=$(mktemp)
+    if git cat-file -e "$LAST_SYNC:$f" 2>/dev/null; then
+        git show "$LAST_SYNC:$f" | apply_rewrite > "$tmp_base"
+        base_exists=0
+        # --3way needs a real blob it can look up by SHA to use as the merge
+        # base -- a bare unified diff (no `index` line) makes git apply fall
+        # back to strict context-matched application, which either succeeds
+        # outright or fails hard with no conflict markers at all, instead of
+        # a proper 3-way merge. Writing the rewritten content as a loose
+        # object (harmless, unreferenced by any tree/commit) gives it one.
+        base_sha=$(git hash-object -w -- "$tmp_base")
+    fi
+    if git cat-file -e "$TARGET:$f" 2>/dev/null; then
+        git show "$TARGET:$f" | apply_rewrite > "$tmp_target"
+        target_exists=0
+        target_sha=$(git hash-object -w -- "$tmp_target")
+    fi
+    if [[ "$base_sha" != "$target_sha" ]]; then
+        printf 'diff --git a/%s b/%s\n' "$f" "$f"
+        if [[ $base_exists -ne 0 ]]; then
+            printf 'new file mode 100644\n'
+        elif [[ $target_exists -ne 0 ]]; then
+            printf 'deleted file mode 100644\n'
+        fi
+        printf 'index %s..%s 100644\n' "${base_sha:0:12}" "${target_sha:0:12}"
+        if [[ $base_exists -eq 0 ]]; then printf -- '--- a/%s\n' "$f"; else printf -- '--- /dev/null\n'; fi
+        if [[ $target_exists -eq 0 ]]; then printf '+++ b/%s\n' "$f"; else printf '+++ /dev/null\n'; fi
+        diff -u "$tmp_base" "$tmp_target" | tail -n +3 || true
+    fi
+    rm -f "$tmp_base" "$tmp_target"
+}
 
 regex_escape() {
     printf '%s' "$1" | sed 's/[.[\*^$()+?{}|]/\\&/g'
@@ -554,6 +638,42 @@ if [[ ${#FILES[@]} -eq 0 ]]; then
     exit 0
 fi
 
+# Collapses any '<<<<<<< ours ... ======= ... >>>>>>> theirs' block in "$1"
+# whose two sides are byte-identical. git's 3-way merge can flag a block as
+# conflicting purely from how it aligned surrounding hunks -- e.g. a
+# repeated boilerplate example appearing more than once nearby in the same
+# file -- even when the text actually offered on both sides is identical,
+# which just costs a manual resolution for zero information. Real conflicts
+# (different content) are left untouched. Always rewrites the file with
+# every collapsible block resolved, even if a different block in the same
+# file is a genuine conflict left as markers -- no reason to make someone
+# re-review a settled block just because a sibling block still needs a
+# human. Returns 0 if nothing genuine was left after collapsing, 1 if real
+# conflict markers remain.
+collapse_identical_conflicts() {
+    local f="$1" tmp
+    tmp=$(mktemp)
+    awk '
+        BEGIN { state = 0 }
+        /^<<<<<<< ours$/ { state = 1; ours = ""; next }
+        state == 1 && /^=======$/ { state = 2; theirs = ""; next }
+        state == 1 { ours = ours $0 "\n"; next }
+        state == 2 && /^>>>>>>> theirs$/ {
+            if (ours == theirs) {
+                printf "%s", ours
+            } else {
+                printf "<<<<<<< ours\n%s=======\n%s>>>>>>> theirs\n", ours, theirs
+            }
+            state = 0
+            next
+        }
+        state == 2 { theirs = theirs $0 "\n"; next }
+        { print }
+    ' "$f" > "$tmp"
+    mv "$tmp" "$f"
+    ! grep -q '^<<<<<<< ' "$f"
+}
+
 for f in "${FILES[@]}"; do
     # Binary files can't be 3-way merged textually. If our copy hasn't
     # diverged from kei's last-synced version, just take upstream's version
@@ -582,20 +702,45 @@ for f in "${FILES[@]}"; do
         continue
     fi
 
+    # A file upstream deleted that we'd *already* deleted locally (e.g. one
+    # half of a rename we already hand-ported) has no index entry for
+    # --3way to reconstruct "ours" from, so it hard-fails with no useful
+    # markers even though there's genuinely nothing left to do here.
+    if ! git cat-file -e "$TARGET:$f" 2>/dev/null && [[ ! -e "$f" ]] && [[ -z "$(git status --porcelain -- "$f")" ]]; then
+        APPLIED+=("$f (no-op: already deleted locally, matches upstream deletion)")
+        continue
+    fi
+
     APPLY_ERR=$(mktemp)
-    if git diff --no-renames "$LAST_SYNC" "$TARGET" -- "$f" | git apply --index --3way - 2>"$APPLY_ERR"; then
+    PATCH_TMP=$(mktemp)
+    build_patch "$f" > "$PATCH_TMP"
+    if [[ ! -s "$PATCH_TMP" ]]; then
+        # The rewrite table (see .kei-sync-rewrite) fully accounted for the
+        # only difference in this range -- e.g. a permanently-overridden
+        # branding/version line -- so there's nothing left to apply; the
+        # worktree is already the correct resolution, whatever it says.
+        APPLIED+=("$f (no-op: only difference was a permanent override)")
+        rm -f "$APPLY_ERR" "$PATCH_TMP"
+        continue
+    fi
+    if git apply --index --3way - < "$PATCH_TMP" 2>"$APPLY_ERR"; then
         APPLIED+=("$f")
-        rm -f "$APPLY_ERR"
+        rm -f "$APPLY_ERR" "$PATCH_TMP"
     elif [[ -n "$(git status --porcelain -- "$f")" ]]; then
         # git apply --3way exits non-zero even on a successful 3-way merge
         # with conflicts -- a dirty status here means it left usable
         # conflict markers in place rather than failing outright.
-        CONFLICTED+=("$f")
-        rm -f "$APPLY_ERR"
+        if collapse_identical_conflicts "$f"; then
+            git add -- "$f"
+            APPLIED+=("$f (auto-resolved: both sides identical)")
+        else
+            CONFLICTED+=("$f")
+        fi
+        rm -f "$APPLY_ERR" "$PATCH_TMP"
     else
         FAILED+=("$f")
         mkdir -p "$REJECT_DIR/$(dirname "$f")"
-        git diff --no-renames "$LAST_SYNC" "$TARGET" -- "$f" > "$REJECT_DIR/$f.patch"
+        mv "$PATCH_TMP" "$REJECT_DIR/$f.patch"
         mv "$APPLY_ERR" "$REJECT_DIR/$f.patch.err" 2>/dev/null || rm -f "$APPLY_ERR"
     fi
 done
