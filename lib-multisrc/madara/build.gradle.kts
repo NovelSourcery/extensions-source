@@ -1,5 +1,5 @@
-import keiyoushi.gradle.extensions.baseVersionCode
-import keiyoushi.gradle.extensions.libVersion
+import io.github.keiyoushi.gradle.internal.extensions.baseVersionCode
+import io.github.keiyoushi.gradle.internal.extensions.libVersion
 
 plugins {
     alias(kei.plugins.multisrc)
