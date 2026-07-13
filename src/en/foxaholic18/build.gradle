@@ -1,4 +1,5 @@
 ext {
+    libVersion = '1.4'
     extName = 'Foxaholic 18+'
     extClass = '.Foxaholic18'
     themePkg = 'madaranovel'

@@ -1,4 +1,5 @@
 ext {
+    libVersion = '1.4'
     extName = 'Divine Dao Library'
     extClass = '.DivineDaoLibrary'
     themePkg = 'fictioneer'

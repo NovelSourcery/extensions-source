@@ -1,15 +1,17 @@
 import com.android.build.api.dsl.ApplicationExtension
 import com.android.build.api.variant.ApplicationAndroidComponentsExtension
 import com.android.build.gradle.tasks.PackageAndroidArtifact
-import keiyoushi.gradle.extensions.alias
-import keiyoushi.gradle.extensions.baseVersionCode
-import keiyoushi.gradle.extensions.compileOnly
-import keiyoushi.gradle.extensions.implementation
-import keiyoushi.gradle.extensions.libs
-import keiyoushi.gradle.extensions.ns
-import keiyoushi.gradle.extensions.plugins
-import keiyoushi.gradle.tasks.GenerateKeepRulesTask
-import keiyoushi.gradle.utils.assertWithoutFlag
+import io.github.keiyoushi.gradle.api.dsl.KeiyoushiThemeExtension
+import io.github.keiyoushi.gradle.internal.GenerateLegacyKeepRulesTask
+import io.github.keiyoushi.gradle.internal.VALID_LIB_VERSIONS
+import io.github.keiyoushi.gradle.internal.assertWithoutFlag
+import io.github.keiyoushi.gradle.internal.extensions.alias
+import io.github.keiyoushi.gradle.internal.extensions.baseVersionCode
+import io.github.keiyoushi.gradle.internal.extensions.compileOnly
+import io.github.keiyoushi.gradle.internal.extensions.implementation
+import io.github.keiyoushi.gradle.internal.extensions.libs
+import io.github.keiyoushi.gradle.internal.extensions.ns
+import io.github.keiyoushi.gradle.internal.extensions.plugins
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.plugins.BasePluginExtension
@@ -32,12 +34,21 @@ class PluginExtensionLegacy : Plugin<Project> {
         }
 
         assertWithoutFlag(!extra.has("pkgNameSuffix")) { "Gradle configuration cannot contain 'pkgNameSuffix'" }
-        assertWithoutFlag(!extra.has("libVersion")) { "Gradle configuration cannot contain 'libVersion'" }
+        assertWithoutFlag(extra.has("libVersion")) { "Gradle configuration must contain 'libVersion'" }
+        assertWithoutFlag(libVersion in VALID_LIB_VERSIONS) {
+            "libVersion $libVersion is not supported. Supported versions: $VALID_LIB_VERSIONS"
+        }
 
         assertWithoutFlag(extName.max().code < 0x180) { "Extension name should be romanized" }
 
         val theme: Project? = if (extra.has("themePkg")) project(":lib-multisrc:$themePkg") else null
-        if (theme != null) evaluationDependsOn(theme.path)
+        if (theme != null) {
+            evaluationDependsOn(theme.path)
+            val themeLibVersion = theme.extensions.getByType(KeiyoushiThemeExtension::class.java).libVersion.get()
+            assertWithoutFlag(themeLibVersion == libVersion) {
+                "Multisrc libVersion ($themeLibVersion) and extension libVersion ($libVersion) must match."
+            }
+        }
 
         android {
             namespace = "eu.kanade.tachiyomi.novelextension"
@@ -59,7 +70,7 @@ class PluginExtensionLegacy : Plugin<Project> {
             defaultConfig {
                 applicationIdSuffix = project.parent?.name + "." + project.name
                 versionCode = if (theme == null) extVersionCode else theme.baseVersionCode + overrideVersionCode
-                versionName = "1.4.$versionCode"
+                versionName = "$libVersion.$versionCode"
                 base {
                     archivesName.set("tsundoku-$applicationIdSuffix-v$versionName")
                 }
@@ -68,6 +79,9 @@ class PluginExtensionLegacy : Plugin<Project> {
                     "appName" to "Tsundoku: $extName",
                     "extClass" to extClass,
                     "nsfw" to if (isNsfw) 1 else 0,
+                    "tachiyomix.name" to extName,
+                    "tachiyomix.contentWarning" to if (isNsfw) 2 else 0,
+                    "tachiyomix.extensionLib" to libVersion,
                 )
                 if (theme != null && baseUrl.isNotEmpty()) {
                     val split = baseUrl.split("://")
@@ -126,9 +140,9 @@ class PluginExtensionLegacy : Plugin<Project> {
                 @Suppress("UnstableApiUsage")
                 val keepRules = variant.sources.keepRules
                 if (keepRules != null) {
-                    val task = tasks.register<GenerateKeepRulesTask>("generate${variantName}KeepRules") {
+                    val task = tasks.register<GenerateLegacyKeepRulesTask>("generate${variantName}KeepRules") {
                         this.applicationId.set(variant.applicationId)
-                        this.extClass.set(this@with.extClass)
+                        this.className.set(this@with.extClass)
                     }
                     keepRules.addGeneratedSourceDirectory(task) { it.outputDir }
                 }
@@ -140,7 +154,16 @@ class PluginExtensionLegacy : Plugin<Project> {
         dependencies {
             if (theme != null) implementation(theme) // Overrides core launcher icons
             implementation(project(":core"))
-            compileOnly(libs.bundles.common)
+        }
+
+        afterEvaluate {
+            dependencies {
+                if (libVersion == "1.6") {
+                    compileOnly(libs.bundles.common16)
+                } else {
+                    compileOnly(libs.bundles.common)
+                }
+            }
         }
 
         afterEvaluate {
@@ -168,6 +191,9 @@ private fun Project.base(block: BasePluginExtension.() -> Unit) {
 
 private val Project.extName: String
     get() = extra.get("extName") as String
+
+private val Project.libVersion: String
+    get() = extra.get("libVersion") as String
 
 private val Project.extVersionCode: Int
     get() = extra.get("extVersionCode") as Int

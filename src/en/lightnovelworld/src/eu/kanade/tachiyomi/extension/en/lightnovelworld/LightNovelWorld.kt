@@ -8,9 +8,9 @@ import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
-import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.lib.chapterutils.paginatedChapterList
 import keiyoushi.lib.chapterutils.shouldReturnExisting
@@ -260,7 +260,19 @@ class LightNovelWorld :
         return GET("$baseUrl$path/chapters/", headers)
     }
 
-    override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
+    override suspend fun getMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        @Suppress("DEPRECATION")
+        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(mangaDetailsRequest(manga)).execute()) else manga
+        val updatedChapters = if (fetchChapters) fetchLightNovelWorldChapterList(manga, chapters) else chapters
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    private suspend fun fetchLightNovelWorldChapterList(manga: SManga, existingChapters: List<SChapter>): List<SChapter> {
         val response = client.newCall(chapterListRequest(manga)).execute()
         val page1Doc = Jsoup.parse(response.body.string())
         val basePath = response.request.url.encodedPath
@@ -270,15 +282,15 @@ class LightNovelWorld :
             .find(page1Doc.selectFirst(".chapters-description")?.text().orEmpty())
             ?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
-        Log.d(TAG, "getChapterList: url=$basePath existing=${context.existingChapters.size} siteTotal=$currentTotal totalPages=$totalPages")
+        Log.d(TAG, "getChapterList: url=$basePath existing=${existingChapters.size} siteTotal=$currentTotal totalPages=$totalPages")
 
-        if (shouldReturnExisting(context.existingChapters.size, currentTotal)) {
+        if (shouldReturnExisting(existingChapters.size, currentTotal)) {
             Log.d(TAG, "getChapterList: count unchanged — returning existing")
-            return context.existingChapters
+            return existingChapters
         }
 
         return paginatedChapterList(
-            context = context,
+            existingChapters = existingChapters,
             siteTotal = currentTotal,
             assumedPageSize = CHAPTERS_PER_PAGE,
             fetchPage = { page ->

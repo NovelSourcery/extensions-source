@@ -1,4 +1,5 @@
 ext {
+    libVersion = '1.6'
     extName = 'AllNovel'
     extClass = '.AllNovel'
     themePkg = 'readnovelfull'

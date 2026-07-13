@@ -9,6 +9,10 @@
         <meta-data android:name="tachiyomi.novelextension.nsfw" android:value="${nsfw}" />
         <meta-data android:name="tachiyomi.novelextension.novel" android:value="1" />
 
+        <meta-data android:name="tachiyomix.name" android:value="${tachiyomix.name}" />
+        <meta-data android:name="tachiyomix.contentWarning" android:value="${tachiyomix.contentWarning}" />
+        <meta-data android:name="tachiyomix.extensionLib" android:value="${tachiyomix.extensionLib}" />
+
     </application>
 
 </manifest>

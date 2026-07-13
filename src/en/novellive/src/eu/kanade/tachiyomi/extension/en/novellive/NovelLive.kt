@@ -7,9 +7,9 @@ import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.FilterList
-import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.lib.chapterutils.paginatedChapterList
 import keiyoushi.utils.formattedText
@@ -94,7 +94,19 @@ class NovelLive :
             ?: document.selectFirst("meta[property=og:description], meta[name=description]")?.attr("content")?.trim()
     }
 
-    override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
+    override suspend fun getMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        @Suppress("DEPRECATION")
+        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(mangaDetailsRequest(manga)).execute()) else manga
+        val updatedChapters = if (fetchChapters) fetchNovelLiveChapterList(manga, chapters) else chapters
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    private suspend fun fetchNovelLiveChapterList(manga: SManga, existingChapters: List<SChapter>): List<SChapter> {
         val novelPath = manga.url.trimEnd('/')
         val detailDoc = client.newCall(GET(baseUrl + novelPath, headers)).execute().asJsoup()
         val options = detailDoc.select("#indexselect option")
@@ -123,7 +135,7 @@ class NovelLive :
         // Pages are oldest-first (#indexselect C.1-C.40, C.41-C.80, ...). Keep fetch order, then
         // number by position (href chapter numbers are unreliable) and present newest-first.
         val ascending = paginatedChapterList(
-            context = context,
+            existingChapters = existingChapters,
             siteTotal = latestNum,
             assumedPageSize = 40,
             sortChapters = { it },

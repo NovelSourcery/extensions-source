@@ -13,9 +13,9 @@ import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
-import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.lib.chapterutils.paginatedChapterList
@@ -119,7 +119,7 @@ abstract class ReadNovelFull(
 
     // Set true on sites whose chapter list is split across multiple pages on the novel page
     // (engine convention: a #indexselect page picker, chapters under div.m-newest2 ul.ul-list5).
-    // Enables the RefreshContext-aware paginated path in getChapterList below.
+    // Enables the existing-chapters-aware paginated path in fetchReadNovelFullChapterList below.
     protected open val chaptersPaginated: Boolean = false
     protected open val chapterListPageSize: Int = 100
 
@@ -651,9 +651,22 @@ abstract class ReadNovelFull(
         }
     }
 
-    override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
+    override suspend fun getMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        @Suppress("DEPRECATION")
+        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(mangaDetailsRequest(manga)).execute()) else manga
+        val updatedChapters = if (fetchChapters) fetchReadNovelFullChapterList(manga, chapters) else chapters
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    private suspend fun fetchReadNovelFullChapterList(manga: SManga, existingChapters: List<SChapter>): List<SChapter> {
         if (!chaptersPaginated) {
-            return super.getChapterList(manga, context)
+            @Suppress("DEPRECATION")
+            return chapterListParse(client.newCall(chapterListRequest(manga)).execute())
         }
 
         val detailDoc = fetchChapterListPage(manga, 1)
@@ -666,7 +679,7 @@ abstract class ReadNovelFull(
         }
 
         val chapters = paginatedChapterList(
-            context = context,
+            existingChapters = existingChapters,
             siteTotal = siteChapterTotal(detailDoc),
             assumedPageSize = chapterListPageSize,
             sortChapters = { it },

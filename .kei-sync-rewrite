@@ -1,0 +1,54 @@
+# Permanent local overrides -- tab-separated <extended-regex>\t<replacement>
+# pairs, applied to both the last-synced and target blobs (never to the
+# worktree) before diffing, so a routine upstream touch-up near one of these
+# never generates a hunk in the first place. Use this for values we will
+# NEVER take from upstream, where the resolution is always "keep ours" no
+# matter what upstream's new value is (repo names, product branding, signing
+# keys, CDN paths) -- not for genuine code changes we might sometimes want.
+# See scripts/sync-kei.sh --help.
+#
+# Order matters: a longer/more-specific pattern must come before a shorter
+# one it contains (e.g. the *-source repo name before the bare repo name),
+# or the shorter rule will partially consume the longer one's match first.
+# '#' starts a comment only at the beginning of a line; empty lines ignored.
+
+# Matching is case-insensitive (see apply_rewrite), so a single rule covers
+# e.g. both "keiyoushi/..." and "Keiyoushi/..."; replacement text is always
+# output exactly as written below regardless of which casing matched.
+
+# The real org is "NovelSourcery" (capitalized) -- that's the casing used
+# in plain github.com/... links (issue templates, CONTRIBUTING.md). The
+# lowercase "novelsourcery" below is deliberately separate: confirmed fine
+# for raw.githubusercontent.com/jsdelivr/github.io/github.repository-yaml-
+# comparison URL types specifically, not a casing mistake to "fix" into
+# matching the org name. Each org-name rule below is scoped to the specific
+# surrounding context it's known correct in (a domain prefix, or the
+# `github.repository ==` comparison) rather than matching the bare
+# "keiyoushi/..." substring everywhere -- an unscoped rule can only pick one
+# output casing, but this string legitimately needs different casing in
+# different contexts, so a generic rule is guaranteed to be wrong somewhere.
+keiyoushi extension	NovelSourcery extension
+github\.com/keiyoushi/extensions-source	github.com/NovelSourcery/extensions-source
+github\.com/keiyoushi/extensions	github.com/NovelSourcery/extensions
+github\.repository == 'keiyoushi/extensions-source'	github.repository == 'novelsourcery/extensions-source'
+156378334\+keiyoushi-bot@users\.noreply\.github\.com
+keiyoushi-bot	github-actions
+cdn\.jsdelivr\.net/gh/keiyoushi	cdn.jsdelivr.net/gh/novelsourcery
+raw\.githubusercontent\.com/keiyoushi	raw.githubusercontent.com/novelsourcery
+9add655a78e96c4ec7a53ef89dccb557cb5d767489fac5e785d671a5a75d4da2	4281820d4866bb71bed3dec5224aad9cf4633d44a113682cfb0c3b1cfd71702d
+keiyoushi\.github\.io	novelsourcery.github.io
+discord\.gg/3FbCpdKbdY	discord.gg/JG2K2jTjd6
+mihonapp/mihon	tsundoku-otaku/tsundoku
+
+# Version placeholders: our version number and kei's have no 1:1
+# correspondence, so unlike the rules above this needs BOTH sides mapped to
+# the identical placeholder text (not one side mapped to the other's
+# current value), or they'd still diff against each other every time either
+# number changes.
+Mihon [0-9]+\.[0-9]+(\.[0-9]+)?	PLACEHOLDER_APP_VERSION
+Tsundoku [0-9]+\.[0-9]+(\.[0-9]+)?	PLACEHOLDER_APP_VERSION
+
+# Same idea, for the ISSUE_TEMPLATE checklist item's bracket-link form
+# (relies on the mihonapp/mihon rule above having already normalized the
+# repo path on both sides).
+\[[0-9]+\.[0-9]+(\.[0-9]+)?\]\(https://github\.com/tsundoku-otaku/tsundoku/releases/latest\)	[PLACEHOLDER_APP_VERSION](PLACEHOLDER_APP_LINK)

@@ -1,4 +1,5 @@
 ext {
+    libVersion = '1.4'
     extName = 'MTL Wuxia'
     extClass = '.MTLWuxia'
     extVersionCode = 1

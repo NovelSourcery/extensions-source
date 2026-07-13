@@ -53,7 +53,7 @@ body:
           required: true
         - label: If this is an issue with the app itself, I should be opening an issue in the [app repository](https://github.com/tsundoku-otaku/tsundoku/issues/).
           required: true
-        - label: I have updated the app to version **[0.1.1](https://github.com/tsundoku-otaku/tsundoku/releases/latest)**.
+        - label: I have updated the app to version **[0.2.0](https://github.com/tsundoku-otaku/tsundoku/releases/latest)**.
           required: true
         - label: I will correctly fill out all of the requested information in this form.
           required: true

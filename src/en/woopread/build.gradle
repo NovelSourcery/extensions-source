@@ -1,4 +1,5 @@
 ext {
+    libVersion = '1.4'
     extName = 'WoopRead'
     extClass = '.WoopRead'
     extVersionCode = 1

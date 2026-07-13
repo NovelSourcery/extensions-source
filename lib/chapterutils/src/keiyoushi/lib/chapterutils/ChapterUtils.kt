@@ -1,37 +1,38 @@
 package keiyoushi.lib.chapterutils
 
-import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import org.jsoup.nodes.Document
 
 // ── High-level entry point ────────────────────────────────────────────────────
 
 /**
- * Fetches a paginated chapter list with RefreshContext optimisations.
+ * Fetches a paginated chapter list, using [existingChapters] (as passed into
+ * getMangaUpdate) to avoid redundant requests.
  *
  * The caller supplies [fetchPage], a lambda that takes a 1-based page number and returns
  * the chapters on that page plus whether a next page exists.  URL construction is entirely
  * the caller's responsibility, so any URL scheme (query param, path segment, etc.) works.
  *
  * Behaviour:
- * - Returns [context].existingChapters immediately when [siteTotal] confirms nothing changed.
- * - Falls back to a full fetch when [context].existingChapters is empty.
+ * - Returns [existingChapters] immediately when [siteTotal] confirms nothing changed.
+ * - Falls back to a full fetch when [existingChapters] is empty.
  * - Otherwise probes the estimated start page, detects the real page size, then fetches only
  *   the pages that could contain new chapters and prepends the known-good existing chapters.
  *
+ * @param existingChapters  Chapters that already exist locally for this manga.
  * @param siteTotal  Chapter count reported by the site (0 or negative = unknown, skips early exit).
  * @param assumedPageSize  Initial guess for chapters-per-page used before the probe.
  * @param fetchPage  Lambda `(pageNumber) -> Pair<chapters, hasNextPage>`.
  * @param sortChapters  Post-processing sort applied to the final list; defaults to chapter-number order.
  */
 suspend fun paginatedChapterList(
-    context: RefreshContext,
+    existingChapters: List<SChapter>,
     siteTotal: Int,
     assumedPageSize: Int = 100,
     fetchPage: suspend (page: Int) -> Pair<List<SChapter>, Boolean>,
     sortChapters: (List<SChapter>) -> List<SChapter> = ::sortByChapterNumber,
 ): List<SChapter> {
-    val existing = context.existingChapters
+    val existing = existingChapters
     val existingCount = existing.size
 
     if (shouldReturnExisting(existingCount, siteTotal)) {

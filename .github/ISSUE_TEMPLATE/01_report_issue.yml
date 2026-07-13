@@ -63,7 +63,7 @@ body:
       description: |
         You can find your Tsundoku/Tsundoku fork version number in **More → About**.
       placeholder: |
-        Example: "Tsundoku 0.1.0"
+        Example: "Tsundoku 0.2.0"
     validations:
       required: true
 
@@ -95,7 +95,7 @@ body:
           required: true
         - label: I have written a short but informative title.
           required: true
-        - label: I have updated the app to version **[0.1.0](https://github.com/tsundoku-otaku/tsundoku/releases/latest)**.
+        - label: I have updated the app to version **[0.2.0](https://github.com/tsundoku-otaku/tsundoku/releases/latest)**.
           required: true
         - label: I have updated the extension to the latest version (as listed on the [extensions listing](https://novelsourcery.github.io/extensions/) page).
           required: true

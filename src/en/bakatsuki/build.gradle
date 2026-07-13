@@ -1,4 +1,5 @@
 ext {
+    libVersion = '1.4'
     extName = 'Baka-Tsuki'
     extClass = '.BakaTsuki'
     extVersionCode = 1
