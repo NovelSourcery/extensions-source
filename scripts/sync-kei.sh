@@ -232,6 +232,13 @@ if [[ -f "$REWRITE_FILE" ]]; then
 fi
 
 # Applies REWRITE_RULES to stdin, in order. Pass-through if there are none.
+# Matching is case-insensitive (GNU sed's `I` flag) -- these patterns target
+# specific known phrases/URLs, not generic text, so the overreach risk is
+# low, and it avoids a real failure mode: if only one casing of a pattern is
+# normalized, a blob that already contains a *different* casing of our own
+# replacement text (independent of upstream's wording entirely) is left
+# untouched and ends up looking like a real conflict against the freshly
+# normalized other side, even though it's the same string.
 apply_rewrite() {
     if [[ ${#REWRITE_RULES[@]} -eq 0 ]]; then
         cat
@@ -239,7 +246,7 @@ apply_rewrite() {
     fi
     local cmd=(sed -E) i=0
     while [[ $i -lt ${#REWRITE_RULES[@]} ]]; do
-        cmd+=(-e "s${RSEP}${REWRITE_RULES[$i]}${RSEP}${REWRITE_RULES[$((i+1))]}${RSEP}g")
+        cmd+=(-e "s${RSEP}${REWRITE_RULES[$i]}${RSEP}${REWRITE_RULES[$((i+1))]}${RSEP}gI")
         i=$((i+2))
     done
     "${cmd[@]}"
