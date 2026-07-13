@@ -217,7 +217,7 @@ and [negative refspecs](https://github.blog/2020-10-19-git-2-29-released/#user-c
 
 ## Getting help
 
-- Join [the Discord server](https://discord.gg/3FbCpdKbdY) for online help and to ask questions during
+- Join [the Discord server](https://discord.gg/JG2K2jTjd6) for online help and to ask questions during
   development. Please ask questions in the `#programming` channel.
 - There are features and tricks not explored in this document; refer to existing
   extension code for examples.
@@ -1279,7 +1279,7 @@ If not set, it defaults to `ALWAYS_UPDATE`.
 
 If existing sources change their names on the website, you must explicitly set the `id` to the previous value to reflect these changes correctly. Otherwise, it will change based on the new `name` value, forcing users to re-migrate to the source.
 
-To get the current `id` value before a name change, search the source name in the [repository JSON file](https://github.com/novelsourcery/extensions/blob/repo/index.json)
+To get the current `id` value before a name change, search the source name in the [repository JSON file](https://github.com/NovelSourcery/extensions/blob/repo/index.json)
 under the `sources` attribute of the extension.
 
 **If you are using `source {}` blocks**, set `id` directly in the block:
