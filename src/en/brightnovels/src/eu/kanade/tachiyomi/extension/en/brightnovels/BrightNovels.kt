@@ -241,7 +241,7 @@ class BrightNovels :
         if (seriesSlug.isBlank()) {
             return extractChapterObjects(page, series)
                 .mapNotNull { chapterElement -> chapterToSChapter(chapterElement, seriesSlug, showPremium) }
-                .sortedBy { it.chapter_number }
+                .sortedByDescending { it.chapter_number }
         }
 
         val chapterElements = linkedMapOf<String, JsonElement>()
@@ -265,7 +265,7 @@ class BrightNovels :
 
         return chapterElements.values
             .mapNotNull { chapterToSChapter(it, seriesSlug, showPremium) }
-            .sortedBy { it.chapter_number }
+            .sortedByDescending { it.chapter_number }
     }
 
     override fun pageListRequest(chapter: SChapter): Request = inertiaRequest(absoluteUrl(chapter.url))
@@ -273,7 +273,9 @@ class BrightNovels :
     override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString(), null))
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(inertiaRequest(page.url)).execute()
+        // The app's getPageList short-circuit hands us the raw (relative) chapter url,
+        // so rebuild an absolute url before requesting it.
+        val response = client.newCall(inertiaRequest(absoluteUrl(page.url))).execute()
         val body = response.body.string()
         val props = extractInertiaProps(body, response.headers)
         val chapter = props["chapter"].asObject() ?: return ""
