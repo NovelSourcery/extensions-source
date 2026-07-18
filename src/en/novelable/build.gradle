@@ -1,8 +1,0 @@
-ext {
-    extName = 'Novelable'
-    extClass = '.Novelable'
-    extVersionCode = 2
-    isNovel = true
-}
-
-apply plugin: "ns.plugins.extension.legacy"
