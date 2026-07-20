@@ -1,8 +1,0 @@
-ext {
-    extName = 'Vynovel'
-    extClass = '.Vynovel'
-    extVersionCode = 2
-    isNovel = true
-}
-
-apply plugin: "ns.plugins.extension.legacy"
