@@ -3,6 +3,7 @@
 import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.EditTextPreference
+import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.POST
@@ -115,8 +116,24 @@ class FictionZone :
             }
         }
 
+        val pathOnly = path.substringBefore('?')
+        val queryString = path.substringAfter('?', "")
+        val queryObject = buildJsonObject {
+            if (queryString.isNotEmpty()) {
+                queryString.split('&').forEach { pair ->
+                    if (pair.isEmpty()) return@forEach
+                    val key = pair.substringBefore('=')
+                    val value = java.net.URLDecoder.decode(pair.substringAfter('=', ""), "UTF-8")
+                    put(key, JsonPrimitive(value))
+                }
+            }
+        }
+
         val body = buildJsonObject {
-            put("path", JsonPrimitive(path))
+            put("path", JsonPrimitive(pathOnly))
+            if (queryObject.isNotEmpty()) {
+                put("query", queryObject)
+            }
             put("headers", headers)
             put("method", JsonPrimitive(method))
             if (bodyJson != null) {
@@ -303,7 +320,9 @@ class FictionZone :
 
         return parseBrowseData(data)
     }
+
     override fun getMangaUrl(manga: SManga): String = baseUrl + manga.url
+
     override fun mangaDetailsRequest(manga: SManga): Request {
         if (manga.url.startsWith("/omniportal/")) {
             val parts = manga.url.removePrefix("/omniportal/").split("/")
@@ -466,39 +485,124 @@ class FictionZone :
     // chapter.url is the site path; strip the helper novel_id query for webview
     override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapter.url.substringBefore('?')
 
+    /**
+     * Fetches chapter content either by scraping the HTML page (recommended)
+     * or via the API, depending on user preference.
+     */
     override suspend fun fetchPageText(page: Page): String {
-        // Current formats (site paths):
-        //   Platform:   "/novel/<slug>/<chapter_id>?novel_id=<id>"
-        //   Omniportal: "/omniportal/<source_id>/<source_key>/<chapter_id>"
-        // Legacy formats (raw API paths) pass through untouched.
-        val raw = page.url
-        val apiPath = when {
-            raw.startsWith("/platform/") -> raw
+        val chapterUrl = page.url
+        val fullUrl = baseUrl + chapterUrl
 
-            // Legacy raw API paths: make sure the engine param is present
-            raw.startsWith("/omniportal/chapters/") ->
-                if (raw.contains("engine=")) raw else "$raw&engine=google-trans"
-
-            raw.startsWith("/omniportal/") -> {
-                val parts = raw.substringBefore('?').trim('/').split("/")
-                "/omniportal/chapters/content?source_id=${parts[1]}&source_key=${parts[2]}&chapter_id=${parts[3]}&translate=en&engine=google-trans"
+        // Omniportal chapters are rendered client-side: the HTML page only ships a teaser that
+        // cuts off mid-chapter (e.g. at "[Clone Number 2]"). The omniportal API returns the full
+        // translated text, so always prefer it there, falling back to HTML only if it fails.
+        if (chapterUrl.startsWith("/omniportal/")) {
+            try {
+                val apiContent = fetchFromApi(chapterUrl)
+                if (apiContent.isNotBlank()) return apiContent
+            } catch (_: Exception) {
+                // fall through to HTML
             }
-
-            raw.startsWith("/novel/") -> {
-                val novelId = raw.substringAfter("novel_id=", "").substringBefore('&')
-                val chapterId = raw.substringBefore('?').trimEnd('/').substringAfterLast('/')
-                "/platform/chapter-content?novel_id=$novelId&chapter_id=$chapterId"
+            return try {
+                fetchFromHtml(fullUrl)
+            } catch (_: Exception) {
+                ""
             }
-
-            else -> raw
         }
 
-        val requiresAuth = apiPath.contains("/platform/")
-        val request = apiRequest(apiPath, "GET", includeAuth = requiresAuth)
+        // Read user preference: "html" (default) or "api"
+        val method = preferences.getString("content_fetch_method", "html") ?: "html"
+
+        // If user prefers HTML, try that first
+        if (method == "html") {
+            try {
+                val htmlContent = fetchFromHtml(fullUrl)
+                if (htmlContent.isNotBlank()) {
+                    return htmlContent
+                }
+            } catch (e: Exception) {
+                // Log error and fall back to API
+            }
+        }
+
+        // Fallback: API method
+        return fetchFromApi(chapterUrl)
+    }
+
+    /**
+     * Scrape the chapter content from the HTML page.
+     */
+    private fun fetchFromHtml(fullUrl: String): String {
+        val request = Request.Builder()
+            .url(fullUrl)
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            .build()
 
         val response = client.newCall(request).execute()
-        val jsonString = response.body.string()
+        val html = response.body?.string() ?: throw Exception("Empty response from chapter page")
 
+        val doc = Jsoup.parse(html)
+
+        // Find the main content container
+        var contentElement = doc.selectFirst(".chapter-text")
+        if (contentElement == null) {
+            contentElement = doc.selectFirst(".chapter-article .chapter-text")
+        }
+
+        if (contentElement == null) {
+            // Fallback: extract all <p> tags from the body (rare)
+            val paragraphs = doc.select("p")
+            if (paragraphs.isNotEmpty()) {
+                val sb = StringBuilder()
+                for (p in paragraphs) {
+                    if (p.parent()?.hasClass("ad-slot") == true || p.parent()?.hasClass("advertisement") == true) {
+                        continue
+                    }
+                    sb.append(p.outerHtml())
+                }
+                return sb.toString()
+            }
+            throw Exception("Could not find any chapter content on the page")
+        }
+
+        // Remove unwanted elements (ads, scripts, etc.)
+        contentElement.select(".ad-slot").remove()
+        contentElement.select(".advertisement").remove()
+        contentElement.select("script, style").remove()
+
+        val contentHtml = contentElement.html()
+        if (contentHtml.isBlank()) {
+            // If the container is empty, try extracting from its <p> tags
+            val paragraphs = contentElement.select("p")
+            if (paragraphs.isNotEmpty()) {
+                return paragraphs.joinToString("") { it.outerHtml() }
+            }
+            throw Exception("Content container is empty")
+        }
+
+        return contentHtml
+    }
+
+    /**
+     * Fetch chapter content via the API .
+     */
+    private fun fetchFromApi(chapterUrl: String): String {
+        val apiPath = when {
+            chapterUrl.startsWith("/omniportal/") -> {
+                val parts = chapterUrl.substringBefore('?').trim('/').split("/")
+                "/omniportal/chapters/content?source_id=${parts[1]}&source_key=${parts[2]}&chapter_id=${parts[3]}&translate=en&engine=google-trans"
+            }
+            chapterUrl.startsWith("/novel/") -> {
+                val novelId = chapterUrl.substringAfter("novel_id=", "").substringBefore('&')
+                val chapterId = chapterUrl.substringBefore('?').trimEnd('/').substringAfterLast('/')
+                "/platform/chapter-content?novel_id=$novelId&chapter_id=$chapterId"
+            }
+            else -> chapterUrl
+        }
+
+        val request = apiRequest(apiPath, "GET", includeAuth = true)
+        val response = client.newCall(request).execute()
+        val jsonString = response.body.string()
         val jsonObject = json.parseToJsonElement(jsonString).jsonObject
 
         if (jsonObject["success"]?.jsonPrimitive?.boolean != true) {
@@ -511,6 +615,7 @@ class FictionZone :
         return normalizeChapterContent(content)
     }
 
+    // This remains for synopsis formatting, not for chapter content.
     private fun normalizeChapterContent(content: String): String {
         if (content.isBlank()) return ""
 
@@ -537,9 +642,7 @@ class FictionZone :
         .containsMatchIn(text)
 
     /**
-     * Converts a synopsis into plain text while preserving paragraph breaks:
-     * handles raw HTML (<p>, <br>, <div>, <li>), escaped "\n" sequences and
-     * plain-text line breaks.
+     * Converts a synopsis into plain text while preserving paragraph breaks.
      */
     private fun formatDescription(raw: String): String {
         if (raw.isBlank()) return ""
@@ -560,8 +663,6 @@ class FictionZone :
 
         val breakToken = "__FZ_BR__"
         val paragraphToken = "__FZ_P__"
-        // Keep plain newlines that sit between/inside tags: doc.text() would otherwise drop them,
-        // leaving only the <br>/<p> structure and collapsing the synopsis spacing.
         val withBreaks = normalized.replace("\n", "<br>")
         val doc = Jsoup.parseBodyFragment(Parser.unescapeEntities(withBreaks, false))
         doc.select("br").forEach { it.after(breakToken) }
@@ -589,6 +690,7 @@ class FictionZone :
     }
 
     override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
+
     override fun getFilterList(): FilterList {
         val filters = mutableListOf<Filter<*>>()
 
@@ -603,7 +705,6 @@ class FictionZone :
         val genres = getGenres()
         val tags = getTags()
 
-        // Populate the caches on first use, or every time when the pref is on
         val alwaysRefresh = preferences.getBoolean("always_refresh_metadata", false)
         if (alwaysRefresh || sources.isEmpty() || genres.isEmpty() || tags.isEmpty()) {
             Thread { refreshMetadata() }.start()
@@ -708,6 +809,7 @@ class FictionZone :
     }
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        // Access token
         EditTextPreference(screen.context).apply {
             key = "fz_access_token"
             title = "Access Token"
@@ -715,6 +817,17 @@ class FictionZone :
             setDefaultValue("")
         }.also(screen::addPreference)
 
+        // Content fetch method
+        ListPreference(screen.context).apply {
+            key = "content_fetch_method"
+            title = "Chapter content source"
+            entries = arrayOf("HTML (recommended)", "API")
+            entryValues = arrayOf("html", "api")
+            setDefaultValue("html")
+            summary = "HTML gives full content; API is faster but may cut off long chapters."
+        }.also(screen::addPreference)
+
+        // Refresh metadata
         SwitchPreferenceCompat(screen.context).apply {
             key = "always_refresh_metadata"
             title = "Always Refresh Metadata"
@@ -722,6 +835,7 @@ class FictionZone :
             setDefaultValue(false)
         }.also(screen::addPreference)
 
+        // Reset cache
         SwitchPreferenceCompat(screen.context).apply {
             key = "reset_metadata_cache"
             title = "Reset filter cache"
