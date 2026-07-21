@@ -1,0 +1,9 @@
+ext {
+    extName = 'NovelArrow'
+    extClass = '.NovelArrow'
+    extVersionCode = 3
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"
