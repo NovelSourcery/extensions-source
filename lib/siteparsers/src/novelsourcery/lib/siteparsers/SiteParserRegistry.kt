@@ -26,7 +26,6 @@ import novelsourcery.lib.siteparsers.parsers.NoBadNovelParser
 import novelsourcery.lib.siteparsers.parsers.NovelPlexParser
 import novelsourcery.lib.siteparsers.parsers.NovelWorldTranslationsParser
 import novelsourcery.lib.siteparsers.parsers.NovelsHubParser
-import novelsourcery.lib.siteparsers.parsers.PatreonParser
 import novelsourcery.lib.siteparsers.parsers.RPDParser
 import novelsourcery.lib.siteparsers.parsers.RainOfSnowParser
 import novelsourcery.lib.siteparsers.parsers.ReadingPiaParser
@@ -78,7 +77,6 @@ object SiteParserRegistry {
         NovelPlexParser(),
         NovelsHubParser(),
         NovelWorldTranslationsParser(),
-        PatreonParser(),
         RPDParser(),
         RainOfSnowParser(),
         ReadingPiaParser(),
