@@ -354,6 +354,10 @@ class Fenrirealm :
             (section ?: heading).remove()
         }
 
+        // Remove invisible garbage divs
+        val garbagePattern = "^((?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4}))(.{1,4})?$"
+        readerArea.select("div[aria-hidden=true]:matchesOwn($garbagePattern)").forEach { it.remove() }
+
         return readerArea.children().joinToString("") { it.outerHtml() }
     }
 
