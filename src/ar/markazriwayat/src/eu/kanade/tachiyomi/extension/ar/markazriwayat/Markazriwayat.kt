@@ -56,7 +56,6 @@ class Markazriwayat :
                     "stop" -> SManga.ON_HIATUS
                     else -> SManga.UNKNOWN
                 }
-                author = item.id.toString()
             }
         }
         return MangasPage(novels, hasNextPage = body.page < body.totalPages)
@@ -78,7 +77,7 @@ class Markazriwayat :
                 genre = item.genres.joinToString()
             }
         }
-        return MangasPage(novels, hasNextPage = novels.size >= PER_PAGE)
+        return MangasPage(novels, hasNextPage = body.hasMore)
     }
 
     override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
@@ -90,6 +89,11 @@ class Markazriwayat :
             title = doc.selectFirst("h1.manga-title")?.text()?.trim().orEmpty()
             thumbnail_url = doc.selectFirst(".manga-cover-wrap > img")?.absCover()
             val authors = doc.select(".manga-author")
+            author = if (authors.size >= 2) {
+                authors[1].text().trim()
+            } else {
+                authors.firstOrNull()?.text()?.trim() ?: ""
+            }
             if (authors.size >= 2) {
                 description = buildString {
                     append("مترجم الرواية : ${authors[0].text().trim()}\n")
@@ -110,11 +114,6 @@ class Markazriwayat :
     }
 
     override suspend fun getChapterList(manga: SManga): List<SChapter> {
-        val storedId = manga.author?.takeIf { it.isNotBlank() && it.all { c -> c.isDigit() } }
-        if (storedId != null) {
-            val apiChapters = fetchChaptersViaApi(storedId)
-            if (apiChapters.isNotEmpty()) return apiChapters
-        }
         val doc = client.newCall(GET(baseUrl + manga.url, headers)).execute().asJsoup()
         checkCaptcha(doc)
         val mangaId = doc.selectFirst("#manga-chapters-list")?.attr("data-manga-id")?.takeIf { it.isNotBlank() }
@@ -131,7 +130,10 @@ class Markazriwayat :
         while (true) {
             val url = "$baseUrl/wp-json/theam/v1/manga-chapters?manga_id=$mangaId&order=DESC&page=$page&per_page=100"
             val body = try {
-                json.decodeFromString<ChaptersResponse>(client.newCall(GET(url, headers)).execute().body.string())
+                val resp = client.newCall(GET(url, headers)).execute()
+                val parsed = json.decodeFromString<ChaptersResponse>(resp.body.string())
+                resp.close()
+                parsed
             } catch (_: Exception) {
                 break
             }
@@ -247,6 +249,7 @@ class Markazriwayat :
     @Serializable
     private data class SearchResponse(
         val items: List<SearchItem> = emptyList(),
+        @SerialName("has_more") val hasMore: Boolean = false,
     )
 
     @Serializable
