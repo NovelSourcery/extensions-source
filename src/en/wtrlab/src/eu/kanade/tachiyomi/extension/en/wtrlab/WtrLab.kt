@@ -60,7 +60,32 @@ class WtrLab :
     override val lang = "en"
     override val supportsLatest = true
 
-    override val client = network.cloudflareClient
+    override val client = network.client.newBuilder()
+        .addInterceptor { chain ->
+            val original = chain.request()
+            if (!original.url.encodedPath.contains("/_next/data/")) {
+                chain.proceed(original)
+            } else {
+
+                var currentRequest = original
+                var response = chain.proceed(currentRequest)
+                var attempt = 0
+                while (!response.isSuccessful && attempt < MAX_BUILD_ID_RETRIES) {
+                    val failedBuildId = BUILD_ID_IN_PATH_REGEX.find(currentRequest.url.encodedPath)
+                        ?.groupValues?.get(1) ?: break
+                    response.close()
+                    cachedBuildId = null
+                    val freshBuildId = runCatching { getBuildId() }.getOrNull() ?: break
+                    currentRequest = currentRequest.newBuilder()
+                        .url(currentRequest.url.toString().replace(failedBuildId, freshBuildId))
+                        .build()
+                    response = chain.proceed(currentRequest)
+                    attempt++
+                }
+                response
+            }
+        }
+        .build()
 
     private val json: Json by injectLazy()
     private val preferences = Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
@@ -103,23 +128,32 @@ class WtrLab :
         return "$imgBaseUrl?src=$encodedPath&w=344"
     }
 
+    @Volatile
     private var cachedBuildId: String? = null
+    private val buildIdLock = Any()
 
+    // Concurrent mass-import can fire dozens of requests off a stale buildId at once; without
+    // single-flighting, each would independently refetch/overwrite cachedBuildId and hammer
+    // novel-finder. The double-checked lock collapses them into one refresh.
     private fun getBuildId(): String {
         cachedBuildId?.let { return it }
 
-        val response = client.newCall(GET("$baseUrl/en/novel-finder", headers)).execute()
-        val html = response.body.string()
-        val doc = Jsoup.parse(html)
-        val nextData = doc.selectFirst("#__NEXT_DATA__")?.data()
-            ?: throw Exception("Could not find __NEXT_DATA__ on page")
+        synchronized(buildIdLock) {
+            cachedBuildId?.let { return it }
 
-        val jsonData = json.parseToJsonElement(nextData).jsonObject
-        val buildId = jsonData["buildId"]?.jsonPrimitive?.content
-            ?: throw Exception("Could not extract buildId")
+            val response = client.newCall(GET("$baseUrl/en/novel-finder", headers)).execute()
+            val html = response.body.string()
+            val doc = Jsoup.parse(html)
+            val nextData = doc.selectFirst("#__NEXT_DATA__")?.data()
+                ?: throw Exception("Could not find __NEXT_DATA__ on page")
 
-        cachedBuildId = buildId
-        return buildId
+            val jsonData = json.parseToJsonElement(nextData).jsonObject
+            val buildId = jsonData["buildId"]?.jsonPrimitive?.content
+                ?: throw Exception("Could not extract buildId")
+
+            cachedBuildId = buildId
+            return buildId
+        }
     }
 
     private fun decryptContent(encryptedData: String): String {
@@ -288,7 +322,7 @@ class WtrLab :
             ?: throw Exception("Could not find chapter content in API response")
 
         // Extract image URLs for [image] tag replacement
-        val imageUrls = dataObj["images"]?.jsonArray
+        val imageUrls = (dataObj["images"] as? JsonArray)
             ?.mapNotNull { it.jsonPrimitive.contentOrNull }
             ?: emptyList()
 
@@ -348,7 +382,7 @@ class WtrLab :
             val glossaryTerms = jsonResult["data"]?.jsonObject
                 ?.get("data")?.jsonObject
                 ?.get("glossary_data")?.jsonObject
-                ?.get("terms")?.jsonArray
+                ?.get("terms") as? JsonArray
 
             if (glossaryTerms != null) {
                 return replaceGlossarySymbols(htmlContent, glossaryTerms)
@@ -430,7 +464,7 @@ class WtrLab :
     override fun popularMangaParse(response: Response): MangasPage {
         val jsonResult = json.parseToJsonElement(response.body.string()).jsonObject
         val pageProps = jsonResult["pageProps"]?.jsonObject
-        val series = pageProps?.get("series")?.jsonArray
+        val series = pageProps?.get("series") as? JsonArray
             ?: return MangasPage(emptyList(), false)
 
         val count = pageProps["count"]?.jsonPrimitive?.intOrNull ?: 0
@@ -473,7 +507,7 @@ class WtrLab :
 
     override fun latestUpdatesParse(response: Response): MangasPage {
         val jsonResult = json.parseToJsonElement(response.body.string()).jsonObject
-        val data = jsonResult["data"]?.jsonArray ?: return MangasPage(emptyList(), false)
+        val data = jsonResult["data"] as? JsonArray ?: return MangasPage(emptyList(), false)
 
         val mangas = data.mapNotNull { element ->
             val datum = element.jsonObject
@@ -581,11 +615,13 @@ class WtrLab :
 
     override fun mangaDetailsRequest(manga: SManga): Request {
         val buildId = getBuildId()
-        // url shape: /en/novel/<raw_id>/<slug> — getServerSideProps needs these as query params
-        val match = Regex("""novel/(\d+)/([^/?#]+)""").find(manga.url)
+        // url shape: /en/novel/<raw_id>/<slug> (legacy: /en/serie-<raw_id>/<slug>). The _next/data
+        // JSON route 308s straight to the plain HTML page for legacy paths, so always request the
+        // canonical novel/ path here.
+        val match = Regex("""(?:novel/|serie-)(\d+)/([^/?#]+)""").find(manga.url)
         val rawId = match?.groupValues?.get(1) ?: ""
         val slug = match?.groupValues?.get(2) ?: ""
-        val url = "$baseUrl/_next/data/$buildId${manga.url}.json" +
+        val url = "$baseUrl/_next/data/$buildId/en/novel/$rawId/$slug.json" +
             "?locale=en&raw_id=$rawId&serie_slug=$slug"
         return GET(url, headers)
     }
@@ -594,11 +630,40 @@ class WtrLab :
 
     override fun mangaDetailsParse(response: Response): SManga {
         val manga = SManga.create()
-        val root = json.parseToJsonElement(response.body.string()).jsonObject
+        var root = json.parseToJsonElement(response.body.string()).jsonObject
 
-        val pageProps = root["pageProps"]?.jsonObject
+        var pageProps = root["pageProps"]?.jsonObject
             ?: root["props"]?.jsonObject?.get("pageProps")?.jsonObject
-            ?: return manga
+            ?: throw Exception("WTR-LAB response missing pageProps for ${response.request.url} (stale build id?)")
+
+        // A stale/renamed slug gets a soft redirect via pageProps.__N_REDIRECT instead of an HTTP
+        // redirect, so follow the chain until it resolves.
+        var redirectHops = 0
+        while (true) {
+            val redirectPath = pageProps["__N_REDIRECT"]?.jsonPrimitive?.contentOrNull ?: break
+            if (redirectPath.startsWith("/en/auth/login")) {
+                throw Exception("WTR-LAB requires login to view this novel: ${response.request.url}")
+            }
+            if (++redirectHops > MAX_DETAILS_REDIRECT_HOPS) {
+                throw Exception("WTR-LAB redirected too many times, last target: $redirectPath")
+            }
+            val redirectMatch = Regex("""(?:novel/|serie-)(\d+)/([^/?#]+)""").find(redirectPath)
+                ?: throw Exception("WTR-LAB redirected to an unrecognized path: $redirectPath")
+            val redirectRawId = redirectMatch.groupValues[1]
+            val redirectSlug = redirectMatch.groupValues[2]
+            val redirectUrl = "$baseUrl/_next/data/${getBuildId()}/en/novel/$redirectRawId/$redirectSlug.json" +
+                "?locale=en&raw_id=$redirectRawId&serie_slug=$redirectSlug"
+            val redirectResponse = client.newCall(GET(redirectUrl, headers)).execute()
+            if (!redirectResponse.isSuccessful) {
+                val code = redirectResponse.code
+                redirectResponse.close()
+                throw Exception("WTR-LAB redirect request failed: HTTP error $code for $redirectUrl")
+            }
+            root = json.parseToJsonElement(redirectResponse.body.string()).jsonObject
+            pageProps = root["pageProps"]?.jsonObject
+                ?: root["props"]?.jsonObject?.get("pageProps")?.jsonObject
+                ?: throw Exception("WTR-LAB redirect response missing pageProps for $redirectUrl")
+        }
 
         val serie = pageProps["serie"]?.jsonObject
         val serieData = serie?.get("serie_data")?.jsonObject
@@ -644,24 +709,24 @@ class WtrLab :
                 else -> SManga.UNKNOWN
             }
 
-            serieData["genres"]?.jsonArray?.forEach { el ->
+            (serieData["genres"] as? JsonArray)?.forEach { el ->
                 el.jsonPrimitive.intOrNull?.let { id ->
                     genreLabel(id)?.let { jsonGenres.add(it) }
                 }
             }
-            serieData["tags"]?.jsonArray?.forEach { el ->
+            (serieData["tags"] as? JsonArray)?.forEach { el ->
                 el.jsonPrimitive.intOrNull?.let { id ->
                     tagLabel(id)?.let { jsonTags.add(it) }
                 }
             }
         }
 
-        pageProps["tags"]?.jsonArray?.forEach { el ->
+        (pageProps["tags"] as? JsonArray)?.forEach { el ->
             el.jsonObject["title"]?.jsonPrimitive?.contentOrNull?.trim()
                 ?.takeIf { it.isNotEmpty() }?.let { jsonTags.add(it) }
         }
 
-        serie?.get("names")?.jsonArray?.let { names ->
+        (serie?.get("names") as? JsonArray)?.let { names ->
             altTitles = names.flatMap { nameElem ->
                 val obj = nameElem.jsonObject
                 listOfNotNull(
@@ -783,7 +848,7 @@ class WtrLab :
                 ).execute()
 
                 val jsonResult = json.parseToJsonElement(response.body.string()).jsonObject
-                val chapters = jsonResult["chapters"]?.jsonArray ?: break
+                val chapters = jsonResult["chapters"] as? JsonArray ?: break
 
                 chapters.forEach { element ->
                     val obj = element.jsonObject
@@ -897,7 +962,7 @@ class WtrLab :
             val response = client.newCall(
                 GET("$baseUrl/api/chapters/$rawId?start=$start&end=$end", headers),
             ).execute()
-            val chapters = json.parseToJsonElement(response.body.string()).jsonObject["chapters"]?.jsonArray
+            val chapters = json.parseToJsonElement(response.body.string()).jsonObject["chapters"] as? JsonArray
             chapters?.forEach { el ->
                 val o = el.jsonObject
                 val ord = o["order"]?.jsonPrimitive?.intOrNull ?: return@forEach
@@ -987,7 +1052,7 @@ class WtrLab :
         runCatching {
             val response = client.newCall(GET("$baseUrl/api/user/config/all", apiHeaders)).execute()
             val folders = json.parseToJsonElement(response.body.string()).jsonObject["data"]
-                ?.jsonObject?.get("user_folders")?.jsonArray
+                ?.jsonObject?.get("user_folders") as? JsonArray
             if (folders != null) {
                 preferences.edit().putString(USER_FOLDERS_KEY, folders.toString()).apply()
                 Log.d(TAG, "cacheUserFolders: ${folders.size} custom folders")
@@ -1041,7 +1106,7 @@ class WtrLab :
 
     private fun applyTaxonomy(tagsObj: JsonObject?, genresEl: JsonElement?) {
         // tags shape: { ungrouped: [{ value, label, category_id }], groups: [...] }
-        tagsObj?.get("ungrouped")?.jsonArray
+        (tagsObj?.get("ungrouped") as? JsonArray)
             ?.mapNotNull { el ->
                 val o = el.jsonObject
                 val v = o["value"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
@@ -1228,6 +1293,9 @@ class WtrLab :
     companion object {
         private const val TAG = "WtrLab"
         private const val CHAPTER_BATCH = 250
+        private const val MAX_BUILD_ID_RETRIES = 3
+        private const val MAX_DETAILS_REDIRECT_HOPS = 5
+        private val BUILD_ID_IN_PATH_REGEX = Regex("""/_next/data/([^/]+)/""")
 
         private val genreIdToName: Map<String, String> by lazy {
             DEFAULT_GENRE_BOXES.associate { it.value to it.name }
