@@ -1,9 +1,0 @@
-ext {
-    extName = 'MTL Reader'
-    extClass = '.MtlReader'
-    extVersionCode = 1
-    isNsfw = false
-    isNovel = true
-}
-
-apply plugin: "ns.plugins.extension.legacy"
