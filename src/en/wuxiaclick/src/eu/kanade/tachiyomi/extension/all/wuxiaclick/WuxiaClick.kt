@@ -39,9 +39,11 @@ class WuxiaClick :
     override val name = "WuxiaClick"
     override val baseUrl = "https://wuxia.click"
     private val apiUrl = "https://wuxiaworld.eu/api"
-    override val lang = "all"
+    override val lang = "en"
     override val supportsLatest = true
     override val isNovelSource = true
+
+    override val id: Long = 4007327599712723254
 
     override val client = network.cloudflareClient
 
