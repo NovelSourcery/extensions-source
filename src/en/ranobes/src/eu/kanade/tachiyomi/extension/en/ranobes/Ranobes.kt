@@ -316,14 +316,19 @@ class Ranobes :
             .substringBefore("/page/")
             .trimEnd('/')
 
+        // pages_count only appears in window.__DATA__ on page 1 - derive the bound once and never
+        // let a later page shrink it.
+        val firstPageData = extractWindowData(document)
+        val maxPage = firstPageData?.get("pages_count")?.toString()?.toIntOrNull()
+            ?: document.select("select option").mapNotNull { it.attr("value").toIntOrNull() }.maxOrNull()
+            ?: 1
+
         while (true) {
             val chapters = parseChaptersFromDocument(document)
+            if (chapters.isEmpty()) {
+                throw Exception("Ranobes: page $currentPage/$maxPage returned no chapters (likely rate-limited/blocked) - keeping previous chapter list")
+            }
             allChapters.addAll(chapters)
-
-            val jsonData = extractWindowData(document)
-            val maxPage = jsonData?.get("pages_count")?.toString()?.toIntOrNull()
-                ?: document.select("select option").mapNotNull { it.attr("value").toIntOrNull() }.maxOrNull()
-                ?: 1
 
             if (currentPage >= maxPage) break
 
