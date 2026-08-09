@@ -95,10 +95,14 @@ class BakaTsuki :
         return MangasPage(mangas, false)
     }
 
+    private fun ParseResponse.orThrow(title: String): ParseData = parse ?: throw Exception(
+        error?.let { "Baka-Tsuki: ${it.info} ($title)" } ?: "Baka-Tsuki: empty response for $title",
+    )
+
     private fun parseRequest(title: String): Request {
         val url = apiUrl.toHttpUrl().newBuilder()
             .addQueryParameter("action", "parse")
-            .addQueryParameter("page", title.replace("_", " "))
+            .addQueryParameter("page", title.removePrefix("/").replace("_", " "))
             .addQueryParameter("prop", "text")
             .addQueryParameter("format", "json")
         return GET(url.build(), headers)
@@ -109,10 +113,10 @@ class BakaTsuki :
     override fun mangaDetailsRequest(manga: SManga): Request = parseRequest(manga.url)
 
     override fun mangaDetailsParse(response: Response): SManga {
-        val result = response.parseAs<ParseResponse>()
-        val doc = Jsoup.parse(result.parse.text.content, "$baseUrl/project/")
+        val result = response.parseAs<ParseResponse>().orThrow(response.request.url.queryParameter("page").orEmpty())
+        val doc = Jsoup.parse(result.text.content, "$baseUrl/project/")
         return SManga.create().apply {
-            title = result.parse.title
+            title = result.title
             thumbnail_url = doc.selectFirst("img")?.absUrl("src")
                 ?.replace(Regex("""(width|height)=\d+"""), "width=800")
             author = doc.select(".mw-headline").firstOrNull { it.text().contains(" by ", ignoreCase = true) }
@@ -130,9 +134,9 @@ class BakaTsuki :
     override fun chapterListRequest(manga: SManga): Request = parseRequest(manga.url)
 
     override fun chapterListParse(response: Response): List<SChapter> {
-        val result = response.parseAs<ParseResponse>()
-        val projectTitle = result.parse.title.replace(" ", "_")
-        val doc = Jsoup.parse(result.parse.text.content, "$baseUrl/project/")
+        val result = response.parseAs<ParseResponse>().orThrow(response.request.url.queryParameter("page").orEmpty())
+        val projectTitle = result.title.replace(" ", "_")
+        val doc = Jsoup.parse(result.text.content, "$baseUrl/project/")
 
         val chapters = mutableListOf<SChapter>()
         val seen = mutableSetOf<String>()
@@ -172,8 +176,8 @@ class BakaTsuki :
         } else {
             page.url
         }
-        val result = client.newCall(parseRequest(title)).execute().parseAs<ParseResponse>()
-        val doc = Jsoup.parse(result.parse.text.content, "$baseUrl/project/")
+        val result = client.newCall(parseRequest(title)).execute().parseAs<ParseResponse>().orThrow(title)
+        val doc = Jsoup.parse(result.text.content, "$baseUrl/project/")
         doc.select(".wikitable, .mw-editsection, .printfooter, #toc, .toc, .navbox, .reference, style, script").remove()
         doc.select("img").forEach { img ->
             img.attr("src", img.absUrl("src").replace(Regex("""(width|height)=\d+"""), "width=800"))
