@@ -105,15 +105,20 @@ class NovelArrow :
             thumbnail_url = STRING.decode(COVER.firstGroup(flight))
             author = STRING.decode(AUTHOR.firstGroup(flight))
             // The novel's own genres are the "genres" array whose items carry "label"/"href"
-            // (a separate "genres" array holds the site-wide genre nav).
-            genre = GENRES_ARRAY.findAll(flight)
+            // (a separate "genres" array holds the site-wide genre nav). The site also has a much
+            // finer-grained "Tags" section (article:tag og-meta) that isn't in that genres array
+            // at all (e.g. APOCALYPSE, FIREARMS, GORE) - fold those in too.
+            val genreLabels = GENRES_ARRAY.findAll(flight)
                 .map { it.groupValues[1] }
                 .firstOrNull { it.contains("\"label\"") }
-                ?.let { body ->
-                    GENRE_LABEL.findAll(body).mapNotNull { STRING.decode(it.groupValues[1]) }
-                        .map { label -> label.lowercase().split(" ").joinToString(" ") { w -> w.replaceFirstChar(Char::uppercase) } }
-                        .distinct().joinToString(", ")
-                }
+                ?.let { body -> GENRE_LABEL.findAll(body).mapNotNull { STRING.decode(it.groupValues[1]) } }
+                .orEmpty()
+            val tagLabels = ARTICLE_TAG.findAll(flight).mapNotNull { STRING.decode(it.groupValues[1]) }
+            genre = (genreLabels + tagLabels)
+                .map { label -> label.lowercase().split(" ").joinToString(" ") { w -> w.replaceFirstChar(Char::uppercase) } }
+                .distinct()
+                .joinToString(", ")
+                .ifBlank { null }
             status = when (STRING.decode(STATUS.firstGroup(flight))?.lowercase()) {
                 "ongoing" -> SManga.ONGOING
                 "completed" -> SManga.COMPLETED
@@ -121,11 +126,30 @@ class NovelArrow :
                 "dropped", "cancelled" -> SManga.CANCELLED
                 else -> SManga.UNKNOWN
             }
-            description = SYNOPSIS.firstGroup(flight)?.let { arrayBody ->
-                STRING.findAll(arrayBody).mapNotNull { STRING.decode(it.groupValues[1]) }
-                    .joinToString("\n\n")
-            }
+            description = stringArrayAfter(flight, "synopsisParagraphs")
+                .mapNotNull { STRING.decode(it) }
+                .joinToString("\n\n")
+                .ifBlank { null }
         }
+    }
+
+    // A bracket-balanced regex can't bound a "key":[...] array when an element's text itself
+    // contains "[" or "]" (e.g. a synopsis mentioning "[Kairas]") - walk it as quoted strings
+    // instead, which only needs quote/escape state, not bracket depth.
+    private fun stringArrayAfter(flight: String, key: String): List<String> {
+        val marker = "\"$key\":["
+        var pos = flight.indexOf(marker).takeIf { it != -1 }?.plus(marker.length) ?: return emptyList()
+        val values = mutableListOf<String>()
+        while (pos < flight.length) {
+            while (pos < flight.length && flight[pos].isWhitespace()) pos++
+            if (pos >= flight.length || flight[pos] == ']') break
+            val match = STRING.matchAt(flight, pos) ?: break
+            values.add(match.groupValues[1])
+            pos = match.range.last + 1
+            while (pos < flight.length && flight[pos].isWhitespace()) pos++
+            if (pos < flight.length && flight[pos] == ',') pos++
+        }
+        return values
     }
 
     // Chapters
@@ -192,7 +216,7 @@ class NovelArrow :
     private object STRING {
         // Matches a JSON string body (without the surrounding quotes), honoring backslash escapes.
         private val QUOTED = Regex("\"((?:[^\"\\\\]|\\\\.)*)\"")
-        fun findAll(input: String) = QUOTED.findAll(input)
+        fun matchAt(input: String, index: Int) = QUOTED.matchAt(input, index)
         fun decode(raw: String?): String? {
             if (raw == null) return null
             return try {
@@ -211,7 +235,7 @@ class NovelArrow :
         private val STATUS = Regex("\"status\":\"((?:[^\"\\\\]|\\\\.)*)\"")
         private val GENRES_ARRAY = Regex("\"genres\":\\[((?:[^\\[\\]]|\\\\.)*)\\]")
         private val GENRE_LABEL = Regex("\"label\":\"((?:[^\"\\\\]|\\\\.)*)\"")
-        private val SYNOPSIS = Regex("\"synopsisParagraphs\":\\[((?:[^\\[\\]]|\\\\.)*)\\]")
+        private val ARTICLE_TAG = Regex("\"article:tag\",\"content\":\"((?:[^\"\\\\]|\\\\.)*)\"")
         private val CONTENT_REF = Regex("\"chapter_content\":\"\\\$([0-9a-f]+)\"")
 
         private val GENRES = listOf(
