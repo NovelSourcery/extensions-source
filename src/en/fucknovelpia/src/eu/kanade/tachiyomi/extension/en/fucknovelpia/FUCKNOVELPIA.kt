@@ -24,7 +24,7 @@ class FUCKNOVELPIA :
     override val name = "FUCKNOVELPIA"
     override val id: Long = 4776466639710929174
     override val baseUrl = "https://fucknovelpia.com"
-    override val lang = "all"
+    override val lang = "en"
     override val supportsLatest = true
     override val isNovelSource = true
 
