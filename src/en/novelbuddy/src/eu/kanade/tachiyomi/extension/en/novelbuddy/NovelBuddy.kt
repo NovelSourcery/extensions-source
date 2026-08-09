@@ -26,6 +26,9 @@ import java.time.Instant
  * NovelBuddy (novelbuddy.me). Ported from the LNReader plugin: listings come from the
  * api.novelbuddy.me titles/search API, while novel details and chapter content live in the
  * page's __NEXT_DATA__ JSON with a matching titles/{id}/chapters API for the full list.
+ *
+ * Known mirrors (301 redirect to novelbuddy.me as of 2026-07): novelbuddy.io, novelbuddy.com.
+ * Not wired up here - switch to the kei-source mirrors() baseUrl DSL once this repo migrates.
  */
 class NovelBuddy :
     HttpSource(),

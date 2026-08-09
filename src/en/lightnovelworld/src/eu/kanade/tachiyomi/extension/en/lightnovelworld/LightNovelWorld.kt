@@ -29,6 +29,8 @@ import uy.kohesive.injekt.injectLazy
 import java.io.File
 import java.util.Calendar
 
+// Known mirror (unconfirmed live, Cloudflare-blocked probe): lightnovelworld.com. Not wired up
+// here - switch to the kei-source mirrors() baseUrl DSL once this repo migrates.
 class LightNovelWorld :
     HttpSource(),
     NovelSource {

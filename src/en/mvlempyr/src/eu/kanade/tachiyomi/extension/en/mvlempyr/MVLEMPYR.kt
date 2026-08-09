@@ -32,6 +32,8 @@ import java.math.BigInteger
 import java.text.SimpleDateFormat
 import java.util.Locale
 
+// Known mirror (unconfirmed live, Cloudflare-blocked probe): mvlempyr.com. Not wired up here -
+// switch to the kei-source mirrors() baseUrl DSL once this repo migrates.
 class MVLEMPYR :
     HttpSource(),
     NovelSource,
