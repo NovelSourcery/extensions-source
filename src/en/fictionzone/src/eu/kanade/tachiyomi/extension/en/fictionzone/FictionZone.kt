@@ -28,10 +28,12 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.double
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -61,7 +63,33 @@ class FictionZone :
 
     override val supportsLatest = true
 
-    override val client = network.cloudflareClient
+    // Every request (browse/details/chapters/content, including all omniportal proxy calls)
+    // hits this single api-party endpoint, which 429s hard under mass-import's sequential load.
+    override val client = network.client.newBuilder()
+        .addInterceptor(::retryOnTooManyRequests)
+        .build()
+
+    // Max retries when the site answers 429; each retry waits the Retry-After interval.
+    private val maxRetriesOn429 = 3
+
+    private fun retryOnTooManyRequests(chain: Interceptor.Chain): Response {
+        val request = chain.request()
+        var response = chain.proceed(request)
+        var attempts = 0
+        while (response.code == 429 && attempts < maxRetriesOn429) {
+            val waitSeconds = response.header("Retry-After")?.toLongOrNull()?.coerceIn(1, 60) ?: 5
+            response.close()
+            try {
+                Thread.sleep(waitSeconds * 1000)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                break
+            }
+            response = chain.proceed(request)
+            attempts++
+        }
+        return response
+    }
 
     private val json: Json by injectLazy()
 
@@ -381,7 +409,7 @@ class FictionZone :
 
                 "2", "completed" -> SManga.COMPLETED
 
-                else -> when (data["status"]?.jsonPrimitive?.int) {
+                else -> when (data["status"]?.jsonPrimitive?.intOrNull) {
                     1 -> SManga.ONGOING
                     2 -> SManga.COMPLETED
                     else -> SManga.UNKNOWN
