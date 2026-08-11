@@ -238,10 +238,20 @@ class MtlBooks :
     override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
         val slug = manga.url.substringAfter("/novel/")
 
-        // Page 1 is always required to determine the total chapter count.
-        val page1 = json.decodeFromString<ChapterListResponse>(
-            client.newCall(chapterListRequest(manga)).execute().body.string(),
-        )
+        // Page 1 is always required for the total chapter count. The API sometimes returns a
+        // result missing the expected fields instead of an HTTP error - fall back to the cached
+        // list rather than crash when we have one.
+        val page1Response = client.newCall(chapterListRequest(manga)).execute()
+        val page1Body = page1Response.body.string()
+        val page1 = try {
+            json.decodeFromString<ChapterListResponse>(page1Body)
+        } catch (e: Exception) {
+            if (context.existingChapters.isNotEmpty()) {
+                Log.w(TAG, "getChapterList: page 1 decode failed (${page1Response.code}), keeping existing - ${e.message}")
+                return context.existingChapters
+            }
+            throw Exception("MTLBooks chapter list error (${page1Response.code}): ${page1Body.take(200)}")
+        }
         val pagination = page1.result.pagination
         val total = pagination.total
         val limit = pagination.limit
@@ -295,7 +305,12 @@ class MtlBooks :
 
     // Fallback path for when getChapterList is not used; performs a full fetch with no optimisation.
     override fun chapterListParse(response: Response): List<SChapter> {
-        val firstPage = json.decodeFromString<ChapterListResponse>(response.body.string())
+        val body = response.body.string()
+        val firstPage = try {
+            json.decodeFromString<ChapterListResponse>(body)
+        } catch (e: Exception) {
+            throw Exception("MTLBooks chapter list error (${response.code}): ${body.take(200)}")
+        }
         val totalPages = (firstPage.result.pagination.total + firstPage.result.pagination.limit - 1) / firstPage.result.pagination.limit
         val novelSlug = firstPage.result.novelSlug
 
@@ -344,11 +359,12 @@ class MtlBooks :
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        // chapter.url shape: /novel/{novelSlug}/{chapterSlug}. Parse slugs directly so no page-list
-        // fetch is needed (the app supplies chapter.url as the single novel page).
-        val parts = page.url.removePrefix("/").split("/")
+        // chapter.url shape: /novel/{novelSlug}/{chapterSlug}, or legacy
+        // /novel/{novelSlug}/chapter/{chapterSlug}. Take the last segment for the chapter slug so
+        // the legacy "chapter" path piece never gets sent as the slug itself.
+        val parts = page.url.trim('/').split("/")
         val novelSlug = parts.getOrNull(1) ?: ""
-        val chapterSlug = parts.getOrNull(2) ?: ""
+        val chapterSlug = parts.lastOrNull() ?: ""
 
         val body = json.encodeToString(
             ChapterReadRequest.serializer(),
@@ -357,23 +373,21 @@ class MtlBooks :
 
         val response = client.newCall(POST("$apiUrl/chapters/read", headers, body)).execute()
         val responseBody = response.body.string()
+        if (!response.isSuccessful) {
+            throw Exception("MTLBooks server error (${response.code}): ${responseBody.take(200)}")
+        }
 
-        return try {
-            val chapterResponse = json.decodeFromString<ChapterReadResponse>(responseBody)
-            val rawContent = chapterResponse.result.chapter.content
+        val chapterResponse = json.decodeFromString<ChapterReadResponse>(responseBody)
+        val rawContent = chapterResponse.result.chapter.content
 
-            if (rawContent.isNullOrBlank()) {
-                "<p>No content available for this chapter.</p>"
-            } else {
-                val content = StringBuilder()
-                // Split by newlines and wrap in paragraphs
-                rawContent.split("\n").filter { it.isNotBlank() }.forEach { line ->
-                    content.append("<p>${line.trim()}</p>\n")
-                }
-                content.toString().ifEmpty { "<p>No content available.</p>" }
+        return if (rawContent.isNullOrBlank()) {
+            "<p>No content available for this chapter.</p>"
+        } else {
+            val content = StringBuilder()
+            rawContent.split("\n").filter { it.isNotBlank() }.forEach { line ->
+                content.append("<p>${line.trim()}</p>\n")
             }
-        } catch (e: Exception) {
-            "<p>Error loading chapter: ${e.message}</p>"
+            content.toString().ifEmpty { "<p>No content available.</p>" }
         }
     }
 
