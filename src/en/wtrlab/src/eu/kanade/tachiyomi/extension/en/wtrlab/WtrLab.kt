@@ -559,11 +559,6 @@ class WtrLab :
                     if (value != "all") params.add("addition_age=$value")
                 }
 
-                is MinChaptersFilter -> {
-                    val value = filter.selected
-                    if (value.isNotEmpty()) params.add("minc=$value")
-                }
-
                 is MinRatingFilter -> {
                     val value = filter.selected
                     if (value.isNotEmpty()) params.add("minr=$value")
@@ -604,6 +599,20 @@ class WtrLab :
 
                 else -> {}
             }
+        }
+
+        val countType = filters.filterIsInstance<CountTypeFilter>().firstOrNull()?.selected ?: ""
+        val countMode = filters.filterIsInstance<CountFilterModeFilter>().firstOrNull()?.selected ?: "min"
+        val countValue = when (countType) {
+            "character" -> filters.filterIsInstance<CharacterCountValueFilter>().firstOrNull()?.selected
+            "unlock-ratio" -> filters.filterIsInstance<UnlockRatioValueFilter>().firstOrNull()?.selected
+            else -> filters.filterIsInstance<ChapterCountValueFilter>().firstOrNull()?.selected
+        } ?: ""
+
+        if (countValue.isNotEmpty()) {
+            if (countType.isNotEmpty()) params.add("count_type=$countType")
+            if (countMode == "max") params.add("count_filter=max")
+            params.add("count_value=$countValue")
         }
 
         params.add("locale=en")
@@ -1279,9 +1288,13 @@ class WtrLab :
         StatusFilter(),
         ReleaseStatusFilter(),
         AdditionAgeFilter(),
-        MinChaptersFilter(),
         MinRatingFilter(),
         MinReviewCountFilter(),
+        CountTypeFilter(),
+        CountFilterModeFilter(),
+        ChapterCountValueFilter(),
+        CharacterCountValueFilter(),
+        UnlockRatioValueFilter(),
         GenreOperatorFilter(),
         GenreFilter(genreFilterBoxes()),
         TagOperatorFilter(),
@@ -1397,38 +1410,90 @@ private class AdditionAgeFilter :
         ),
     )
 
-private class MinChaptersFilter :
-    SelectFilter(
-        "Minimum Chapters",
-        arrayOf(
-            Pair("Any Chapters", ""),
-            Pair("100+ Chapters", "100"),
-            Pair("150+ Chapters", "150"),
-            Pair("200+ Chapters", "200"),
-            Pair("250+ Chapters", "250"),
-            Pair("500+ Chapters", "500"),
-            Pair("750+ Chapters", "750"),
-            Pair("1000+ Chapters", "1000"),
-            Pair("1500+ Chapters", "1500"),
-            Pair("2000+ Chapters", "2000"),
-            Pair("2500+ Chapters", "2500"),
-        ),
-    )
-
 private class MinRatingFilter :
     SelectFilter(
         "Minimum Rating",
+        (10..50).map { tenth ->
+            val value = String.format(java.util.Locale.US, "%.1f", tenth / 10.0)
+            Pair("$value+ Stars", value)
+        }.toMutableList().also { it.add(0, Pair("Any", "")) }.toTypedArray(),
+    )
+
+private class CountTypeFilter :
+    SelectFilter(
+        "Count Type",
+        arrayOf(
+            Pair("Chapters", ""),
+            Pair("Characters", "character"),
+            Pair("Unlock Count", "unlock"),
+            Pair("Unlock Ratio", "unlock-ratio"),
+        ),
+    )
+
+private class CountFilterModeFilter :
+    SelectFilter(
+        "Count Filter",
+        arrayOf(
+            Pair("Minimum", "min"),
+            Pair("Maximum", "max"),
+        ),
+    )
+
+private class ChapterCountValueFilter :
+    SelectFilter(
+        "Count Value (Chapters / Unlock Count)",
         arrayOf(
             Pair("Any", ""),
-            Pair("1.0+ Stars", "1.0"),
-            Pair("1.5+ Stars", "1.5"),
-            Pair("2.0+ Stars", "2.0"),
-            Pair("2.5+ Stars", "2.5"),
-            Pair("3.0+ Stars", "3.0"),
-            Pair("3.5+ Stars", "3.5"),
-            Pair("4.0+ Stars", "4.0"),
-            Pair("4.5+ Stars", "4.5"),
-            Pair("5.0+ Stars", "5.0"),
+            Pair("100 Chapters", "100"),
+            Pair("150 Chapters", "150"),
+            Pair("200 Chapters", "200"),
+            Pair("250 Chapters", "250"),
+            Pair("500 Chapters", "500"),
+            Pair("750 Chapters", "750"),
+            Pair("1000 Chapters", "1000"),
+            Pair("1500 Chapters", "1500"),
+            Pair("2000 Chapters", "2000"),
+            Pair("2500 Chapters", "2500"),
+            Pair("5000 Chapters", "5000"),
+        ),
+    )
+
+private class CharacterCountValueFilter :
+    SelectFilter(
+        "Count Value (Characters)",
+        arrayOf(
+            Pair("Any", ""),
+            Pair("100,000 (100k)", "100000"),
+            Pair("250,000 (250k)", "250000"),
+            Pair("500,000 (500k)", "500000"),
+            Pair("750,000 (750k)", "750000"),
+            Pair("1,000,000 (1M)", "1000000"),
+            Pair("1,500,000 (1.5M)", "1500000"),
+            Pair("2,000,000 (2M)", "2000000"),
+            Pair("2,500,000 (2.5M)", "2500000"),
+            Pair("3,000,000 (3M)", "3000000"),
+            Pair("4,000,000 (4M)", "4000000"),
+            Pair("5,000,000 (5M)", "5000000"),
+            Pair("7,500,000 (7.5M)", "7500000"),
+            Pair("10,000,000 (10M)", "10000000"),
+        ),
+    )
+
+private class UnlockRatioValueFilter :
+    SelectFilter(
+        "Count Value (Unlock Ratio)",
+        arrayOf(
+            Pair("Any", ""),
+            Pair("10%", "0.1"),
+            Pair("20%", "0.2"),
+            Pair("30%", "0.3"),
+            Pair("40%", "0.4"),
+            Pair("50%", "0.5"),
+            Pair("60%", "0.6"),
+            Pair("70%", "0.7"),
+            Pair("80%", "0.8"),
+            Pair("90%", "0.9"),
+            Pair("100%", "1"),
         ),
     )
 
