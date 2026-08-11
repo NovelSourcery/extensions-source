@@ -26,7 +26,14 @@ class ContinueData(
 
 @Serializable
 class ParseResponse(
-    val parse: ParseData,
+    val parse: ParseData? = null,
+    val error: ApiError? = null,
+)
+
+@Serializable
+class ApiError(
+    val code: String,
+    val info: String,
 )
 
 @Serializable
