@@ -1,0 +1,162 @@
+package eu.kanade.tachiyomi.novelextension.en.wuxiaworldeu
+
+import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.source.NovelSource
+import eu.kanade.tachiyomi.source.model.FilterList
+import eu.kanade.tachiyomi.source.model.MangasPage
+import eu.kanade.tachiyomi.source.model.Page
+import eu.kanade.tachiyomi.source.model.SChapter
+import eu.kanade.tachiyomi.source.model.SManga
+import eu.kanade.tachiyomi.source.online.HttpSource
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Request
+import okhttp3.Response
+
+/**
+ * mirror https://readnovel.eu
+ * WuxiaWorldEU (wuxiaworld.eu). A Django REST + Next.js site, unrelated to wuxiaworld.com or
+ * wuxiaworld.site. Browse/search/details all come from the plain `/api/novels/` REST endpoint;
+ * chapter content is `/api/getchapter/{chapterSlug}/`. There is no working sort parameter on
+ * `/api/novels/` (every `ordering=` value tried returns the same alphabetical order), so popular
+ * and latest both fall back to the same listing.
+ */
+class WuxiaWorldEU :
+    HttpSource(),
+    NovelSource {
+
+    override val name = "WuxiaWorldEU"
+    override val baseUrl = "https://www.wuxiaworld.eu"
+    override val lang = "en"
+    override val supportsLatest = true
+    override val isNovelSource = true
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    private val pageSize = 20
+
+    // ======================== Browse / Search ========================
+
+    override fun popularMangaRequest(page: Int): Request = novelsRequest(page)
+
+    override fun latestUpdatesRequest(page: Int): Request = novelsRequest(page)
+
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = novelsRequest(page, query)
+
+    private fun novelsRequest(page: Int, query: String? = null): Request {
+        val url = "$baseUrl/api/novels/".toHttpUrl().newBuilder()
+            .addQueryParameter("limit", pageSize.toString())
+            .addQueryParameter("offset", ((page - 1) * pageSize).toString())
+        if (!query.isNullOrBlank()) url.addQueryParameter("search", query)
+        return GET(url.build(), headers)
+    }
+
+    override fun popularMangaParse(response: Response): MangasPage = parseNovelsList(response)
+
+    override fun latestUpdatesParse(response: Response): MangasPage = parseNovelsList(response)
+
+    override fun searchMangaParse(response: Response): MangasPage = parseNovelsList(response)
+
+    private fun parseNovelsList(response: Response): MangasPage {
+        val obj = json.parseToJsonElement(response.body.string()).jsonObject
+        val results = obj["results"]?.jsonArray ?: return MangasPage(emptyList(), false)
+        val mangas = results.mapNotNull { element ->
+            try {
+                val item = element.jsonObject
+                val slug = item["slug"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                SManga.create().apply {
+                    title = item["name"]?.jsonPrimitive?.contentOrNull ?: slug
+                    url = slug
+                    thumbnail_url = item["image"]?.jsonPrimitive?.contentOrNull
+                    description = item["description"]?.jsonPrimitive?.contentOrNull
+                    genre = item["categories"]?.jsonArray
+                        ?.mapNotNull { it.jsonObject["name"]?.jsonPrimitive?.contentOrNull }
+                        ?.joinToString(", ")
+                }
+            } catch (e: Exception) {
+                null
+            }
+        }
+        return MangasPage(mangas, obj["next"]?.jsonPrimitive?.contentOrNull != null)
+    }
+
+    // ======================== Details ========================
+
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.url}"
+
+    override fun mangaDetailsRequest(manga: SManga): Request = GET("$baseUrl/api/novels/${manga.url}/", headers)
+
+    override fun mangaDetailsParse(response: Response): SManga {
+        val data = json.parseToJsonElement(response.body.string()).jsonObject
+        return SManga.create().apply {
+            title = data["name"]!!.jsonPrimitive.content
+            thumbnail_url = data["image"]?.jsonPrimitive?.contentOrNull
+                ?: data["original_image"]?.jsonPrimitive?.contentOrNull
+            author = data["author"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull
+            genre = data["categories"]?.jsonArray
+                ?.mapNotNull { it.jsonObject["name"]?.jsonPrimitive?.contentOrNull }
+                ?.joinToString(", ")
+            description = data["description"]?.jsonPrimitive?.contentOrNull
+            status = when (data["status"]?.jsonPrimitive?.contentOrNull) {
+                "OG" -> SManga.ONGOING
+                "CD", "CO" -> SManga.COMPLETED
+                "HI" -> SManga.ON_HIATUS
+                "CA", "DR" -> SManga.CANCELLED
+                else -> SManga.UNKNOWN
+            }
+        }
+    }
+
+    // ======================== Chapters ========================
+    // No working chapter-list endpoint was found (`/api/chapters` ignores every novel filter
+    // param and just returns a global feed). Chapter pages are reliably `{slug}-{n}` for
+    // n = 1..chapterCount though (verified against the last chapter's `nextChap: null`), so the
+    // list is generated directly from the novel detail's chapter count instead of being scraped.
+
+    override fun chapterListRequest(manga: SManga): Request = mangaDetailsRequest(manga)
+
+    override fun chapterListParse(response: Response): List<SChapter> {
+        val data = json.parseToJsonElement(response.body.string()).jsonObject
+        val slug = data["slug"]?.jsonPrimitive?.contentOrNull ?: return emptyList()
+        val count = data["chapters"]?.jsonPrimitive?.intOrNull ?: return emptyList()
+        if (count <= 0) return emptyList()
+
+        return (1..count).map { n ->
+            SChapter.create().apply {
+                name = "Chapter $n"
+                url = "$slug-$n"
+                chapter_number = n.toFloat()
+            }
+        }.reversed()
+    }
+
+    override fun getChapterUrl(chapter: SChapter): String = "$baseUrl/chapter/${chapter.url}"
+
+    // ======================== Content ========================
+    // Single metadata page per chapter; the real fetch happens in fetchPageText.
+    override fun pageListRequest(chapter: SChapter): Request = throw UnsupportedOperationException("Not used")
+    override fun pageListParse(response: Response): List<Page> = throw UnsupportedOperationException("Not used")
+    override fun fetchPageList(chapter: SChapter): rx.Observable<List<Page>> = rx.Observable.just(listOf(Page(0, chapter.url)))
+
+    override fun imageUrlParse(response: Response): String = ""
+
+    override suspend fun fetchPageText(page: Page): String {
+        val response = client.newCall(GET("$baseUrl/api/getchapter/${page.url}/", headers)).execute()
+        val data = json.parseToJsonElement(response.body.string()).jsonObject
+        val text = data["text"]?.jsonPrimitive?.contentOrNull ?: return ""
+        return text
+            // The site's own data has this mojibake in place of apostrophes/quotes site-wide.
+            .replace('�', '\'')
+            .split('\n')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .joinToString("") { "<p>$it</p>" }
+    }
+
+    override fun getFilterList(): FilterList = FilterList()
+}
