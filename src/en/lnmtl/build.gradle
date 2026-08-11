@@ -1,0 +1,9 @@
+ext {
+    extName = 'LNMTL'
+    extClass = '.LNMTL'
+    extVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"
