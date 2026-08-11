@@ -804,123 +804,133 @@ class TomatoMTL :
         super.fetchMangaDetails(manga)
     }
 
-    private fun fetchGardenMangaDetails(manga: SManga): rx.Observable<SManga> {
-        return rx.Observable.fromCallable {
-            try {
+    private fun fetchGardenMangaDetails(manga: SManga): rx.Observable<SManga> = rx.Observable.fromCallable {
+        fetchGardenMangaDetailsInternal(manga)
+    }.map { ensureGardenTitle(it) }
+
+    private fun ensureGardenTitle(manga: SManga): SManga {
+        val hasTitle = runCatching { manga.title }.getOrNull()?.isNotBlank() == true
+        if (!hasTitle) {
+            val novelUrl = runCatching {
                 val pathParts = manga.url.removePrefix("/garden/").split("/")
-                if (pathParts.size < 2) return@fromCallable manga
+                hexToString(pathParts[1])
+            }.getOrNull()
+            manga.title = novelUrl?.trim('/')?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+                ?: "Garden Novel"
+        }
+        return manga
+    }
 
-                val hexId = pathParts[1]
-                val novelUrl = hexToString(hexId)
-                val source = resolveGardenSource(pathParts[0], novelUrl)
+    private fun fetchGardenMangaDetailsInternal(manga: SManga): SManga {
+        try {
+            val pathParts = manga.url.removePrefix("/garden/").split("/")
+            if (pathParts.size < 2) return manga
 
-                Log.d("TomatoMTL", "Fetching garden details for: source=$source, url=$novelUrl")
+            val hexId = pathParts[1]
+            val novelUrl = hexToString(hexId)
+            val source = resolveGardenSource(pathParts[0], novelUrl)
 
-                val detailUrl = "$gardenApiBase/source/$source/detail?url=${URLEncoder.encode(novelUrl, "UTF-8")}"
+            Log.d("TomatoMTL", "Fetching garden details for: source=$source, url=$novelUrl")
 
-                val response = client.newCall(GET(detailUrl, headers)).execute()
-                val responseBody = response.body.string()
+            val detailUrl = "$gardenApiBase/source/$source/detail?url=${URLEncoder.encode(novelUrl, "UTF-8")}"
 
-                try {
-                    val jsonResult = json.parseToJsonElement(responseBody).jsonObject
-                    val iv = jsonResult["iv"]?.jsonPrimitive?.contentOrNull
-                    val enc = jsonResult["enc"]?.jsonPrimitive?.contentOrNull
+            val response = client.newCall(GET(detailUrl, headers)).execute()
+            val responseBody = response.body.string()
 
-                    if (iv != null && enc != null) {
-                        val decrypted = decryptContent(iv, enc)
-                        Log.d("TomatoMTL", "Decrypted garden detail: ${decrypted.take(500)}...")
+            try {
+                val jsonResult = json.parseToJsonElement(responseBody).jsonObject
+                val iv = jsonResult["iv"]?.jsonPrimitive?.contentOrNull
+                val enc = jsonResult["enc"]?.jsonPrimitive?.contentOrNull
 
-                        val decryptedJson = json.parseToJsonElement(decrypted).jsonObject
+                if (iv != null && enc != null) {
+                    val decrypted = decryptContent(iv, enc)
+                    Log.d("TomatoMTL", "Decrypted garden detail: ${decrypted.take(500)}...")
 
-                        if (decryptedJson["success"]?.jsonPrimitive?.booleanOrNull == true) {
-                            val data = decryptedJson["data"]?.jsonObject
-                            if (data != null) {
-                                val rawName = data["name"]?.jsonPrimitive?.contentOrNull
-                                val rawAuthor = data["author"]?.jsonPrimitive?.contentOrNull
-                                val rawCover = data["cover"]?.jsonPrimitive?.contentOrNull
-                                val rawDescription = data["description"]?.jsonPrimitive?.contentOrNull
-                                    ?: data["intro"]?.jsonPrimitive?.contentOrNull
-                                val rawStatus = data["status"]?.jsonPrimitive?.contentOrNull
+                    val decryptedJson = json.parseToJsonElement(decrypted).jsonObject
 
-                                manga.apply {
-                                    // Translate title with HTML cleaning
-                                    title = rawName?.let {
-                                        val cleaned = cleanHtml(it)
-                                        cleanTitle(translateSingleTitle(cleaned))
-                                    } ?: manga.title
+                    if (decryptedJson["success"]?.jsonPrimitive?.booleanOrNull == true) {
+                        val data = decryptedJson["data"]?.jsonObject
+                        if (data != null) {
+                            val rawName = data["name"]?.jsonPrimitive?.contentOrNull
+                            val rawAuthor = data["author"]?.jsonPrimitive?.contentOrNull
+                            val rawCover = data["cover"]?.jsonPrimitive?.contentOrNull
+                            val rawDescription = data["description"]?.jsonPrimitive?.contentOrNull
+                                ?: data["intro"]?.jsonPrimitive?.contentOrNull
+                            val rawStatus = data["status"]?.jsonPrimitive?.contentOrNull
 
-                                    // Author
-                                    author = rawAuthor ?: manga.author
+                            manga.apply {
+                                title = rawName?.let {
+                                    val cleaned = cleanHtml(it)
+                                    cleanTitle(translateSingleTitle(cleaned))
+                                } ?: manga.title
 
-                                    // Cover - optimize if needed
-                                    rawCover?.let { cover ->
-                                        thumbnail_url = if (cover.contains("wsrv.nl") || cover.contains("cover-img.raudo.eu.org")) {
-                                            cover
-                                        } else {
-                                            val hexCover = stringToHex(cover)
-                                            "https://wsrv.nl/?url=https://tomato-proxy.cachefly.net/$hexCover&w=225&h=300&fit=cover&output=webp"
-                                        }
-                                    }
+                                author = rawAuthor ?: manga.author
 
-                                    // Description - clean HTML entities and translate if needed
-                                    description = buildString {
-                                        rawDescription?.let { desc ->
-                                            val cleanedDesc = cleanHtml(desc)
-                                            val translatedDesc = if (needsTranslation(cleanedDesc)) {
-                                                try {
-                                                    translateSingleTitle(cleanedDesc)
-                                                } catch (e: Exception) {
-                                                    cleanedDesc
-                                                }
-                                            } else {
-                                                cleanedDesc
-                                            }
-                                            append(translatedDesc)
-                                            append("\n\n")
-                                        }
-                                        append("━━━━━━━━━━━━━━━━━━\n")
-                                        append("📚 Source: $source\n")
-                                        append("🔗 Original URL: $novelUrl\n")
-                                        append("━━━━━━━━━━━━━━━━━━\n\n")
-                                        append("⚠️ Garden novels are aggregated from third-party sources by TomatoMTL.")
-                                    }
-
-                                    // Status
-                                    status = when (rawStatus?.lowercase()) {
-                                        "completed", "finished", "完结" -> SManga.COMPLETED
-                                        "ongoing", "连载", "连载中" -> SManga.ONGOING
-                                        else -> SManga.UNKNOWN
+                                rawCover?.let { cover ->
+                                    thumbnail_url = if (cover.contains("wsrv.nl") || cover.contains("cover-img.raudo.eu.org")) {
+                                        cover
+                                    } else {
+                                        val hexCover = stringToHex(cover)
+                                        "https://wsrv.nl/?url=https://tomato-proxy.cachefly.net/$hexCover&w=225&h=300&fit=cover&output=webp"
                                     }
                                 }
 
-                                return@fromCallable manga
-                            }
-                        } else {
-                            val error = decryptedJson["error"]?.jsonPrimitive?.contentOrNull
-                            Log.e("TomatoMTL", "Garden detail API error: $error")
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e("TomatoMTL", "Error parsing garden details: ${e.message}", e)
-                }
+                                description = buildString {
+                                    rawDescription?.let { desc ->
+                                        val cleanedDesc = cleanHtml(desc)
+                                        val translatedDesc = if (needsTranslation(cleanedDesc)) {
+                                            try {
+                                                translateSingleTitle(cleanedDesc)
+                                            } catch (e: Exception) {
+                                                cleanedDesc
+                                            }
+                                        } else {
+                                            cleanedDesc
+                                        }
+                                        append(translatedDesc)
+                                        append("\n\n")
+                                    }
+                                    append("━━━━━━━━━━━━━━━━━━\n")
+                                    append("📚 Source: $source\n")
+                                    append("🔗 Original URL: $novelUrl\n")
+                                    append("━━━━━━━━━━━━━━━━━━\n\n")
+                                    append("⚠️ Garden novels are aggregated from third-party sources by TomatoMTL.")
+                                }
 
-                manga.apply {
-                    if (description.isNullOrBlank()) {
-                        description = buildString {
-                            append("━━━━━━━━━━━━━━━━━━\n")
-                            append("📚 Source: $source\n")
-                            append("🔗 Original URL: $novelUrl\n")
-                            append("━━━━━━━━━━━━━━━━━━\n\n")
-                            append("⚠️ Garden novels are aggregated from third-party sources.\n")
-                            append("Failed to load full details from the garden API.")
+                                status = when (rawStatus?.lowercase()) {
+                                    "completed", "finished", "完结" -> SManga.COMPLETED
+                                    "ongoing", "连载", "连载中" -> SManga.ONGOING
+                                    else -> SManga.UNKNOWN
+                                }
+                            }
+
+                            return manga
                         }
+                    } else {
+                        val error = decryptedJson["error"]?.jsonPrimitive?.contentOrNull
+                        Log.e("TomatoMTL", "Garden detail API error: $error")
                     }
                 }
-                manga
             } catch (e: Exception) {
-                Log.e("TomatoMTL", "Error fetching garden manga details: ${e.message}", e)
-                manga
+                Log.e("TomatoMTL", "Error parsing garden details: ${e.message}", e)
             }
+
+            manga.apply {
+                if (description.isNullOrBlank()) {
+                    description = buildString {
+                        append("━━━━━━━━━━━━━━━━━━\n")
+                        append("📚 Source: $source\n")
+                        append("🔗 Original URL: $novelUrl\n")
+                        append("━━━━━━━━━━━━━━━━━━\n\n")
+                        append("⚠️ Garden novels are aggregated from third-party sources.\n")
+                        append("Failed to load full details from the garden API.")
+                    }
+                }
+            }
+            return manga
+        } catch (e: Exception) {
+            Log.e("TomatoMTL", "Error fetching garden manga details: ${e.message}", e)
+            return manga
         }
     }
 
