@@ -182,7 +182,7 @@ class BrightNovels :
                 .substringBefore("?")
                 .trim('/'),
         )
-        return inertiaRequest("$baseUrl/series/${encodePathSegment(slug)}")
+        return inertiaRequest(dotSafePath("$baseUrl/series/${encodePathSegment(slug)}"))
     }
 
     override fun mangaDetailsParse(response: Response): SManga {
@@ -220,12 +220,12 @@ class BrightNovels :
                 .substringBefore("?")
                 .trim('/'),
         )
-        return inertiaRequest("$baseUrl/series/${encodePathSegment(slug)}")
+        return inertiaRequest(dotSafePath("$baseUrl/series/${encodePathSegment(slug)}"))
     }
 
     override fun chapterListParse(response: Response): List<SChapter> {
         val fallbackSeriesSlug = response.request.url.pathSegments
-            .lastOrNull()
+            .lastOrNull { it.isNotBlank() }
             ?.let(::decodePathSegment)
             .orEmpty()
         val body = response.body.string()
@@ -290,7 +290,7 @@ class BrightNovels :
                 .substringBefore("?")
                 .trim('/'),
         )
-        return "$baseUrl/series/${encodePathSegment(slug)}"
+        return dotSafePath("$baseUrl/series/${encodePathSegment(slug)}")
     }
 
     override fun imageUrlParse(response: Response) = ""
@@ -583,6 +583,15 @@ class BrightNovels :
         .encodedPath
         .substringAfterLast('/')
 
+    /**
+     * Some series/chapter slugs end with a literal "." (BrightNovels appends the title's
+     * trailing punctuation verbatim). Cloudflare/nginx silently strips a trailing "." when it's
+     * the very last character of the request path, turning it into a different (nonexistent)
+     * slug and 404ing. Appending "/" after it keeps the dot intact since it's no longer the last
+     * character of the path.
+     */
+    private fun dotSafePath(path: String): String = if (path.endsWith(".")) "$path/" else path
+
     private fun decodePathSegment(value: String): String = runCatching {
         URLDecoder.decode(value, "UTF-8")
     }.getOrDefault(value)
@@ -707,7 +716,7 @@ class BrightNovels :
 
         return SChapter.create().apply {
             name = chapterName
-            url = "/series/${encodePathSegment(chapterSeriesSlug)}/${encodePathSegment(chapterSlug)}"
+            url = dotSafePath("/series/${encodePathSegment(chapterSeriesSlug)}/${encodePathSegment(chapterSlug)}")
             chapter_number = chapterNumber
             date_upload = parseDate(chapter.string("index_at"))
         }
