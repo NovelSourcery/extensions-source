@@ -15,6 +15,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.utils.setAltTitles
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.booleanOrNull
@@ -64,6 +65,25 @@ class NovelDex :
         .add("rsc", "1")
         .add("Accept", "*/*")
         .build()
+
+    /**
+     * NovelDex renames series slugs over time. A stale slug's RSC response carries no series
+     * data at all, just an inline redirect signal: "REDIRECT;replace;/series/novel/new-slug;307;"
+     * (Next.js resolves this server-side instead of an HTTP redirect). Follow the chain so stale
+     * library urls keep working without requiring the user to migrate the entry.
+     */
+    private fun resolveRedirects(initialBody: String): Pair<String, String?> {
+        var body = initialBody
+        var finalPath: String? = null
+        var hops = 0
+        while (hops < MAX_REDIRECT_HOPS) {
+            val path = REDIRECT_REGEX.find(body)?.groupValues?.get(1) ?: break
+            finalPath = path
+            hops++
+            body = client.newCall(GET("$baseUrl$path", rscHeaders())).execute().body.string()
+        }
+        return body to finalPath
+    }
 
     // ======================== Popular ========================
 
@@ -216,6 +236,17 @@ class NovelDex :
         }
     }
 
+    private fun parseStatus(status: String?): Int = when (status) {
+        "ONGOING" -> SManga.ONGOING
+        "COMPLETED" -> SManga.COMPLETED
+        "MASS_RELEASED" -> SManga.COMPLETED
+        "HIATUS" -> SManga.ON_HIATUS
+        "DROPPED" -> SManga.CANCELLED
+        "CANCELLED" -> SManga.CANCELLED
+        "COMING_SOON" -> SManga.UNKNOWN
+        else -> SManga.UNKNOWN
+    }
+
     /**
      * Map API type field to URL path segment.
      */
@@ -233,22 +264,25 @@ class NovelDex :
     override fun mangaDetailsRequest(manga: SManga): Request = GET("$baseUrl${manga.url}", rscHeaders())
 
     override fun mangaDetailsParse(response: Response): SManga {
-        val body = response.body.string()
+        val (body, redirectedPath) = resolveRedirects(response.body.string())
 
         // RSC response contains a JSON fragment with series data
         // Pattern: "series":{ ... } inside the RSC payload
         val seriesJsonMatch = Regex(""""series"\s*:\s*(\{.+?"similarSeries"\s*:\s*\[.*?\]\s*\}[^}]*\})""", RegexOption.DOT_MATCHES_ALL)
             .find(body)
 
-        if (seriesJsonMatch != null) {
-            return try {
+        val manga = if (seriesJsonMatch != null) {
+            try {
                 parseMangaFromJson(seriesJsonMatch.groupValues[1], body)
             } catch (e: Exception) {
                 parseMangaFromRaw(body)
             }
+        } else {
+            parseMangaFromRaw(body)
         }
 
-        return parseMangaFromRaw(body)
+        if (redirectedPath != null) manga.url = redirectedPath
+        return manga
     }
 
     private fun parseMangaFromJson(seriesJson: String, fullBody: String): SManga {
@@ -271,13 +305,13 @@ class NovelDex :
             val originalTitle = Regex(""""originalTitle"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(seriesJson)
                 ?.groupValues?.get(1)?.unescape()?.takeIf { it.isNotBlank() }
                 ?.let { cleanTitleText(it) }
-            description = buildString {
-                altTitle?.let { append("Alt Title: $it\n") }
-                originalTitle?.let { append("Original: $it\n") }
-                aliases?.takeIf { it.isNotEmpty() }?.let { append("Also known as: ${it.joinToString(", ")}\n") }
-                if (isNotEmpty()) append("\n")
-                rawDescription?.let { append(it) }
-            }.trim().takeIf { it.isNotBlank() }
+
+            val altTitles = (listOfNotNull(altTitle, originalTitle) + (aliases ?: emptyList()))
+                .filter { it.isNotBlank() && it != title }
+                .distinct()
+            if (altTitles.isNotEmpty()) setAltTitles(altTitles)
+
+            description = rawDescription?.trim()?.takeIf { it.isNotBlank() }
 
             val coverImg = Regex(""""coverImage"\s*:\s*"((?:[^"\\]|\\.]*)"""").find(seriesJson)
                 ?.groupValues?.get(1)?.unescape()
@@ -301,13 +335,9 @@ class NovelDex :
 
             genre = (genreNames + tagNames).joinToString(", ").takeIf { it.isNotBlank() }
 
-            val statusStr = Regex(""""status"\s*:\s*"([A-Z_]+)"""").find(seriesJson)
-                ?.groupValues?.get(1)
-            status = when (statusStr) {
-                "ONGOING" -> SManga.ONGOING
-                "COMPLETED" -> SManga.COMPLETED
-                else -> SManga.UNKNOWN
-            }
+            status = parseStatus(
+                Regex(""""status"\s*:\s*"([A-Z_]+)"""").find(seriesJson)?.groupValues?.get(1),
+            )
         }
     }
 
@@ -332,13 +362,12 @@ class NovelDex :
             ?.let { Regex(""""((?:[^"\\]|\\.)*)"""").findAll(it).map { m -> m.groupValues[1].unescape() }.toList() }
             ?.filter { it.isNotBlank() }
 
-        description = buildString {
-            altTitle?.let { append("Alt Title: $it\n") }
-            originalTitle?.let { append("Original: $it\n") }
-            aliases?.takeIf { it.isNotEmpty() }?.let { append("Also known as: ${it.joinToString(", ")}\n") }
-            if (isNotEmpty()) append("\n")
-            desc?.let { append(it) }
-        }.trim().takeIf { it.isNotBlank() }
+        val altTitles = (listOfNotNull(altTitle, originalTitle) + (aliases ?: emptyList()))
+            .filter { it.isNotBlank() && it != title }
+            .distinct()
+        if (altTitles.isNotEmpty()) setAltTitles(altTitles)
+
+        description = desc?.trim()?.takeIf { it.isNotBlank() }
 
         val coverImg = Regex(""""coverImage"\s*:\s*"(/[^"]+)"""").find(body)?.groupValues?.get(1)
         thumbnail_url = coverImg?.let { baseUrl + it }
@@ -347,18 +376,20 @@ class NovelDex :
             ?.groupValues?.get(1)?.unescape()
 
         val genresSection = Regex(""""genres"\s*:\s*\[(.*?)\]""", RegexOption.DOT_MATCHES_ALL).find(body)
-        genre = genresSection?.groupValues?.get(1)?.let {
-            Regex(""""name"\s*:\s*"((?:[^"\\]|\\.)*)"""").findAll(it)
-                .map { m -> m.groupValues[1].unescape() }
-                .joinToString(", ")
-        }
+        val genreNames = genresSection?.groupValues?.get(1)?.let {
+            Regex(""""name"\s*:\s*"((?:[^"\\]|\\.)*)"""").findAll(it).map { m -> m.groupValues[1].unescape() }.toList()
+        } ?: emptyList()
 
-        val statusStr = Regex(""""status"\s*:\s*"([A-Z_]+)"""").find(body)?.groupValues?.get(1)
-        status = when (statusStr) {
-            "ONGOING" -> SManga.ONGOING
-            "COMPLETED" -> SManga.COMPLETED
-            else -> SManga.UNKNOWN
-        }
+        val tagsSection = Regex(""""tags"\s*:\s*\[(.*?)\]""", RegexOption.DOT_MATCHES_ALL).find(body)
+        val tagNames = tagsSection?.groupValues?.get(1)?.let {
+            Regex(""""name"\s*:\s*"((?:[^"\\]|\\.)*)"""").findAll(it).map { m -> m.groupValues[1].unescape() }.toList()
+        } ?: emptyList()
+
+        genre = (genreNames + tagNames).joinToString(", ").takeIf { it.isNotBlank() }
+
+        status = parseStatus(
+            Regex(""""status"\s*:\s*"([A-Z_]+)"""").find(body)?.groupValues?.get(1),
+        )
     }
 
     // ======================== Chapters ========================
@@ -369,8 +400,8 @@ class NovelDex :
     }
 
     override fun chapterListParse(response: Response): List<SChapter> {
-        val body = response.body.string()
-        val requestUrl = response.request.url.encodedPath
+        val (body, redirectedPath) = resolveRedirects(response.body.string())
+        val requestUrl = redirectedPath ?: response.request.url.encodedPath
 
         // Extract type and slug: /series/{type}/{slug} or /series/{type}/{slug}/chapter/1
         val slugMatch = Regex("""/series/([^/]+)/([^/?]+)""").find(requestUrl)
@@ -553,7 +584,7 @@ class NovelDex :
         // NOT in the visible HTML DOM (which only has loading skeletons).
         try {
             val rscResponse = client.newCall(GET("$baseUrl$chapterPath", rscHeaders())).execute()
-            val rscBody = rscResponse.body.string()
+            val (rscBody, _) = resolveRedirects(rscResponse.body.string())
             val xorContent = extractFromXorEncryption(rscBody)
             if (!xorContent.isNullOrBlank()) return xorContent
 
@@ -836,6 +867,8 @@ class NovelDex :
 
     companion object {
         private const val SHOW_LOCKED_PREF_KEY = "show_locked_chapters"
+        private const val MAX_REDIRECT_HOPS = 3
+        private val REDIRECT_REGEX = Regex("""REDIRECT;\w+;([^;]+);\d+;""")
     }
 
     // ======================== Filters ========================
