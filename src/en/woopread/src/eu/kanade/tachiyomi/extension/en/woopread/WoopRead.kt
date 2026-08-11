@@ -75,18 +75,21 @@ class WoopRead :
     override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
     override fun searchMangaParse(response: Response) = popularMangaParse(response)
 
+    // manga.url is now just the slug; strip any wrapping path/id so old stored urls still resolve.
+    private fun extractSlug(url: String): String = url.trim('/').substringAfterLast("/")
+
     private fun NovelDto.toSManga() = SManga.create().apply {
         title = this@toSManga.title
-        url = "$id/$slug"
+        url = slug
         thumbnail_url = cover
         author = this@toSManga.author
         genre = displayGenres.joinToString()
         status = parseStatus(this@toSManga.status)
     }
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl/series/${manga.url.substringAfter("/")}"
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl/series/${extractSlug(manga.url)}"
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET("$baseUrl/series/${manga.url.substringAfter("/")}", headers)
+    override fun mangaDetailsRequest(manga: SManga): Request = GET("$baseUrl/series/${extractSlug(manga.url)}", headers)
 
     override fun mangaDetailsParse(response: Response): SManga {
         val doc = response.asJsoup()
@@ -116,9 +119,8 @@ class WoopRead :
     }
 
     override suspend fun getChapterList(manga: SManga): List<SChapter> {
-        val id = manga.url.substringBefore("/")
-        val seriesSlug = manga.url.substringAfter("/")
-        val response = client.newCall(GET("$baseUrl/api/novels/$id/chapters", headers)).execute()
+        val seriesSlug = extractSlug(manga.url)
+        val response = client.newCall(GET("$baseUrl/api/novels/$seriesSlug/chapters", headers)).execute()
         val chapters = response.parseAs<List<ChapterDto>>()
         return chapters.sortedByDescending { it.number }.map { dto ->
             SChapter.create().apply {
