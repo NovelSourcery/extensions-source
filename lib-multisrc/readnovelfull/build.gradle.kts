@@ -4,7 +4,7 @@ plugins {
     alias(kei.plugins.multisrc)
 }
 
-baseVersionCode = 9
+baseVersionCode = 10
 
 dependencies {
     implementation(project(":lib:chapterutils"))

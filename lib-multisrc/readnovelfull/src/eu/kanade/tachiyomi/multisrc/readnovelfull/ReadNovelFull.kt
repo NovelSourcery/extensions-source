@@ -379,6 +379,7 @@ abstract class ReadNovelFull(
     override fun mangaDetailsParse(response: Response): SManga = mangaDetailsParse(response.asJsoup())
 
     protected open fun mangaDetailsParse(document: Document): SManga = SManga.create().apply {
+        title = ""
         document.selectFirst("div.books, div.book, div.m-imgtxt, div.m-book1")?.let { info ->
             thumbnail_url = info.selectFirst("div.pic img, img")?.let {
                 it.attr("abs:data-src").ifEmpty { it.attr("abs:src") }

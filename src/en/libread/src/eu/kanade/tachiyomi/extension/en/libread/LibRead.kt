@@ -50,6 +50,9 @@ class LibRead :
     override fun popularMangaSelector() = "div.ul-list1 div.li, ul.ul-list2 li"
 
     override fun popularMangaFromElement(element: Element): SManga = SManga.create().apply {
+        // title is a lateinit var; an element whose link selector doesn't match (ad slot, stray
+        // li, layout drift) must still leave title assigned or any later read of it crashes.
+        title = ""
         val link = element.selectFirst("h3.tit a, a.tit, a.con")
         if (link != null) {
             title = link.attr("title").ifEmpty { link.text().trim() }

@@ -22,8 +22,8 @@ class FreeWebNovel :
     // freewebnovel uses "latest-release" for the latest-release listing
     override val latestPage = "sort/latest-release"
     override val searchPage = "search"
-    override val searchKey = "searchkey"
-    override val postSearch = true
+    override val searchKey = "keyword"
+    override val postSearch = false
     override val noAjax = true
     override val pageAsPath = true
     override val noPages = listOf("sort/most-popular")
@@ -72,6 +72,9 @@ class FreeWebNovel :
 
     private fun listElementToSManga(element: Element): SManga {
         val manga = SManga.create()
+        // title is a lateinit var; if both title selectors below miss, it must still be assigned
+        // or any later read of it crashes.
+        manga.title = ""
 
         // Title and url
         val titleEl = element.selectFirst("h3.tit > a") ?: element.selectFirst(".txt h3.tit a")
