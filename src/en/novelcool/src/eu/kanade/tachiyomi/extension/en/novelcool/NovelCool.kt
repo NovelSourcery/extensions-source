@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -85,12 +86,15 @@ class NovelCool :
         val jsonObject = json.parseToJsonElement(response.body.string()).jsonObject
         val list = jsonObject["list"]?.jsonArray ?: return MangasPage(emptyList(), false)
 
-        val mangas = list.map { element ->
+        val mangas = list.mapNotNull { element ->
             val obj = element.jsonObject
+            val name = obj["name"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val visitPath = obj["visit_path"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
             SManga.create().apply {
-                title = obj["name"]!!.jsonPrimitive.content
-                thumbnail_url = obj["cover"]!!.jsonPrimitive.content
-                url = obj["visit_path"]!!.jsonPrimitive.content + "?id=" + obj["id"]!!.jsonPrimitive.content
+                title = name
+                thumbnail_url = obj["cover"]?.jsonPrimitive?.contentOrNull
+                url = "$visitPath?id=$id"
             }
         }
 
@@ -168,9 +172,36 @@ class NovelCool :
         return POST("$apiUrl/book/info/", apiHeaders(), body)
     }
 
+    private fun fetchBookInfo(bookId: String): JsonObject {
+        val body = baseBodyBuilder().add("book_id", bookId).build()
+        val response = client.newCall(POST("$apiUrl/book/info/", apiHeaders(), body)).execute()
+        return json.parseToJsonElement(response.body.string()).jsonObject
+    }
+
     override fun mangaDetailsParse(response: Response): SManga {
-        val jsonObject = json.parseToJsonElement(response.body.string()).jsonObject
-        val info = jsonObject["info"]!!.jsonObject
+        var jsonObject = json.parseToJsonElement(response.body.string()).jsonObject
+        var info = jsonObject["info"]?.jsonObject
+
+        // The API sometimes returns a stub `info` (no name/cover, just follow-status fields) for
+        // a book_id that resolves fine through search - seen on stale ids that have been
+        // superseded by a same-language id in `diff_lang`. Retry against that id before giving up.
+        if (info == null || info["name"] == null) {
+            val fallbackId = jsonObject["diff_lang"]?.jsonArray
+                ?.map { it.jsonObject }
+                ?.firstOrNull { it["lang"]?.jsonPrimitive?.contentOrNull == langCode }
+                ?.get("id")?.jsonPrimitive?.contentOrNull
+            if (fallbackId != null) {
+                jsonObject = fetchBookInfo(fallbackId)
+                info = jsonObject["info"]?.jsonObject
+            }
+        }
+
+        if (info == null || info["name"] == null) {
+            throw Exception(
+                "NovelCool has no details for this book (removed/restricted?): " +
+                    (jsonObject["error_msg"]?.jsonPrimitive?.contentOrNull ?: jsonObject.toString().take(200)),
+            )
+        }
 
         return SManga.create().apply {
             title = info["name"]!!.jsonPrimitive.content
@@ -211,12 +242,13 @@ class NovelCool :
             if (locked) {
                 return@mapNotNull null
             }
+            val title = obj["title"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
 
             SChapter.create().apply {
-                name = obj["title"]!!.jsonPrimitive.content
+                name = title
                 // Site chapter path; the site only cares about the trailing id,
                 // the slug segment is cosmetic
-                val id = obj["id"]!!.jsonPrimitive.content
                 val slug = listOf(visitPath, name.replace(' ', '-'))
                     .filter { it.isNotBlank() }
                     .joinToString("-")
