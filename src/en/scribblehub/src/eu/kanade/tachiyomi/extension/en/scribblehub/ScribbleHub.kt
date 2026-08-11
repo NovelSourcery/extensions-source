@@ -33,7 +33,12 @@ class ScribbleHub :
     override val lang = "en"
     override val supportsLatest = true
 
-    override val client = network.cloudflareClient
+    override val client = network.client
+
+    // Site's Cloudflare rule allowlists on this client hint alone; without it, the cf_clearance
+    // cookie from the WebView challenge solve isn't sufficient on its own for some requests.
+    override fun headersBuilder() = super.headersBuilder()
+        .add("sec-ch-ua", "\"Chromium\"")
 
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
