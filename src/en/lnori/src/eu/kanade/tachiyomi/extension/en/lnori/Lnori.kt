@@ -41,9 +41,11 @@ class Lnori :
 
     override val name = "Lnori"
     override val baseUrl = "https://lnori.com"
-    override val lang = "all"
+    override val lang = "en"
     override val supportsLatest = true
     override val isNovelSource = true
+
+    override val id: Long = 787226943935256051
 
     override val client = network.cloudflareClient
 
@@ -820,18 +822,10 @@ class Lnori :
         val header = Filter.Header("Search is performed locally from homepage data")
         val separator = Filter.Separator()
 
-        var cachedTags = loadCachedTags()
-        var cachedAuthors = loadCachedAuthors()
-
-        if (cachedTags.isEmpty() || cachedAuthors.isEmpty()) {
-            try {
-                loadAllNovels()
-            } catch (_: Exception) {
-                // Keep fallback filters below if the priming request fails.
-            }
-            cachedTags = loadCachedTags()
-            cachedAuthors = loadCachedAuthors()
-        }
+        // getFilterList() isn't a suspend fun (runs on the caller's thread) - never block it on
+        // a network call. Use whatever's cached from a prior browse/search instead.
+        val cachedTags = loadCachedTags()
+        val cachedAuthors = loadCachedAuthors()
 
         val tagGroup: Filter<*> = if (cachedTags.isNotEmpty()) TagFilter("Tags", cachedTags) else SimpleText("Tags (comma separated)")
 
