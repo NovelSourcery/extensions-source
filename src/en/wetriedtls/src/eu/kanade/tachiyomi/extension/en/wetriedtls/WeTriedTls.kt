@@ -70,22 +70,25 @@ class WeTriedTls :
 
     override fun searchMangaParse(response: Response) = popularMangaParse(response)
 
+    // manga.url is now just the slug; strip any wrapping path/id so old stored urls still resolve.
+    private fun extractSlug(url: String): String = url.trim('/').substringAfterLast("/")
+
     private fun SeriesDto.toSManga() = SManga.create().apply {
         title = this@toSManga.title
-        url = "$id/$seriesSlug"
+        url = seriesSlug
         thumbnail_url = thumbnail
         status = parseStatus(this@toSManga.status)
     }
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl/series/${manga.url.substringAfter("/")}"
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl/series/${extractSlug(manga.url)}"
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET("$apiUrl/series/${manga.url.substringAfter("/")}", headers)
+    override fun mangaDetailsRequest(manga: SManga): Request = GET("$apiUrl/series/${extractSlug(manga.url)}", headers)
 
     override fun mangaDetailsParse(response: Response): SManga {
         val dto = response.parseAs<SeriesDto>()
         return SManga.create().apply {
             title = dto.title
-            url = "${dto.id}/${dto.seriesSlug}"
+            url = dto.seriesSlug
             thumbnail_url = dto.thumbnail
             author = dto.author
             status = parseStatus(dto.status)
@@ -112,13 +115,12 @@ class WeTriedTls :
     }
 
     override suspend fun getChapterList(manga: SManga): List<SChapter> {
-        val seriesId = manga.url.substringBefore("/")
-        val seriesSlug = manga.url.substringAfter("/")
+        val seriesSlug = extractSlug(manga.url)
         val chapters = mutableListOf<SChapter>()
         var page = 1
         while (true) {
             val response = client.newCall(
-                GET("$apiUrl/chapters/$seriesId?page=$page&perPage=100", headers),
+                GET("$apiUrl/chapters/$seriesSlug?page=$page&perPage=100", headers),
             ).execute()
             val result = response.parseAs<ChaptersResponse>()
             result.data.forEach { dto ->
