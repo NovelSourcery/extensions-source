@@ -1,0 +1,9 @@
+ext {
+    extName = 'FlameComics'
+    extClass = '.FlameComics'
+    extVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"
