@@ -165,7 +165,7 @@ class PluginExtensionLegacy : Plugin<Project> {
                         contentWarning = if (isNsfw) 3 else 1,
                         sources = listOf(
                             SourceMetadata(
-                                id = computeSourceId(extName, lang),
+                                id = explicitId ?: computeSourceId(extName, lang),
                                 name = extName,
                                 lang = lang,
                                 baseUrl = baseUrl,
@@ -293,5 +293,14 @@ private val Project.overrideVersionCode: Int
 
 private val Project.themePkg: String
     get() = extra.get("themePkg") as String
+
+// Set when a source's Kotlin `override val id` is pinned to a value that no longer matches
+// computeSourceId(extName, lang) - e.g. after a name/lang change kept the old id for migration.
+private val Project.explicitId: Long?
+    get() = when (val v = extra.getOrNull("id")) {
+        is Long -> v
+        is Int -> v.toLong()
+        else -> null
+    }
 
 private fun ExtraPropertiesExtension.getOrNull(name: String) = if (has(name)) get(name) else null
