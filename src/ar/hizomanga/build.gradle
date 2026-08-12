@@ -3,7 +3,7 @@ ext {
     extClass = '.HizoManga'
     themePkg = 'madaranovel'
     baseUrl = 'https://hizomanga.net'
-    overrideVersionCode = 2
+    overrideVersionCode = 4
     isNsfw = false
     isNovel = true
 }
