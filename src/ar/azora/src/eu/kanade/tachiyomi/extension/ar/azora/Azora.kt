@@ -91,7 +91,7 @@ class Azora :
                     this.name = name
                     this.url = link.toRelative()
                     chapter_number = numText.toChapterNumber()
-                    date_upload = DATE_FORMAT.tryParse(dateText)
+                    date_upload = runCatching { DATE_FORMAT.parse(dateText)?.time }?.getOrNull() ?: 0L
                 },
             )
         }
