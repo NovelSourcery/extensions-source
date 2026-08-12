@@ -1,6 +1,7 @@
 import gzip
 import html
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -19,9 +20,14 @@ REPO_JAR_DIR = REPO_DIR / "jar"
 REPO_APK_DIR.mkdir(parents=True, exist_ok=True)
 REPO_JAR_DIR.mkdir(parents=True, exist_ok=True)
 
-APK_BASE_URL = "https://cdn.jsdelivr.net/gh/novelsourcery/extensions@repo/apk"
-JAR_BASE_URL = "https://raw.githubusercontent.com/novelsourcery/extensions/repo/jar"
+# TARGET_REPO is set by the workflow's "Set target repo" step (novelsourcery/extensions on
+# main, novelsourcery/extensions-beta on beta) - read it instead of hardcoding one repo, or
+# every branch built with the same script would publish assets under the wrong repo's URLs.
+TARGET_REPO = os.environ["TARGET_REPO"]
+APK_BASE_URL = f"https://cdn.jsdelivr.net/gh/{TARGET_REPO}@repo/apk"
+JAR_BASE_URL = f"https://raw.githubusercontent.com/{TARGET_REPO}/repo/jar"
 ICON_BASE_URL = "https://cdn.jsdelivr.net/gh/novelsourcery/extensions-source@main"
+REPO_NAME = "NovelSourcery Beta" if TARGET_REPO.endswith("extensions-beta") else "NovelSourcery"
 
 to_delete: list[str] = json.loads(sys.argv[1])
 
@@ -114,7 +120,7 @@ all_extensions.extend(new_extensions)
 all_extensions.sort(key=lambda ext: ext.packageName)
 
 index = index_pb2.Index(
-    name="NovelSourcery",
+    name=REPO_NAME,
     badgeLabel="NS",
     signingKey="4281820d4866bb71bed3dec5224aad9cf4633d44a113682cfb0c3b1cfd71702d",
     contact=index_pb2.Contact(
