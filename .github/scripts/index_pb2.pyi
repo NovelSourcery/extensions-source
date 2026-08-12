@@ -9,9 +9,11 @@ DESCRIPTOR: _descriptor.FileDescriptor
 
 class ContentWarning(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
+    CONTENT_WARNING_UNSPECIFIED: _ClassVar[ContentWarning]
     CONTENT_WARNING_SAFE: _ClassVar[ContentWarning]
     CONTENT_WARNING_MIXED: _ClassVar[ContentWarning]
     CONTENT_WARNING_NSFW: _ClassVar[ContentWarning]
+CONTENT_WARNING_UNSPECIFIED: ContentWarning
 CONTENT_WARNING_SAFE: ContentWarning
 CONTENT_WARNING_MIXED: ContentWarning
 CONTENT_WARNING_NSFW: ContentWarning
@@ -47,7 +49,7 @@ class ExtensionList(_message.Message):
     def __init__(self, extensions: _Optional[_Iterable[_Union[Extension, _Mapping]]] = ...) -> None: ...
 
 class Extension(_message.Message):
-    __slots__ = ("name", "packageName", "resources", "extensionLib", "versionCode", "versionName", "contentWarning", "sources")
+    __slots__ = ("name", "packageName", "resources", "extensionLib", "versionCode", "versionName", "contentWarning", "sources", "isNovel")
     NAME_FIELD_NUMBER: _ClassVar[int]
     PACKAGENAME_FIELD_NUMBER: _ClassVar[int]
     RESOURCES_FIELD_NUMBER: _ClassVar[int]
@@ -56,6 +58,7 @@ class Extension(_message.Message):
     VERSIONNAME_FIELD_NUMBER: _ClassVar[int]
     CONTENTWARNING_FIELD_NUMBER: _ClassVar[int]
     SOURCES_FIELD_NUMBER: _ClassVar[int]
+    ISNOVEL_FIELD_NUMBER: _ClassVar[int]
     name: str
     packageName: str
     resources: Resources
@@ -64,15 +67,18 @@ class Extension(_message.Message):
     versionName: str
     contentWarning: ContentWarning
     sources: _containers.RepeatedCompositeFieldContainer[Source]
-    def __init__(self, name: _Optional[str] = ..., packageName: _Optional[str] = ..., resources: _Optional[_Union[Resources, _Mapping]] = ..., extensionLib: _Optional[str] = ..., versionCode: _Optional[int] = ..., versionName: _Optional[str] = ..., contentWarning: _Optional[_Union[ContentWarning, str]] = ..., sources: _Optional[_Iterable[_Union[Source, _Mapping]]] = ...) -> None: ...
+    isNovel: bool
+    def __init__(self, name: _Optional[str] = ..., packageName: _Optional[str] = ..., resources: _Optional[_Union[Resources, _Mapping]] = ..., extensionLib: _Optional[str] = ..., versionCode: _Optional[int] = ..., versionName: _Optional[str] = ..., contentWarning: _Optional[_Union[ContentWarning, str]] = ..., sources: _Optional[_Iterable[_Union[Source, _Mapping]]] = ..., isNovel: _Optional[bool] = ...) -> None: ...
 
 class Resources(_message.Message):
-    __slots__ = ("apkUrl", "iconUrl")
+    __slots__ = ("apkUrl", "iconUrl", "jarUrl")
     APKURL_FIELD_NUMBER: _ClassVar[int]
     ICONURL_FIELD_NUMBER: _ClassVar[int]
+    JARURL_FIELD_NUMBER: _ClassVar[int]
     apkUrl: str
     iconUrl: str
-    def __init__(self, apkUrl: _Optional[str] = ..., iconUrl: _Optional[str] = ...) -> None: ...
+    jarUrl: str
+    def __init__(self, apkUrl: _Optional[str] = ..., iconUrl: _Optional[str] = ..., jarUrl: _Optional[str] = ...) -> None: ...
 
 class Source(_message.Message):
     __slots__ = ("id", "name", "language", "homeUrl", "mirrorUrls", "message")

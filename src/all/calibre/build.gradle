@@ -1,4 +1,5 @@
 ext {
+    libVersion = '1.4'
     extName = 'Calibre'
     extClass = '.Calibre'
     extVersionCode = 1

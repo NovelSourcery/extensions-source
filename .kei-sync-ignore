@@ -1,0 +1,49 @@
+# Fork-only content that never exists upstream -- excluded from sync-kei.sh's
+# diff scope and its --status "local-only files" report. See:
+#   scripts/sync-kei.sh --help
+#
+# This is for PERMANENT exclusions only. For a one-off judgment call made
+# while resolving a specific sync, use the kei-sync-vscode helper instead
+# (scripts/kei-sync-vscode/), which records per-attempt decisions rather
+# than a standing exclusion.
+
+# Shared fork-only libraries -- specific subdirs, not a blanket `lib`
+# exclusion, so any NEW lib/ content kei adds in the future still shows up
+# normally (we generally want kei's lib/ updates verbatim -- these are
+# libraries authored/borrowed as a group, not modified per-file the way our
+# own novel-specific bits are, so a name match here would mean we made it,
+# not that kei's version should be skipped).
+lib/chapterutils
+lib/clipstudioreader
+lib/siteparsers
+lib/synchrony
+lib/unpacker
+
+# Fork-only sync tooling -- never exists in kei's tree
+scripts
+
+# Sync bookkeeping files -- obviously never exist upstream
+.kei-sync
+.kei-sync-ignore
+
+# Fork-only novel-specific core utilities and legacy DSL support
+core/src/main/AndroidManifest.xml
+core/src/main/kotlin/eu/kanade/tachiyomi/source/NovelSource.kt
+core/src/main/kotlin/eu/kanade/tachiyomi/source/SourceTracker.kt
+core/src/main/kotlin/keiyoushi/utils/ChapterName.kt
+core/src/main/kotlin/keiyoushi/utils/Jsoup.kt
+core/src/main/kotlin/keiyoushi/utils/SChapterExt.kt
+core/src/main/kotlin/keiyoushi/utils/SMangaExt.kt
+gradle/build-logic/src/main/kotlin/PluginExtensionLegacy.kt
+gradle/ns.versions.toml
+
+# kei's own kei.versions.toml -- we never carry this. Our fork registers the
+# "kei" version catalog name against gradle/ns.versions.toml instead (see
+# settings.gradle.kts), so kei-verbatim code that references the "kei"
+# catalog still resolves correctly without needing this file.
+gradle/kei.versions.toml
+
+# Fork-only repo policy/config
+common.gradle
+.github/CODEOWNERS
+.github/workflows/stale_issue_moderator.yml
