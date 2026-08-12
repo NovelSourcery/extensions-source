@@ -27,6 +27,7 @@ TARGET_REPO = os.environ["TARGET_REPO"]
 APK_BASE_URL = f"https://cdn.jsdelivr.net/gh/{TARGET_REPO}@repo/apk"
 JAR_BASE_URL = f"https://raw.githubusercontent.com/{TARGET_REPO}/repo/jar"
 ICON_BASE_URL = "https://cdn.jsdelivr.net/gh/novelsourcery/extensions-source@main"
+REPO_NAME = "NovelSourcery Beta" if TARGET_REPO.endswith("extensions-beta") else "NovelSourcery"
 
 to_delete: list[str] = json.loads(sys.argv[1])
 
@@ -119,7 +120,7 @@ all_extensions.extend(new_extensions)
 all_extensions.sort(key=lambda ext: ext.packageName)
 
 index = index_pb2.Index(
-    name="NovelSourcery",
+    name=REPO_NAME,
     badgeLabel="NS",
     signingKey="4281820d4866bb71bed3dec5224aad9cf4633d44a113682cfb0c3b1cfd71702d",
     contact=index_pb2.Contact(
