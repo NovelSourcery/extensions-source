@@ -1,9 +1,7 @@
 ext {
     extName = 'Azora'
     extClass = '.Azora'
-    themePkg = 'madaranovel'
-    baseUrl = 'https://azoramoon.com'
-    overrideVersionCode = 2
+    extVersionCode = 3
     isNsfw = false
     isNovel = true
 }
