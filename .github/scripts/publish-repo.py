@@ -1,6 +1,7 @@
 import gzip
 import html
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -19,8 +20,12 @@ REPO_JAR_DIR = REPO_DIR / "jar"
 REPO_APK_DIR.mkdir(parents=True, exist_ok=True)
 REPO_JAR_DIR.mkdir(parents=True, exist_ok=True)
 
-APK_BASE_URL = "https://cdn.jsdelivr.net/gh/novelsourcery/extensions@repo/apk"
-JAR_BASE_URL = "https://raw.githubusercontent.com/novelsourcery/extensions/repo/jar"
+# TARGET_REPO is set by the workflow's "Set target repo" step (novelsourcery/extensions on
+# main, novelsourcery/extensions-beta on beta) - read it instead of hardcoding one repo, or
+# every branch built with the same script would publish assets under the wrong repo's URLs.
+TARGET_REPO = os.environ["TARGET_REPO"]
+APK_BASE_URL = f"https://cdn.jsdelivr.net/gh/{TARGET_REPO}@repo/apk"
+JAR_BASE_URL = f"https://raw.githubusercontent.com/{TARGET_REPO}/repo/jar"
 ICON_BASE_URL = "https://cdn.jsdelivr.net/gh/novelsourcery/extensions-source@main"
 
 to_delete: list[str] = json.loads(sys.argv[1])
