@@ -6,7 +6,7 @@ plugins {
     `java-gradle-plugin`
 }
 
-// Configuration should be synced with [/gradle/build-logic/src/main/kotlin/PluginSpotless.kt]
+// Configuration should be synced with [/gradle/build-logic/src/main/kotlin/SpotlessPlugin.kt]
 val ktlintVersion = libs.ktlint.bom.get().version
 val editorConfigFile = rootProject.file("../../.editorconfig")
 spotless {
