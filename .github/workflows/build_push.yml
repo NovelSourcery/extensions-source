@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - beta
     paths:
       - '**'
       - '!**.md'
@@ -120,17 +121,28 @@ jobs:
         with:
           path: ~/apk-artifacts
 
-      - name: Checkout main branch
+      - name: Checkout source branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ github.ref_name }}
           path: main
           persist-credentials: false
+
+      - name: Set target repo
+        id: target
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_NAME" = "beta" ]; then
+            echo "repo=novelsourcery/extensions-beta" >> "$GITHUB_OUTPUT"
+          else
+            echo "repo=novelsourcery/extensions" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Checkout repo branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: novelsourcery/extensions
+          repository: ${{ steps.target.outputs.repo }}
           token: ${{ secrets.BOT_PAT }}
           ref: repo
           path: repo
@@ -139,6 +151,7 @@ jobs:
       - name: Publish and deploy repo
         env:
           DELETE: ${{ needs.prepare.outputs.delete }}
+          TARGET_REPO: ${{ steps.target.outputs.repo }}
         run: |
           cd repo
           pip install protobuf
@@ -150,9 +163,9 @@ jobs:
             git add .
             git commit -m "Update extensions repo"
             git push
-            curl https://purge.jsdelivr.net/gh/novelsourcery/extensions@repo/index.min.json
-            curl https://purge.jsdelivr.net/gh/novelsourcery/extensions@repo/index.json
-            curl https://purge.jsdelivr.net/gh/novelsourcery/extensions@repo/index.pb
+            curl "https://purge.jsdelivr.net/gh/$TARGET_REPO@repo/index.min.json"
+            curl "https://purge.jsdelivr.net/gh/$TARGET_REPO@repo/index.json"
+            curl "https://purge.jsdelivr.net/gh/$TARGET_REPO@repo/index.pb"
           else
             echo "No changes to commit"
           fi
