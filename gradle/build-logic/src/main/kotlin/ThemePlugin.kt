@@ -44,6 +44,8 @@ class ThemePlugin : Plugin<Project> {
         }
 
         dependencies {
+            compileOnly(libs.bundles.common)
+            compileOnly(keiyoushi.libVersion.flatMap { if (it == "1.6") libs.tachiyomi.lib.v16 else libs.tachiyomi.lib.v14 })
             implementation(project(":core"))
         }
 
@@ -51,14 +53,6 @@ class ThemePlugin : Plugin<Project> {
             val libVersionValue = keiyoushi.libVersion.get()
             check(libVersionValue in VALID_LIB_VERSIONS) {
                 "libVersion $libVersionValue is not supported. Supported versions: $VALID_LIB_VERSIONS"
-            }
-
-            dependencies {
-                if (libVersionValue == "1.6") {
-                    compileOnly(libs.bundles.common16)
-                } else {
-                    compileOnly(libs.bundles.common)
-                }
             }
         }
     }

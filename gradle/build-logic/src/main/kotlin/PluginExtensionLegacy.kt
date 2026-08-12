@@ -154,16 +154,8 @@ class PluginExtensionLegacy : Plugin<Project> {
         dependencies {
             if (theme != null) implementation(theme) // Overrides core launcher icons
             implementation(project(":core"))
-        }
-
-        afterEvaluate {
-            dependencies {
-                if (libVersion == "1.6") {
-                    compileOnly(libs.bundles.common16)
-                } else {
-                    compileOnly(libs.bundles.common)
-                }
-            }
+            compileOnly(libs.bundles.common)
+            compileOnly(if (libVersion == "1.6") libs.tachiyomi.lib.v16 else libs.tachiyomi.lib.v14)
         }
 
         afterEvaluate {
