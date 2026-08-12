@@ -11,6 +11,7 @@ import org.gradle.api.tasks.CacheableTask
 import org.gradle.api.tasks.Classpath
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
@@ -32,8 +33,11 @@ abstract class CreateExtensionJarTask : DefaultTask() {
     @get:Classpath
     abstract val libraryClasspath: ConfigurableFileCollection
 
+    // Absent for unminified (legacy) variants: no AGP-generated consumer-rules file exists to
+    // feed the shrink pass, so it's skipped and [program] is used as-is.
     @get:InputFile
     @get:PathSensitive(PathSensitivity.NONE)
+    @get:Optional
     abstract val proguardConfigFile: RegularFileProperty
 
     @get:InputFile
@@ -116,37 +120,43 @@ abstract class CreateExtensionJarTask : DefaultTask() {
             )
         }
 
-        val shrunk = temporaryDir.resolve("shrunk.jar")
+        val shrunk = if (proguardConfigFile.isPresent) {
+            val target = temporaryDir.resolve("shrunk.jar")
 
-        val modifiedProguardConfigFile = temporaryDir.resolve("sanitized-proguard-configuration.txt").apply {
-            val sanitizedRules = proguardConfigFile.get().asFile
-                .readLines().toMutableList()
+            val modifiedProguardConfigFile = temporaryDir.resolve("sanitized-proguard-configuration.txt").apply {
+                val sanitizedRules = proguardConfigFile.get().asFile
+                    .readLines().toMutableList()
 
-            // make it forgiving like r8
-            sanitizedRules.add("-dontwarn **")
-            // don't print the aforementioned warnings
-            sanitizedRules.add("-dontnote **")
+                // make it forgiving like r8
+                sanitizedRules.add("-dontwarn **")
+                // don't print the aforementioned warnings
+                sanitizedRules.add("-dontnote **")
 
-            writeText(sanitizedRules.joinToString("\n"))
-        }
-
-        val args = buildList {
-            add("-injars")
-            add(program.absolutePath)
-            add("-outjars")
-            add(shrunk.absolutePath)
-            libraryClasspath.files.forEach {
-                add("-libraryjars")
-                add(it.absolutePath)
+                writeText(sanitizedRules.joinToString("\n"))
             }
-            add("-include")
-            add(modifiedProguardConfigFile.absolutePath)
-        }
 
-        execOps.javaexec {
-            classpath = proguardClasspath
-            mainClass.set("proguard.ProGuard")
-            setArgs(args)
+            val args = buildList {
+                add("-injars")
+                add(program.absolutePath)
+                add("-outjars")
+                add(target.absolutePath)
+                libraryClasspath.files.forEach {
+                    add("-libraryjars")
+                    add(it.absolutePath)
+                }
+                add("-include")
+                add(modifiedProguardConfigFile.absolutePath)
+            }
+
+            execOps.javaexec {
+                classpath = proguardClasspath
+                mainClass.set("proguard.ProGuard")
+                setArgs(args)
+            }
+
+            target
+        } else {
+            program
         }
 
         val apk = apkDir.get().asFile.walkTopDown().first { it.extension == "apk" }
