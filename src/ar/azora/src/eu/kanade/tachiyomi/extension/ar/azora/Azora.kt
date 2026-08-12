@@ -92,7 +92,7 @@ class Azora :
                     this.url = link.toRelative()
                     chapter_number = numText.toChapterNumber()
                     date_upload = DATE_FORMAT.tryParse(dateText)
-                }
+                },
             )
         }
         return chapters.distinctBy { it.url }
