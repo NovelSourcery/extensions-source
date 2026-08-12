@@ -1,10 +1,16 @@
+import com.android.build.api.artifact.ScopedArtifact
+import com.android.build.api.artifact.SingleArtifact
 import com.android.build.api.dsl.ApplicationExtension
 import com.android.build.api.variant.ApplicationAndroidComponentsExtension
+import com.android.build.api.variant.ScopedArtifacts
 import com.android.build.gradle.tasks.PackageAndroidArtifact
 import io.github.keiyoushi.gradle.api.dsl.KeiyoushiThemeExtension
+import io.github.keiyoushi.gradle.internal.ExtensionMetadata
 import io.github.keiyoushi.gradle.internal.GenerateLegacyKeepRulesTask
+import io.github.keiyoushi.gradle.internal.SourceMetadata
 import io.github.keiyoushi.gradle.internal.VALID_LIB_VERSIONS
 import io.github.keiyoushi.gradle.internal.assertWithoutFlag
+import io.github.keiyoushi.gradle.internal.computeSourceId
 import io.github.keiyoushi.gradle.internal.extensions.alias
 import io.github.keiyoushi.gradle.internal.extensions.baseVersionCode
 import io.github.keiyoushi.gradle.internal.extensions.compileOnly
@@ -12,8 +18,13 @@ import io.github.keiyoushi.gradle.internal.extensions.implementation
 import io.github.keiyoushi.gradle.internal.extensions.libs
 import io.github.keiyoushi.gradle.internal.extensions.ns
 import io.github.keiyoushi.gradle.internal.extensions.plugins
+import io.github.keiyoushi.gradle.tasks.CreateExtensionJarTask
+import io.github.keiyoushi.gradle.tasks.GenerateSourceInfoTask
+import io.github.keiyoushi.gradle.tasks.SignExtensionJarTask
+import kotlinx.serialization.json.Json
 import org.gradle.api.Plugin
 import org.gradle.api.Project
+import org.gradle.api.artifacts.type.ArtifactTypeDefinition.ARTIFACT_TYPE_ATTRIBUTE
 import org.gradle.api.plugins.BasePluginExtension
 import org.gradle.api.plugins.ExtraPropertiesExtension
 import org.gradle.kotlin.dsl.configure
@@ -50,6 +61,12 @@ class PluginExtensionLegacy : Plugin<Project> {
             }
         }
 
+        val applicationIdSuffix = "${project.parent?.name}.${project.name}"
+        val lang = project.parent?.name.orEmpty()
+        val versionCode = if (theme == null) extVersionCode else theme.baseVersionCode + overrideVersionCode
+        val versionName = "$libVersion.$versionCode"
+        val filename = "tsundoku-$applicationIdSuffix-v$versionName"
+
         android {
             namespace = "eu.kanade.tachiyomi.novelextension"
 
@@ -68,11 +85,11 @@ class PluginExtensionLegacy : Plugin<Project> {
             }
 
             defaultConfig {
-                applicationIdSuffix = project.parent?.name + "." + project.name
-                versionCode = if (theme == null) extVersionCode else theme.baseVersionCode + overrideVersionCode
-                versionName = "$libVersion.$versionCode"
+                this.applicationIdSuffix = applicationIdSuffix
+                this.versionCode = versionCode
+                this.versionName = versionName
                 base {
-                    archivesName.set("tsundoku-$applicationIdSuffix-v$versionName")
+                    archivesName.set(filename)
                 }
                 assertWithoutFlag(extClass.startsWith(".")) { "'extClass' must start with '.'" }
                 manifestPlaceholders += mapOf(
@@ -133,7 +150,43 @@ class PluginExtensionLegacy : Plugin<Project> {
             }
         }
 
+        val sourceInfoTask = tasks.register<GenerateSourceInfoTask>("generateSourceInfo") {
+            this.outputFile.set(layout.buildDirectory.file("keiyoushi-source-info.json"))
+            this.content.set(
+                Json.encodeToString(
+                    ExtensionMetadata(
+                        module = applicationIdSuffix,
+                        theme = if (theme != null) themePkg else null,
+                        packageName = "eu.kanade.tachiyomi.novelextension.$applicationIdSuffix",
+                        name = extName,
+                        versionCode = versionCode,
+                        versionName = versionName,
+                        extensionLib = libVersion,
+                        contentWarning = if (isNsfw) 3 else 1,
+                        sources = listOf(
+                            SourceMetadata(
+                                id = computeSourceId(extName, lang),
+                                name = extName,
+                                lang = lang,
+                                baseUrl = baseUrl,
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        }
+        val providedClasspath = configurations.create("extensionProvidedClasspath") {
+            isCanBeConsumed = false
+            isCanBeResolved = true
+            extendsFrom(configurations.getByName("compileOnly"))
+        }
+
+        val signingConfig = extensions.getByType(ApplicationExtension::class.java).signingConfigs
+            .getByName(if (rootProject.file("signingkey.jks").exists()) "release" else "debug")
+
         androidComponents {
+            val bootClasspath = sdkComponents.bootClasspath
+
             onVariants { variant ->
                 val variantName = variant.name.replaceFirstChar { it.uppercase() }
 
@@ -148,6 +201,40 @@ class PluginExtensionLegacy : Plugin<Project> {
                 }
 
                 variant.sources.manifests.addStaticManifestFile("AndroidManifest.xml")
+
+                if (variant.buildType == "release") {
+                    val externalLibs = providedClasspath.incoming.artifactView {
+                        attributes.attribute(ARTIFACT_TYPE_ATTRIBUTE, "android-classes-jar")
+                    }.files
+
+                    val createTask = tasks.register<CreateExtensionJarTask>("create${variantName}ExtensionJar") {
+                        libraryClasspath.from(externalLibs, bootClasspath)
+                        manifestFile.set(variant.artifacts.get(SingleArtifact.MERGED_MANIFEST))
+                        apkDir.set(variant.artifacts.get(SingleArtifact.APK))
+                        outputJar.set(layout.buildDirectory.file("intermediates/extension_jar/${variant.name}/unsigned.jar"))
+                    }
+
+                    variant.artifacts.forScope(ScopedArtifacts.Scope.ALL)
+                        .use(createTask)
+                        .toGet(
+                            ScopedArtifact.CLASSES,
+                            CreateExtensionJarTask::jars,
+                            CreateExtensionJarTask::dirs,
+                        )
+
+                    val signTask = tasks.register<SignExtensionJarTask>("sign${variantName}ExtensionJar") {
+                        inputJar.set(createTask.flatMap { it.outputJar })
+                        signingConfig.storeFile?.let { keystore.from(it) }
+                        storePassword.set(signingConfig.storePassword.orEmpty())
+                        keyAlias.set(signingConfig.keyAlias.orEmpty())
+                        keyPassword.set(signingConfig.keyPassword.orEmpty())
+                        minSdkVersion.set(ns.versions.android.sdk.min.map { it.toInt() })
+                        outputJar.set(layout.buildDirectory.file("outputs/jar/${variant.name}/$filename.jar"))
+                    }
+
+                    tasks.matching { it.name == "assemble$variantName" }
+                        .configureEach { dependsOn(signTask) }
+                }
             }
         }
 
@@ -159,6 +246,8 @@ class PluginExtensionLegacy : Plugin<Project> {
         }
 
         afterEvaluate {
+            tasks.named("assembleRelease").configure { dependsOn(sourceInfoTask) }
+
             tasks.withType<PackageAndroidArtifact>().configureEach {
                 createdBy.set("")
                 doFirst {

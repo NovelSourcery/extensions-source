@@ -12,3 +12,10 @@ internal fun addDeeplink(
 ) {
     deeplinks.add(objects.newInstance<ExtensionDeeplink>().apply(block))
 }
+
+internal fun computeSourceId(name: String, lang: String, versionId: Int = 1): Long {
+    val key = "${name.lowercase()}/$lang/$versionId"
+    val bytes = java.security.MessageDigest.getInstance("MD5").digest(key.toByteArray())
+    return (0..7).map { bytes[it].toLong() and 0xff }
+        .reduce { acc, l -> (acc shl 8) or l } and Long.MAX_VALUE
+}

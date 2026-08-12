@@ -13,6 +13,7 @@ import io.github.keiyoushi.gradle.internal.ExtensionMetadata
 import io.github.keiyoushi.gradle.internal.ResolvedSource
 import io.github.keiyoushi.gradle.internal.SourceMetadata
 import io.github.keiyoushi.gradle.internal.VALID_LIB_VERSIONS
+import io.github.keiyoushi.gradle.internal.computeSourceId
 import io.github.keiyoushi.gradle.internal.extensions.alias
 import io.github.keiyoushi.gradle.internal.extensions.compileOnly
 import io.github.keiyoushi.gradle.internal.extensions.implementation
@@ -30,7 +31,6 @@ import kotlinx.serialization.json.Json
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.artifacts.type.ArtifactTypeDefinition.ARTIFACT_TYPE_ATTRIBUTE
-import org.gradle.api.plugins.BasePluginExtension
 import org.gradle.kotlin.dsl.configure
 import org.gradle.kotlin.dsl.create
 import org.gradle.kotlin.dsl.dependencies
@@ -315,13 +315,6 @@ class ExtensionPlugin : Plugin<Project> {
             }
         }
     }
-}
-
-private fun computeSourceId(name: String, lang: String, versionId: Int = 1): Long {
-    val key = "${name.lowercase()}/$lang/$versionId"
-    val bytes = java.security.MessageDigest.getInstance("MD5").digest(key.toByteArray())
-    return (0..7).map { bytes[it].toLong() and 0xff }
-        .reduce { acc, l -> (acc shl 8) or l } and Long.MAX_VALUE
 }
 
 private fun extractHost(url: String): String? = url.split("://").getOrNull(1)?.split("/")?.first()?.takeIf { it.isNotEmpty() }
