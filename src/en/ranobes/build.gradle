@@ -2,6 +2,7 @@ ext {
     libVersion = '1.4'
     extName = 'Ranobes'
     extClass = '.Ranobes'
+    baseUrl = 'https://ranobes.net'
     extVersionCode = 3
     isNovel = true
 }

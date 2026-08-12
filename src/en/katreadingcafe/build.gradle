@@ -2,6 +2,7 @@ ext {
     libVersion = '1.4'
     extName = 'KatReadingCafe'
     extClass = '.KatReadingCafe'
+    baseUrl = 'https://katreadingcafe.com'
     overrideVersionCode = 0
     themePkg = 'lightnovelwpnovel'
     isNovel = true

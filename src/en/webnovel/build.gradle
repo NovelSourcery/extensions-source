@@ -2,6 +2,7 @@ ext {
     libVersion = '1.4'
     extName = 'WebNovel'
     extClass = '.WebNovelFactory'
+    baseUrl = 'https://www.webnovel.com'
     extVersionCode = 3
     isNovel = true
 }

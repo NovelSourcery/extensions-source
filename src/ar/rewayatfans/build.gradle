@@ -2,6 +2,7 @@ ext {
     libVersion = '1.4'
     extName = 'Rewayat Fans'
     extClass = '.RewayatFans'
+    baseUrl = 'https://rewayatfans.com'
     extVersionCode = 2
     isNsfw = false
     isNovel = true

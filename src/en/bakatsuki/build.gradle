@@ -2,6 +2,7 @@ ext {
     libVersion = '1.4'
     extName = 'Baka-Tsuki'
     extClass = '.BakaTsuki'
+    baseUrl = 'https://www.baka-tsuki.org'
     extVersionCode = 2
     isNsfw = false
     isNovel = true

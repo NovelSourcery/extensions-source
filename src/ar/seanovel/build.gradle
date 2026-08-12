@@ -2,6 +2,7 @@ ext {
     libVersion = '1.4'
     extName = 'SeaNovel'
     extClass = '.SeaNovel'
+    baseUrl = 'https://seanovel.org'
     extVersionCode = 3
     isNsfw = false
     isNovel = true

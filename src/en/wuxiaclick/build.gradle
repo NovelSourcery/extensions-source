@@ -2,6 +2,7 @@ ext {
     libVersion = '1.4'
     extName = 'WuxiaClick'
     extClass = '.WuxiaClick'
+    baseUrl = 'https://wuxia.click'
     extVersionCode = 5
     isNovel = true
 }

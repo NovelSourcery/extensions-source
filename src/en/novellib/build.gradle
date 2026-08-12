@@ -2,6 +2,7 @@ ext {
     libVersion = '1.4'
     extName = 'NovelLib'
     extClass = '.NovelLib'
+    baseUrl = 'https://www.novellib.online'
     extVersionCode = 1
     isNovel = true
 }

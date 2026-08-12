@@ -2,6 +2,7 @@ ext {
     libVersion = '1.4'
     extName = 'Inkitt'
     extClass = '.Inkitt'
+    baseUrl = 'https://www.inkitt.com'
     extVersionCode = 2
     isNovel = true
 }

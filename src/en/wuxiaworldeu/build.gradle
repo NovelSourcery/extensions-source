@@ -2,6 +2,7 @@ ext {
     libVersion = '1.4'
     extName = 'WuxiaWorldEU'
     extClass = '.WuxiaWorldEU'
+    baseUrl = 'https://www.wuxiaworld.eu'
     extVersionCode = 1
     isNsfw = false
     isNovel = true

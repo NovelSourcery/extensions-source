@@ -2,6 +2,7 @@ ext {
     libVersion = '1.4'
     extName = 'AsianNovel'
     extClass = '.AsianNovel'
+    baseUrl = 'https://www.asianovel.net'
     extVersionCode = 3
     isNovel = true
 }
