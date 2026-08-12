@@ -1,10 +1,11 @@
-import keiyoushi.gradle.extensions.baseVersionCode
-
 plugins {
     alias(kei.plugins.multisrc)
 }
 
-baseVersionCode = 30
+keiyoushi {
+    baseVersionCode = 30
+    libVersion = "1.4"
+}
 
 dependencies {
     api(project(":lib:i18n"))

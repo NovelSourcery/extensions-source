@@ -1,4 +1,5 @@
 ext {
+    libVersion = '1.4'
     extName = 'KodeksLibrary'
     extClass = '.KodeksLibrary'
     themePkg = 'lightnovelwpnovel'

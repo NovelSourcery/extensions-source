@@ -1,4 +1,5 @@
 ext {
+    libVersion = '1.4'
     extName = 'Sufficient Velocity'
     extClass = '.SufficientVelocity'
     themePkg = 'xenforo'

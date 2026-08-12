@@ -1,7 +1,8 @@
-import keiyoushi.gradle.extensions.baseVersionCode
-
 plugins {
     alias(kei.plugins.multisrc)
 }
 
-baseVersionCode = 38
+keiyoushi {
+    baseVersionCode = 38
+    libVersion = "1.4"
+}

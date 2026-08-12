@@ -1,4 +1,5 @@
 ext {
+    libVersion = '1.4'
     extName = 'KDT Novels'
     extClass = '.KdtNovels'
     themePkg = 'lightnovelwpnovel'
