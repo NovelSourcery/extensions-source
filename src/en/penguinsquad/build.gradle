@@ -2,6 +2,7 @@ ext {
     libVersion = '1.4'
     extName = 'PenguinSquad'
     extClass = '.PenguinSquad'
+    baseUrl = 'https://penguin-squad.com'
     extVersionCode = 3
     isNsfw = false
     isNovel = true

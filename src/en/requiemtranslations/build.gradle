@@ -2,6 +2,7 @@ ext {
     libVersion = '1.4'
     extName = 'Requiem Translations'
     extClass = '.RequiemTranslations'
+    baseUrl = 'https://requiemtls.com'
     overrideVersionCode = 1
     themePkg = 'lightnovelwpnovel'
     isNovel = true

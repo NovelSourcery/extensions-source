@@ -2,6 +2,7 @@ ext {
     libVersion = '1.4'
     extName = 'FUCKNOVELPIA'
     extClass = '.FUCKNOVELPIA'
+    baseUrl = 'https://fucknovelpia.com'
     extVersionCode = 4
     isNovel = true
 }

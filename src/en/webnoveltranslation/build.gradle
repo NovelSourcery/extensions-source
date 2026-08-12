@@ -2,6 +2,7 @@ ext {
     libVersion = '1.4'
     extName = 'WNTL'
     extClass = '.WebNovelTranslation'
+    baseUrl = 'https://wntl.net'
     extVersionCode = 5
     isNsfw = false
     isNovel = true

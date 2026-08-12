@@ -2,6 +2,7 @@
     libVersion = '1.4'
     extName = 'Lnori'
     extClass = '.Lnori'
+    baseUrl = 'https://lnori.com'
     extVersionCode = 5
     isNovel = true
 }

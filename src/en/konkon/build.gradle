@@ -2,6 +2,7 @@ ext {
     libVersion = '1.4'
     extName = 'Konkon'
     extClass = '.Konkon'
+    baseUrl = 'https://konkon.ink'
     extVersionCode = 4
     isNsfw = true
     isNovel = true

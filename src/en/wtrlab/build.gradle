@@ -2,6 +2,7 @@ ext {
     libVersion = '1.4'
     extName = 'WTR-LAB'
     extClass = '.WtrLab'
+    baseUrl = 'https://wtr-lab.com'
     extVersionCode = 7
     isNovel = true
 }
