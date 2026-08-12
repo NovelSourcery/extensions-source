@@ -1,9 +1,10 @@
 ext {
     libVersion = '1.6'
-    extName = 'Novel Fire'
+    extName = 'Novel Phoenix'
     extClass = '.NovelFire'
-    baseUrl = 'https://novelfire.net'
-    extVersionCode = 9
+    baseUrl = 'https://novelphoenix.com'
+    extVersionCode = 10
+    id = 7165539527173321330L
     isNovel = true
 }
 

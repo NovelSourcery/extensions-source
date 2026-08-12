@@ -45,6 +45,11 @@ import java.text.SimpleDateFormat
  * @see https://github.com/LNReader/lnreader-plugins novelfire.ts
  * Features: Advanced filters, JSON chapter API, rate limiting detection,
  *           tag caching with include/exclude advanced search
+ *
+ * NovelFire rebranded to Novel Phoenix (novelphoenix.com) on the same backend - same DOM,
+ * same endpoints, only the domain and the novel path segment changed (/book/ -> /novel/).
+ * [id] is pinned to the pre-rebrand value so existing libraries migrate without a source
+ * change; absoluteUrl() rewrites any /book/ paths still stored from before the move.
  */
 class NovelFire :
     HttpSource(),
@@ -52,8 +57,9 @@ class NovelFire :
     ConfigurableSource,
     RateLimited {
 
-    override val name = "NovelFire"
-    override val baseUrl = "https://novelfire.net"
+    override val name = "Novel Phoenix"
+    override val id = 7165539527173321330L
+    override val baseUrl = "https://novelphoenix.com"
     override val lang = "en"
     override val supportsLatest = true
 
@@ -191,7 +197,12 @@ class NovelFire :
         // Pass through already-absolute urls (a mirror base or a differing host would otherwise
         // glue into baseUrl, producing a broken host like "novelfire.nethttps://...").
         if (path.startsWith("http://") || path.startsWith("https://")) return path
-        return baseUrl.trimEnd('/') + "/" + path.trimStart('/')
+        // Manga/chapter urls stored before the novelfire.net -> novelphoenix.com rebrand still
+        // use the old /book/ prefix; the new site serves the same pages under /novel/.
+        val migratedPath = path.trimStart('/').let {
+            if (it.startsWith("book/")) "novel/" + it.removePrefix("book/") else it
+        }
+        return baseUrl.trimEnd('/') + "/" + migratedPath
     }
 
     override suspend fun fetchPageText(page: Page): String {
@@ -352,6 +363,13 @@ class NovelFire :
     }
 
     // ======================== Novel Details ========================
+
+    // Default HttpSource request builders concatenate baseUrl + manga.url directly, bypassing
+    // absoluteUrl()'s /book/ -> /novel/ rewrite. Route both through it explicitly so manga still
+    // stored with a pre-rebrand url resolve correctly.
+    override fun mangaDetailsRequest(manga: SManga): Request = GET(absoluteUrl(manga.url), headers)
+
+    override fun chapterListRequest(manga: SManga): Request = GET(absoluteUrl(manga.url), headers)
 
     override fun mangaDetailsParse(response: Response): SManga {
         val doc = Jsoup.parse(response.body.string())
@@ -594,7 +612,7 @@ class NovelFire :
         Log.d(TAG, "ajax fetch: received ${ajaxResponse.data.size} chapters (recordsTotal=${ajaxResponse.recordsTotal})")
 
         // Build chapter URLs using the novel path and slug
-        // Format: /book/novel-name/chapter-number
+        // Format: /novel/novel-name/chapter-number
         return ajaxResponse.data.mapIndexed { index, chapter ->
             SChapter.create().apply {
                 name = chapter.title
