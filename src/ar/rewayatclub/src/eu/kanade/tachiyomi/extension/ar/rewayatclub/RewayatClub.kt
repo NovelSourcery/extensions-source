@@ -10,7 +10,6 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
-import keiyoushi.utils.tryParse
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -59,7 +58,10 @@ class RewayatClub :
 
     override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET("$apiUrl/api/novels${manga.url}", headers)
+    override fun mangaDetailsRequest(manga: SManga): Request {
+        val slug = manga.url.substringAfterLast("/")
+        return GET("$apiUrl/api/novels/$slug", headers)
+    }
 
     override fun mangaDetailsParse(response: Response): SManga {
         val bodyStr = response.body.string()
@@ -67,7 +69,7 @@ class RewayatClub :
         currentNovelSlug = item.slug
         cachedTranslators = item.contributors.map { it.username }.filter { it.isNotBlank() }.distinct().sorted()
         return SManga.create().apply {
-            url = "/${item.slug}"
+            url = "/novel/${item.slug}"
             title = item.arabic
             thumbnail_url = "$apiUrl${item.poster_url}"
             description = item.about
@@ -114,9 +116,9 @@ class RewayatClub :
 
     override fun chapterListRequest(manga: SManga): Request {
         if (currentNovelSlug.isEmpty()) {
-            currentNovelSlug = manga.url.trimStart('/')
+            currentNovelSlug = manga.url.substringAfterLast("/")
         }
-        return GET("$apiUrl/api/chapters${manga.url}/?ordering=-number&page=1&page_size=500", headers)
+        return GET("$apiUrl/api/chapters/$currentNovelSlug/?ordering=-number&page=1&page_size=500", headers)
     }
 
     override fun chapterListParse(response: Response): List<SChapter> {
@@ -155,7 +157,7 @@ class RewayatClub :
                 name = ch.title
                 scanlator = ch.uploader?.username
                 chapter_number = ch.number.toFloat()
-                date_upload = DATE_FORMAT.tryParse(ch.date)
+                date_upload = runCatching { DATE_FORMAT.parse(ch.date)?.time }.getOrNull() ?: 0L
             }
         }.sortedByDescending { it.chapter_number }
     }
@@ -291,7 +293,7 @@ class RewayatClub :
     override fun imageUrlParse(response: Response): String = ""
 
     private fun NovelItem.toSManga() = SManga.create().apply {
-        url = "/$slug"
+        url = "/novel/$slug"
         title = arabic
         thumbnail_url = "$apiUrl${poster_url}"
         genre = this@toSManga.genre.joinToString { it.arabic }
