@@ -13,50 +13,40 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
 import keiyoushi.utils.formattedText
+import keiyoushi.utils.parseAs
 import keiyoushi.utils.setNumber
 import keiyoushi.utils.setVolume
 import keiyoushi.utils.stripChapterNumberPrefix
 import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
-import uy.kohesive.injekt.injectLazy
 import java.text.SimpleDateFormat
 import java.util.Locale
 
-class Novelight :
-    HttpSource(),
+@Source
+abstract class Novelight :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
-    override val name = "Novelight"
-    override val baseUrl = "https://novelight.net"
-    override val lang = "en"
-    override val supportsLatest = true
     override val isNovelSource = true
-    override val client = network.cloudflareClient
-
-    private val json: Json by injectLazy()
 
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
     private val hideLocked get() = preferences.getBoolean(PREF_HIDE_LOCKED, true)
 
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/catalog/?ordering=popularity&page=$page", headers)
+    override suspend fun getPopularManga(page: Int): MangasPage = parseCatalog(client.newCall(GET("$baseUrl/catalog/?ordering=popularity&page=$page", headers)).execute())
 
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/catalog/?ordering=-time_updated&page=$page", headers)
-
-    override fun popularMangaParse(response: Response): MangasPage = parseCatalog(response)
-    override fun latestUpdatesParse(response: Response): MangasPage = parseCatalog(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseCatalog(client.newCall(GET("$baseUrl/catalog/?ordering=-time_updated&page=$page", headers)).execute())
 
     private fun parseCatalog(response: Response): MangasPage {
         val doc = Jsoup.parse(response.body.string(), baseUrl)
@@ -73,19 +63,15 @@ class Novelight :
         return MangasPage(novels, hasNext)
     }
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val url = "$baseUrl/catalog/".toHttpUrl().newBuilder()
             .addQueryParameter("search", query)
             .addQueryParameter("page", page.toString())
             .build()
-        return GET(url, headers)
+        return parseCatalog(client.newCall(GET(url, headers)).execute())
     }
 
-    override fun searchMangaParse(response: Response): MangasPage = parseCatalog(response)
-
-    override fun mangaDetailsParse(response: Response): SManga = mangaDetailsParse(Jsoup.parse(response.body.string(), baseUrl))
-
-    private fun mangaDetailsParse(doc: Document): SManga = SManga.create().apply {
+    private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
         title = doc.selectFirst("h1")?.text()?.trim().orEmpty()
         thumbnail_url = doc.selectFirst(".poster > img")?.attr("abs:src")
         description = doc.selectFirst("section.text-info.section > p, section.text-info.section")?.formattedText()
@@ -115,21 +101,21 @@ class Novelight :
 
     private val chapterNumberPattern: Regex = Regex("""^\s*(?:\d+\s*vol\.?\s*)?\d+\s*chapter\s*[-–—]?\s*""", RegexOption.IGNORE_CASE)
 
-    override suspend fun getMangaUpdate(
+    override suspend fun fetchMangaUpdate(
         manga: SManga,
         chapters: List<SChapter>,
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
         if (!fetchChapters) {
-            val updatedManga = if (fetchDetails) mangaDetailsParse(fetchDetailsResponse(manga)) else manga
+            val updatedManga = if (fetchDetails) parseMangaDetails(fetchDetailsDoc(manga)) else manga
             return SMangaUpdate(updatedManga, chapters)
         }
 
         // fetchChapters is true: one fetch of the details page serves both outputs.
-        val rawBody = fetchDetailsResponse(manga).body.string()
+        val rawBody = client.newCall(GET(baseUrl + manga.url, headers)).execute().body.string()
         val detailDoc = Jsoup.parse(rawBody, baseUrl)
-        val updatedManga = if (fetchDetails) mangaDetailsParse(detailDoc) else manga
+        val updatedManga = if (fetchDetails) parseMangaDetails(detailDoc) else manga
 
         // csrfmiddlewaretoken is optional on the pagination endpoint.
         val csrf = Regex("""window\.CSRF_TOKEN = "([^"]+)"""").find(rawBody)?.groupValues?.get(1)
@@ -158,7 +144,7 @@ class Novelight :
                     .add("X-Requested-With", "XMLHttpRequest")
                     .build(),
             )
-            val payload = json.decodeFromString<HtmlPayload>(client.newCall(req).execute().body.string())
+            val payload = client.newCall(req).execute().body.string().parseAs<HtmlPayload>()
             return Jsoup.parse("<html>${payload.html}</html>", baseUrl).select("a").mapNotNull { a ->
                 val titleEl = a.selectFirst(".title")
                 val fullTitle = titleEl?.text()?.trim().orEmpty()
@@ -229,7 +215,7 @@ class Novelight :
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private fun fetchDetailsResponse(manga: SManga): Response = client.newCall(GET(baseUrl + manga.url, headers)).execute()
+    private fun fetchDetailsDoc(manga: SManga): Document = Jsoup.parse(client.newCall(GET(baseUrl + manga.url, headers)).execute().body.string(), baseUrl)
 
     private fun parseDate(date: String?): Long {
         if (date.isNullOrBlank()) return 0L
@@ -240,9 +226,7 @@ class Novelight :
         }
     }
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
-
-    override fun imageUrlParse(response: Response): String = ""
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, "$baseUrl${chapter.url}"))
 
     @Serializable
     private class ReadChapter(val content: String = "")
@@ -258,7 +242,7 @@ class Novelight :
                 .add("X-Requested-With", "XMLHttpRequest")
                 .build(),
         )
-        val data = json.decodeFromString<ReadChapter>(client.newCall(req).execute().body.string())
+        val data = client.newCall(req).execute().body.string().parseAs<ReadChapter>()
         if (data.content.isBlank()) return ""
         val doc = Jsoup.parse(data.content, baseUrl)
         doc.select("script, ins, .advertisment, .adsbygoogle").remove()
@@ -283,7 +267,7 @@ class Novelight :
         private val DATE_FORMAT = SimpleDateFormat("dd.MM.yyyy", Locale.US)
     }
 
-    data class ChapterDto(
+    class ChapterDto(
         val name: String,
         val url: String,
         val chapter: Int,
