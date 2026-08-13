@@ -35,9 +35,9 @@ class RewayatFans :
         img.attr("data-orig-file")
             .takeIf { it.isNotEmpty() }
             ?: img.attr("data-large-file")
-            .takeIf { it.isNotEmpty() }
+                .takeIf { it.isNotEmpty() }
             ?: img.attr("src")
-            .takeIf { it.isNotEmpty() }
+                .takeIf { it.isNotEmpty() }
             ?: ""
     } ?: ""
 
