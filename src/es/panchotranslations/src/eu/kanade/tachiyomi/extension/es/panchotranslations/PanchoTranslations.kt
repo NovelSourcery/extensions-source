@@ -1,12 +1,9 @@
 ﻿package eu.kanade.tachiyomi.novelextension.es.panchotranslations
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
+import keiyoushi.annotation.Source
 
-class PanchoTranslations :
-    MadaraNovel(
-        baseUrl = "https://panchonovels.online",
-        name = "PanchoTranslations",
-        lang = "es",
-    ) {
+@Source
+abstract class PanchoTranslations : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
 }

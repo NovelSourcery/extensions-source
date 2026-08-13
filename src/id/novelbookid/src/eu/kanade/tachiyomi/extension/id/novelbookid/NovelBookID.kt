@@ -1,12 +1,9 @@
 ﻿package eu.kanade.tachiyomi.novelextension.id.novelbookid
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
+import keiyoushi.annotation.Source
 
-class NovelBookID :
-    MadaraNovel(
-        baseUrl = "https://www.novelbook.id",
-        name = "NovelBookID",
-        lang = "id",
-    ) {
+@Source
+abstract class NovelBookID : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
 }

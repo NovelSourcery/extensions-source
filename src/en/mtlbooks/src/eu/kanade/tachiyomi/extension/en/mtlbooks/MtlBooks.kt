@@ -8,46 +8,46 @@ import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
-import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
 import keiyoushi.lib.chapterutils.incrementalStartPage
 import keiyoushi.lib.chapterutils.mergeChapters
 import keiyoushi.lib.chapterutils.shouldReturnExisting
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.jsonInstance
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
-import uy.kohesive.injekt.injectLazy
 
-class MtlBooks :
-    HttpSource(),
+@Source
+abstract class MtlBooks :
+    KeiSource(),
     NovelSource {
 
-    override val name = "MtlBooks"
-    override val baseUrl = "https://mtlbooks.com"
     private val apiUrl = "https://alpha.mtlbooks.com/api/v1"
     private val imageProxy = "https://wsrv.nl"
-    override val lang = "en"
-    override val supportsLatest = true
-    override val isNovelSource = true
 
-    private val json: Json by injectLazy()
+    private val json: Json = jsonInstance
 
-    override val client = network.cloudflareClient
     // ======================== Popular ========================
 
-    override fun popularMangaRequest(page: Int): Request {
+    override suspend fun getPopularManga(page: Int): MangasPage {
         val url = "$apiUrl/search/?page=$page&order=popular&sort=DESC&source=all"
-        return GET(url, headers)
+        return parseSearchResponse(client.newCall(GET(url, headers)).execute())
     }
 
-    override fun popularMangaParse(response: Response): MangasPage {
+    private fun parseSearchResponse(response: Response): MangasPage {
         val apiResponse = json.decodeFromString<SearchResponse>(response.body.string())
 
         val novels = apiResponse.result.data.map { novel ->
@@ -72,26 +72,27 @@ class MtlBooks :
     }
     // ======================== Latest ========================
 
-    override fun latestUpdatesRequest(page: Int): Request {
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
         val url = "$apiUrl/search/?page=$page&order=recent&sort=DESC&source=all"
-        return GET(url, headers)
+        return parseSearchResponse(client.newCall(GET(url, headers)).execute())
     }
-
-    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
     // ======================== Search ========================
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        if (query.startsWith("http")) {
-            val slug = query.substringAfter("/novel/", "")
-                .substringBefore('?')
-                .substringBefore('#')
-                .trim('/')
-                .substringBefore('/')
-            if (slug.isNotBlank()) {
-                return GET("$apiUrl/novels/$slug", headers)
-            }
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val slug = url.toString().substringAfter("/novel/", "")
+            .substringBefore('?')
+            .substringBefore('#')
+            .trim('/')
+            .substringBefore('/')
+        if (slug.isBlank()) return null
+        return try {
+            parseMangaDetails(client.newCall(GET("$apiUrl/novels/$slug", headers)).execute().body.string())
+        } catch (_: Exception) {
+            null
         }
+    }
 
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val params = mutableListOf<String>()
         params.add("page=$page")
 
@@ -177,23 +178,11 @@ class MtlBooks :
         }
 
         val url = "$apiUrl/search/?${params.joinToString("&")}"
-        return GET(url, headers)
-    }
-
-    override fun searchMangaParse(response: Response): MangasPage {
-        // Single-novel lookup from a URL search
-        if (response.request.url.encodedPath.contains("/novels/")) {
-            return try {
-                MangasPage(listOf(mangaDetailsParse(response)), false)
-            } catch (_: Exception) {
-                MangasPage(emptyList(), false)
-            }
-        }
-        return popularMangaParse(response)
+        return parseSearchResponse(client.newCall(GET(url, headers)).execute())
     }
     // ======================== Details ========================
 
-    override fun mangaDetailsRequest(manga: SManga): Request {
+    private fun buildMangaDetailsRequest(manga: SManga): Request {
         val slug = manga.url.substringAfter("/novel/")
         return GET("$apiUrl/novels/$slug", headers)
     }
@@ -204,8 +193,8 @@ class MtlBooks :
     // chapter.url is the site path; strip the "/chapter/" segment of legacy entries
     override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapter.url.replace("/chapter/", "/")
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        val apiResponse = json.decodeFromString<NovelDetailResponse>(response.body.string())
+    private fun parseMangaDetails(body: String): SManga {
+        val apiResponse = json.decodeFromString<NovelDetailResponse>(body)
         val novel = apiResponse.result
 
         return SManga.create().apply {
@@ -226,29 +215,49 @@ class MtlBooks :
     }
     // ======================== Chapters ========================
 
-    override fun chapterListRequest(manga: SManga): Request {
-        val slug = manga.url.substringAfter("/novel/")
+    private fun buildChapterListRequest(slug: String, page: Int = 1): Request {
         val body = json.encodeToString(
             ChapterListRequest.serializer(),
-            ChapterListRequest(slug, 1, "ASC"),
+            ChapterListRequest(slug, page, "ASC"),
         ).toRequestBody("application/json".toMediaType())
         return POST("$apiUrl/chapters/list", headers, body)
     }
 
-    override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate = coroutineScope {
+        // Details and chapters come from different endpoints - fire both concurrently when both
+        // flags are set, rather than awaiting them sequentially.
+        val detailsDeferred = if (fetchDetails) {
+            async { parseMangaDetails(client.newCall(buildMangaDetailsRequest(manga)).execute().body.string()) }
+        } else {
+            null
+        }
+        val chaptersDeferred = if (fetchChapters) async { fetchChapterList(manga, chapters) } else null
+
+        SMangaUpdate(
+            manga = detailsDeferred?.await() ?: manga,
+            chapters = chaptersDeferred?.await() ?: chapters,
+        )
+    }
+
+    private fun fetchChapterList(manga: SManga, existingChapters: List<SChapter>): List<SChapter> {
         val slug = manga.url.substringAfter("/novel/")
 
         // Page 1 is always required for the total chapter count. The API sometimes returns a
         // result missing the expected fields instead of an HTTP error - fall back to the cached
         // list rather than crash when we have one.
-        val page1Response = client.newCall(chapterListRequest(manga)).execute()
+        val page1Response = client.newCall(buildChapterListRequest(slug)).execute()
         val page1Body = page1Response.body.string()
         val page1 = try {
             json.decodeFromString<ChapterListResponse>(page1Body)
         } catch (e: Exception) {
-            if (context.existingChapters.isNotEmpty()) {
-                Log.w(TAG, "getChapterList: page 1 decode failed (${page1Response.code}), keeping existing - ${e.message}")
-                return context.existingChapters
+            if (existingChapters.isNotEmpty()) {
+                Log.w(TAG, "fetchChapterList: page 1 decode failed (${page1Response.code}), keeping existing - ${e.message}")
+                return existingChapters
             }
             throw Exception("MTLBooks chapter list error (${page1Response.code}): ${page1Body.take(200)}")
         }
@@ -258,17 +267,17 @@ class MtlBooks :
         val totalPages = (total + limit - 1) / limit
         val novelSlug = page1.result.novelSlug
 
-        Log.d(TAG, "getChapterList: slug=$slug existing=${context.existingChapters.size} siteTotal=$total totalPages=$totalPages")
+        Log.d(TAG, "fetchChapterList: slug=$slug existing=${existingChapters.size} siteTotal=$total totalPages=$totalPages")
 
-        if (shouldReturnExisting(context.existingChapters.size, total)) {
-            Log.d(TAG, "getChapterList: count unchanged — returning existing")
-            return context.existingChapters
+        if (shouldReturnExisting(existingChapters.size, total)) {
+            Log.d(TAG, "fetchChapterList: count unchanged — returning existing")
+            return existingChapters
         }
 
-        val existingCount = context.existingChapters.size
+        val existingCount = existingChapters.size
         val startPage = if (existingCount > 0) incrementalStartPage(existingCount, limit) else 1
         val keepCount = (startPage - 1) * limit
-        Log.d(TAG, "getChapterList: startPage=$startPage keepCount=$keepCount")
+        Log.d(TAG, "fetchChapterList: startPage=$startPage keepCount=$keepCount")
 
         val freshChapters = mutableListOf<SChapter>()
 
@@ -279,22 +288,18 @@ class MtlBooks :
 
         for (page in maxOf(startPage, 2)..totalPages) {
             try {
-                val body = json.encodeToString(
-                    ChapterListRequest.serializer(),
-                    ChapterListRequest(novelSlug, page, "ASC"),
-                ).toRequestBody("application/json".toMediaType())
                 val pageData = json.decodeFromString<ChapterListResponse>(
-                    client.newCall(POST("$apiUrl/chapters/list", headers, body)).execute().body.string(),
+                    client.newCall(buildChapterListRequest(novelSlug, page)).execute().body.string(),
                 )
                 pageData.result.chapterLists.forEach { freshChapters.add(chapterItemToSChapter(novelSlug, it)) }
             } catch (e: Exception) {
-                Log.w(TAG, "getChapterList: page $page failed — ${e.message}")
+                Log.w(TAG, "fetchChapterList: page $page failed — ${e.message}")
                 break
             }
         }
 
-        Log.d(TAG, "getChapterList: fresh=${freshChapters.size} keep=$keepCount")
-        return mergeChapters(context.existingChapters, freshChapters, keepCount).reversed()
+        Log.d(TAG, "fetchChapterList: fresh=${freshChapters.size} keep=$keepCount")
+        return mergeChapters(existingChapters, freshChapters, keepCount).reversed()
     }
 
     private fun chapterItemToSChapter(novelSlug: String, ch: ChapterItem): SChapter = SChapter.create().apply {
@@ -302,40 +307,9 @@ class MtlBooks :
         name = ch.chapterTitle
         chapter_number = ch.chapterNumber.toFloat()
     }
-
-    // Fallback path for when getChapterList is not used; performs a full fetch with no optimisation.
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val body = response.body.string()
-        val firstPage = try {
-            json.decodeFromString<ChapterListResponse>(body)
-        } catch (e: Exception) {
-            throw Exception("MTLBooks chapter list error (${response.code}): ${body.take(200)}")
-        }
-        val totalPages = (firstPage.result.pagination.total + firstPage.result.pagination.limit - 1) / firstPage.result.pagination.limit
-        val novelSlug = firstPage.result.novelSlug
-
-        val chapters = firstPage.result.chapterLists.map { chapterItemToSChapter(novelSlug, it) }.toMutableList()
-
-        for (page in 2..totalPages) {
-            try {
-                val body = json.encodeToString(
-                    ChapterListRequest.serializer(),
-                    ChapterListRequest(novelSlug, page, "ASC"),
-                ).toRequestBody("application/json".toMediaType())
-                val pageData = json.decodeFromString<ChapterListResponse>(
-                    client.newCall(POST("$apiUrl/chapters/list", headers, body)).execute().body.string(),
-                )
-                pageData.result.chapterLists.forEach { chapters.add(chapterItemToSChapter(novelSlug, it)) }
-            } catch (_: Exception) {
-                break
-            }
-        }
-
-        return chapters.reversed()
-    }
     // ======================== Pages ========================
 
-    override fun pageListRequest(chapter: SChapter): Request {
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
         // "/novel/<slug>/<chapterSlug>" (current) or "/novel/<slug>/chapter/<chapterSlug>" (legacy)
         val parts = chapter.url.trim('/').split("/")
         val novelSlug = parts.getOrNull(1) ?: ""
@@ -346,15 +320,12 @@ class MtlBooks :
             ChapterReadRequest(novelSlug, chapterSlug),
         ).toRequestBody("application/json".toMediaType())
 
-        return POST("$apiUrl/chapters/read", headers, body)
-    }
-
-    override fun pageListParse(response: Response): List<Page> {
+        val response = client.newCall(POST("$apiUrl/chapters/read", headers, body)).execute()
         val chapterResponse = json.decodeFromString<ChapterReadResponse>(response.body.string())
-        val novelSlug = chapterResponse.result.novelSlug
-        val chapterSlug = chapterResponse.result.chapter.chapterSlug
+        val resolvedNovelSlug = chapterResponse.result.novelSlug
+        val resolvedChapterSlug = chapterResponse.result.chapter.chapterSlug
 
-        return listOf(Page(0, "mtlbooks://$novelSlug/$chapterSlug"))
+        return listOf(Page(0, "mtlbooks://$resolvedNovelSlug/$resolvedChapterSlug"))
     }
     // ======================== Page Text (Novel) ========================
 
@@ -391,10 +362,9 @@ class MtlBooks :
         }
     }
 
-    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
     // ======================== Filters ========================
 
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         OrderFilter("Order By", orderOptions.map { it.first }.toTypedArray()),
         SortFilter("Sort", sortOptions.map { it.first }.toTypedArray()),
         WordCountFilter("Word Count", wordCountOptions.map { it.first }.toTypedArray()),

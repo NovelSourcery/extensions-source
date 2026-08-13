@@ -16,9 +16,6 @@ import okhttp3.Request
 abstract class TranslatinOtaku : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
 
-    override fun headersBuilder() = super.headersBuilder()
-        .add("Referer", "$baseUrl/")
-
     override fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/page/$page/?s=&post_type=wp-manga&m_orderby=trending", headers)
 
     override fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
@@ -68,7 +65,7 @@ abstract class TranslatinOtaku : MadaraNovel() {
 
     // ======================== Filters ========================
 
-    override fun getFilterList() = FilterList(
+    override fun getFilterList(data: JsonElement?) = FilterList(
         GenreFilter(getGenreList()),
         GenreConditionFilter(),
         AuthorFilter(),

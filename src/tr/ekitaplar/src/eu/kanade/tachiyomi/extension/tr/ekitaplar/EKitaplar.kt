@@ -1,12 +1,9 @@
-﻿package eu.kanade.tachiyomi.novelextension.tr.ekitaplar
+package eu.kanade.tachiyomi.novelextension.tr.ekitaplar
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
+import keiyoushi.annotation.Source
 
-class EKitaplar :
-    MadaraNovel(
-        baseUrl = "https://e-kitaplar.com",
-        name = "EKitaplar",
-        lang = "tr",
-    ) {
+@Source
+abstract class EKitaplar : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
 }

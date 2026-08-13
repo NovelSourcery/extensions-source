@@ -60,12 +60,10 @@ abstract class Riwyat : MadaraNovel() {
         response
     }
 
-    override val client: OkHttpClient = network.cloudflareClient.newBuilder()
-        .addInterceptor(mobileHeadersInterceptor)
+    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(mobileHeadersInterceptor)
         .addInterceptor(cloudflareInterceptor)
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
-        .build()
 
     private fun mobileHeaders(): Headers = headers.newBuilder()
         .set("User-Agent", mobileUserAgent)

@@ -1,12 +1,9 @@
-﻿package eu.kanade.tachiyomi.novelextension.id.vanovel
+package eu.kanade.tachiyomi.novelextension.id.vanovel
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
+import keiyoushi.annotation.Source
 
-class Vanovel :
-    MadaraNovel(
-        baseUrl = "https://vanovel.com",
-        name = "Vanovel",
-        lang = "id",
-    ) {
+@Source
+abstract class Vanovel : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
 }
