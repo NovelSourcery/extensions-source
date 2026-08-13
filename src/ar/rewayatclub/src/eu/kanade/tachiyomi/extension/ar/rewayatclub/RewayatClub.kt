@@ -71,7 +71,7 @@ class RewayatClub :
         return SManga.create().apply {
             url = "/novel/${item.slug}"
             title = item.arabic
-            thumbnail_url = poster_url.let { url ->
+            thumbnail_url = item.poster_url.let { url ->
                 when {
                     url.startsWith("http") -> url
                     url.startsWith("/") -> "$apiUrl$url"
@@ -310,9 +310,16 @@ class RewayatClub :
     override fun getChapterUrl(chapter: SChapter): String = "$baseUrl${chapter.url}"
 
     private fun NovelItem.toSManga() = SManga.create().apply {
+        val poster = this@toSManga.poster_url
         url = "/novel/$slug"
         title = arabic
-        thumbnail_url = "$apiUrl${poster_url}"
+        thumbnail_url = poster.let { url ->
+            when {
+                url.startsWith("http") -> url
+                url.startsWith("/") -> "$apiUrl$url"
+                else -> "$baseUrl/$url"
+            }
+        }
         genre = this@toSManga.genre.joinToString { it.arabic }
         status = when (get_novel_status) {
             "مكتملة" -> SManga.COMPLETED
