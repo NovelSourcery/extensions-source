@@ -13,12 +13,13 @@ import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
-import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.lib.chapterutils.shouldReturnExisting
 import keiyoushi.utils.getPreferencesLazy
+import keiyoushi.utils.setAltTitles
 import kotlinx.serialization.json.Json
 import okhttp3.FormBody
 import okhttp3.Request
@@ -221,10 +222,14 @@ open class MadaraNovel(
         // LN Reader: Check for captcha before parsing
         checkCaptcha(doc, response.request.url.toString())
 
+        return mangaDetailsParse(doc, response.request.url.encodedPath)
+    }
+
+    private fun mangaDetailsParse(doc: Document, mangaUrl: String): SManga {
         doc.select(".manga-title-badges, #manga-title span").remove()
 
         // Cache the WP post id for tracking (bookmark/history) calls later
-        extractPostId(doc)?.let { cachePostId(response.request.url.encodedPath, it) }
+        extractPostId(doc)?.let { cachePostId(mangaUrl, it) }
 
         return SManga.create().apply {
             title = doc.selectFirst(".post-title h1, #manga-title h1")?.text()?.trim() ?: ""
@@ -269,6 +274,17 @@ open class MadaraNovel(
             } else {
                 SManga.COMPLETED
             }
+
+            val altTitles = doc.select(".post-content_item, .post-content")
+                .find { element -> element.selectFirst("h5")?.text()?.trim()?.lowercase()?.contains("alt") == true }
+                ?.selectFirst(".summary-content")
+                ?.text()
+                ?.split(",", ";", "|", "\n")
+                ?.map { it.trim() }
+                ?.filter { it.isNotEmpty() && !it.equals(title, ignoreCase = true) }
+                ?.distinct()
+                .orEmpty()
+            if (altTitles.isNotEmpty()) setAltTitles(altTitles)
         }
     }
 
@@ -293,32 +309,52 @@ open class MadaraNovel(
 
     override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
 
-    override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
-        val response = client.newCall(chapterListRequest(manga)).execute()
-        val doc = response.asJsoup()
-        val mangaUrl = response.request.url.encodedPath
+    override suspend fun getMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        if (!fetchChapters) {
+            val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(mangaDetailsRequest(manga)).execute()) else manga
+            return SMangaUpdate(updatedManga, chapters)
+        }
+
+        // mangaDetailsParse and the chapter list both need the exact same novel page
+        // (baseUrl + manga.url) — fetch it once here instead of twice.
+        val request = chapterListRequest(manga)
+        val mangaUrl = request.url.encodedPath
+        val doc = client.newCall(request).execute().asJsoup()
+        checkCaptcha(doc, request.url.toString())
+
+        val updatedManga = if (fetchDetails) mangaDetailsParse(doc, mangaUrl) else manga
 
         val postId = extractPostId(doc)
         postId?.let { cachePostId(mangaUrl, it) }
 
         val siteTotal = extractChapterCount(doc)
-        Log.d(TAG, "getChapterList: url=$mangaUrl existing=${context.existingChapters.size} siteTotal=$siteTotal")
+        Log.d(TAG, "getMangaUpdate: url=$mangaUrl existing=${chapters.size} siteTotal=$siteTotal")
 
-        if (shouldReturnExisting(context.existingChapters.size, siteTotal)) {
-            Log.d(TAG, "getChapterList: count unchanged — returning existing")
-            return context.existingChapters
+        val updatedChapters = if (shouldReturnExisting(chapters.size, siteTotal)) {
+            Log.d(TAG, "getMangaUpdate: count unchanged — returning existing")
+            chapters
+        } else {
+            val html = fetchChaptersHtml(mangaUrl, postId, request.url.toString())
+            val parsed = parseChaptersFromHtml(html)
+            if (reverseChapterList) parsed else parsed.reversed()
         }
 
-        val html = fetchChaptersHtml(mangaUrl, postId, response.request.url.toString())
-        val chapters = parseChaptersFromHtml(html)
-        return if (reverseChapterList) chapters else chapters.reversed()
+        return SMangaUpdate(updatedManga, updatedChapters)
     }
 
+    // Required override (HttpSource.chapterListParse is abstract) and still reachable via
+    // `super.chapterListParse` from subclasses that post-process the legacy path (e.g.
+    // ZetroTranslation's locked-chapter filter). getMangaUpdate above is the real entry
+    // point and does not call this.
     override fun chapterListParse(response: Response): List<SChapter> {
         val doc = response.asJsoup()
         val mangaUrl = response.request.url.encodedPath
 
-        // Cache the WP post id for tracking (bookmark/history) calls later
         val postId = extractPostId(doc)
         postId?.let { cachePostId(mangaUrl, it) }
 
@@ -359,13 +395,15 @@ open class MadaraNovel(
             .add("action", "manga_get_chapters")
             .add("manga", postId ?: "")
             .build()
-        client.newCall(POST("$baseUrl/wp-admin/admin-ajax.php", headers, formBody))
+        val newHeaders = headersBuilder().set("Referer", referer).build()
+        client.newCall(POST("$baseUrl/wp-admin/admin-ajax.php", newHeaders, formBody))
             .execute().body.string()
     }
 
     private fun parseChaptersFromHtml(html: String): List<SChapter> {
         if (html == "0") return emptyList()
         val chapDoc = Jsoup.parse(html)
+        checkCaptcha(chapDoc, baseUrl)
         val totalChaps = chapDoc.select(".wp-manga-chapter").size
         val chapters = mutableListOf<SChapter>()
 
@@ -847,7 +885,7 @@ fun Element.formattedDescription(): String {
         .filter { it !== node }
         .forEach { it.after(paragraphToken) }
     return node.text()
-        .replace(' ', ' ')
+        .replace(' ', ' ')
         .replace(Regex("""\s*$paragraphToken\s*"""), "\n\n")
         .replace(Regex("""\s*$breakToken\s*"""), "\n")
         .replace(Regex("\n{3,}"), "\n\n")

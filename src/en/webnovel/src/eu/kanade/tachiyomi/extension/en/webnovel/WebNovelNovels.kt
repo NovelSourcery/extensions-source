@@ -377,14 +377,14 @@ class WebNovelNovels :
     }
 
     private val excludeLocked: Boolean
-        get() = preferences.getBoolean(PREF_EXCLUDE_LOCKED, false)
+        get() = preferences.getBoolean(PREF_EXCLUDE_LOCKED, true)
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         CheckBoxPreference(screen.context).apply {
             key = PREF_EXCLUDE_LOCKED
             title = "Exclude locked chapters"
-            summary = "Hide chapters that are locked or paid"
-            setDefaultValue(false)
+            summary = "Hide chapters that are locked or paid. Enabled by default."
+            setDefaultValue(true)
         }.also(screen::addPreference)
     }
 

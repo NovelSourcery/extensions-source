@@ -1,7 +1,7 @@
 ext {
     extName = 'WTR-LAB'
     extClass = '.WtrLab'
-    extVersionCode = 7
+    extVersionCode = 9
     isNovel = true
 }
 

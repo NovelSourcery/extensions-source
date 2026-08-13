@@ -15,9 +15,9 @@ import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
-import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.lib.chapterutils.mergeChapters
 import keiyoushi.lib.chapterutils.shouldReturnExisting
@@ -766,7 +766,24 @@ class WtrLab :
 
     override fun chapterListRequest(manga: SManga): Request = GET("$baseUrl${manga.url}", headers)
 
-    override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
+    override suspend fun getMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val updatedManga = if (fetchDetails) {
+            client.newCall(mangaDetailsRequest(manga)).execute().let(::mangaDetailsParse)
+        } else {
+            manga
+        }
+
+        val updatedChapters = if (fetchChapters) fetchChapterListInternal(manga, chapters) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    private fun fetchChapterListInternal(manga: SManga, chapters: List<SChapter>): List<SChapter> {
         val response = client.newCall(chapterListRequest(manga)).execute()
         val html = response.body.string()
         val doc = Jsoup.parse(html)
@@ -781,45 +798,28 @@ class WtrLab :
 
         if (chapterCount == 0) return emptyList()
 
-        Log.d(TAG, "getChapterList: rawId=$rawId existing=${context.existingChapters.size} siteTotal=$chapterCount")
+        Log.d(TAG, "getChapterList: rawId=$rawId existing=${chapters.size} siteTotal=$chapterCount")
 
-        if (!context.forceRefresh && shouldReturnExisting(context.existingChapters.size, chapterCount)) {
+        if (shouldReturnExisting(chapters.size, chapterCount)) {
             Log.d(TAG, "getChapterList: count unchanged — returning existing")
-            return context.existingChapters
+            return chapters
         }
 
-        val existingCount = context.existingChapters.size
+        val existingCount = chapters.size
         // On a normal refresh, align the start to the 250-chapter batch boundary the site uses, so the
-        // current (possibly partial) batch is re-fetched and we don't request odd offsets. A force
-        // refresh re-fetches everything from the start.
-        val (startOrder, keepCount) = if (context.forceRefresh || existingCount == 0) {
+        // current (possibly partial) batch is re-fetched and we don't request odd offsets. A forced
+        // refresh (empty existing chapters) re-fetches everything from the start.
+        val (startOrder, keepCount) = if (existingCount == 0) {
             1 to 0
         } else {
             val alignedStart = (existingCount / CHAPTER_BATCH) * CHAPTER_BATCH + 1
             alignedStart to (alignedStart - 1)
         }
 
-        Log.d(TAG, "getChapterList: force=${context.forceRefresh} startOrder=$startOrder keepCount=$keepCount")
+        Log.d(TAG, "getChapterList: startOrder=$startOrder keepCount=$keepCount")
 
         val fresh = fetchAllChapters(rawId, chapterCount, slug, startOrder)
-        return mergeChapters(context.existingChapters, fresh, keepCount).reversed()
-    }
-
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val html = response.body.string()
-        val doc = Jsoup.parse(html)
-        val url = response.request.url.toString()
-
-        val urlMatch = Regex("""(?:serie-|novel/)(\d+)/([^/]+)""").find(url)
-            ?: return emptyList()
-
-        val rawId = urlMatch.groupValues[1].toInt()
-        val slug = urlMatch.groupValues[2]
-        val chapterCount = extractChapterCount(doc)
-
-        if (chapterCount == 0) return emptyList()
-
-        return fetchAllChapters(rawId, chapterCount, slug).reversed()
+        return mergeChapters(chapters, fresh, keepCount).reversed()
     }
 
     private fun extractChapterCount(doc: Document): Int {

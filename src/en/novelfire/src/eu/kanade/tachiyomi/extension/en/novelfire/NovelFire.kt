@@ -13,14 +13,13 @@ import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
-import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.lib.chapterutils.checkCloudflare
 import keiyoushi.lib.chapterutils.paginatedChapterList
 import keiyoushi.lib.chapterutils.shouldReturnExisting
-import keiyoushi.lib.chapterutils.sortByChapterNumber
 import keiyoushi.utils.tryParse
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -343,7 +342,10 @@ class NovelFire :
     override fun mangaDetailsParse(response: Response): SManga {
         val doc = Jsoup.parse(response.body.string())
         checkCloudflare(doc)
+        return mangaDetailsParse(doc)
+    }
 
+    private fun mangaDetailsParse(doc: Document): SManga {
         val manga = SManga.create().apply {
             // Multiple fallbacks for title
             title = doc.selectFirst(".novel-title")?.text()?.trim()?.takeIf { it.isNotBlank() }
@@ -403,11 +405,27 @@ class NovelFire :
         @SerialName("created_at") val createdAt: String = "",
     )
 
-    override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
+    override suspend fun getMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        if (!fetchChapters) {
+            val updatedManga = if (fetchDetails) {
+                client.newCall(mangaDetailsRequest(manga)).execute().let(::mangaDetailsParse)
+            } else {
+                manga
+            }
+            return SMangaUpdate(updatedManga, chapters)
+        }
+
         val response = client.newCall(GET(absoluteUrl(manga.url), headers)).execute()
         val body = response.body.string()
         val doc = Jsoup.parse(body)
         checkCloudflare(doc)
+
+        val updatedManga = if (fetchDetails) mangaDetailsParse(doc) else manga
 
         val novelPath = response.request.url.encodedPath.trimStart('/')
 
@@ -417,89 +435,57 @@ class NovelFire :
                 ?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
             ?: 0
 
-        val existingCount = context.existingChapters.size
-        Log.d(TAG, "getChapterList: manga=${manga.url} existing=$existingCount siteTotal=$totalChapters")
+        val existingCount = chapters.size
+        Log.d(TAG, "getMangaUpdate: manga=${manga.url} existing=$existingCount siteTotal=$totalChapters")
 
-        if (shouldReturnExisting(existingCount, totalChapters)) {
-            Log.d(TAG, "getChapterList: count unchanged — returning existing chapters immediately")
-            return context.existingChapters
-        }
+        val updatedChapters = if (shouldReturnExisting(existingCount, totalChapters)) {
+            Log.d(TAG, "getMangaUpdate: count unchanged — returning existing chapters immediately")
+            chapters
+        } else {
+            val postId = extractPostId(doc)
+            val fetchMethod = preferences.getString(CHAPTER_FETCH_METHOD_KEY, "auto") ?: "auto"
+            Log.d(TAG, "getMangaUpdate: fetch needed (method=$fetchMethod postId=$postId)")
 
-        val postId = extractPostId(doc)
-        val fetchMethod = preferences.getString(CHAPTER_FETCH_METHOD_KEY, "auto") ?: "auto"
-        Log.d(TAG, "getChapterList: fetch needed (method=$fetchMethod postId=$postId)")
-
-        return when (fetchMethod) {
-            "ajax" -> {
-                if (postId != null) {
-                    getAllChaptersFromAjax(novelPath, postId).reversed()
-                } else {
-                    throw Exception("Ajax method selected but post_id not found on page")
+            when (fetchMethod) {
+                "ajax" -> {
+                    if (postId != null) {
+                        getAllChaptersFromAjax(novelPath, postId).reversed()
+                    } else {
+                        throw Exception("Ajax method selected but post_id not found on page")
+                    }
                 }
-            }
-            "html" -> paginatedChapterList(
-                context = context,
-                siteTotal = totalChapters,
-                assumedPageSize = CHAPTERS_PER_PAGE,
-                fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
-            ).reversed()
-            else -> {
-                if (postId != null) {
-                    try {
+                "html" -> paginatedChapterList(
+                    existingChapters = chapters,
+                    siteTotal = totalChapters,
+                    assumedPageSize = CHAPTERS_PER_PAGE,
+                    fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
+                ).reversed()
+                else -> {
+                    if (postId != null) {
+                        try {
+                            paginatedChapterList(
+                                existingChapters = chapters,
+                                siteTotal = totalChapters,
+                                assumedPageSize = CHAPTERS_PER_PAGE,
+                                fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
+                            ).reversed()
+                        } catch (e: Exception) {
+                            Log.d(TAG, "getMangaUpdate: HTML incremental failed (${e.message}), falling back to AJAX")
+                            getAllChaptersFromAjax(novelPath, postId).reversed()
+                        }
+                    } else {
                         paginatedChapterList(
-                            context = context,
+                            existingChapters = chapters,
                             siteTotal = totalChapters,
                             assumedPageSize = CHAPTERS_PER_PAGE,
                             fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
                         ).reversed()
-                    } catch (e: Exception) {
-                        Log.d(TAG, "getChapterList: HTML incremental failed (${e.message}), falling back to AJAX")
-                        getAllChaptersFromAjax(novelPath, postId).reversed()
                     }
-                } else {
-                    paginatedChapterList(
-                        context = context,
-                        siteTotal = totalChapters,
-                        assumedPageSize = CHAPTERS_PER_PAGE,
-                        fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
-                    ).reversed()
                 }
             }
         }
-    }
 
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val body = response.body.string()
-        val doc = Jsoup.parse(body)
-        checkCloudflare(doc)
-
-        val novelPath = response.request.url.encodedPath.trimStart('/')
-
-        val postId = extractPostId(doc)
-
-        val fetchMethod = preferences.getString(CHAPTER_FETCH_METHOD_KEY, "auto") ?: "auto"
-
-        return when (fetchMethod) {
-            "ajax" -> {
-                if (postId != null) {
-                    getAllChaptersFromAjax(novelPath, postId).reversed()
-                } else {
-                    throw Exception("Ajax method selected but post_id not found on page")
-                }
-            }
-            "html" -> getAllChaptersFromHtml(novelPath).reversed()
-            else -> {
-                if (postId != null) {
-                    try {
-                        getAllChaptersFromHtml(novelPath).reversed()
-                    } catch (e: Exception) {
-                        getAllChaptersFromAjax(novelPath, postId).reversed()
-                    }
-                } else {
-                    getAllChaptersFromHtml(novelPath).reversed()
-                }
-            }
-        }
+        return SMangaUpdate(updatedManga, updatedChapters)
     }
 
     private fun extractPostId(doc: Document): String? {
@@ -608,18 +594,6 @@ class NovelFire :
         val hasNextPage = doc.selectFirst("a[rel=\"next\"]") != null
         Log.d(TAG, "html fetch: page $page parsed ${chapters.size} chapters (hasNext=$hasNextPage)")
         return Pair(chapters, hasNextPage)
-    }
-
-    private fun getAllChaptersFromHtml(novelPath: String, startPage: Int = 1): List<SChapter> {
-        val allChapters = mutableListOf<SChapter>()
-        var page = startPage
-        while (true) {
-            val (pageChapters, hasNextPage) = fetchSingleHtmlPage(novelPath, page)
-            allChapters += pageChapters
-            if (!hasNextPage) break
-            page++
-        }
-        return sortByChapterNumber(allChapters)
     }
 
     // ======================== Chapter Content ========================

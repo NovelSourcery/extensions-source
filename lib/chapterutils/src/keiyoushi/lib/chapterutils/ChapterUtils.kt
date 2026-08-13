@@ -1,21 +1,23 @@
 package keiyoushi.lib.chapterutils
 
-import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import org.jsoup.nodes.Document
 
 // ── High-level entry point ────────────────────────────────────────────────────
 
 /**
- * Fetches a paginated chapter list with RefreshContext optimisations.
+ * Fetches a paginated chapter list, reusing [existingChapters] to avoid redundant requests.
  *
  * The caller supplies [fetchPage], a lambda that takes a 1-based page number and returns
  * the chapters on that page plus whether a next page exists.  URL construction is entirely
  * the caller's responsibility, so any URL scheme (query param, path segment, etc.) works.
  *
+ * To force a full re-fetch, pass an empty [existingChapters] list (this is how the app signals
+ * a manual/forced refresh at the `getMangaUpdate` layer).
+ *
  * Behaviour:
- * - Returns [context].existingChapters immediately when [siteTotal] confirms nothing changed.
- * - Falls back to a full fetch when [context].existingChapters is empty.
+ * - Returns [existingChapters] immediately when [siteTotal] confirms nothing changed.
+ * - Falls back to a full fetch when [existingChapters] is empty.
  * - Otherwise probes the estimated start page, detects the real page size, then fetches only
  *   the pages that could contain new chapters and prepends the known-good existing chapters.
  *
@@ -25,13 +27,13 @@ import org.jsoup.nodes.Document
  * @param sortChapters  Post-processing sort applied to the final list; defaults to chapter-number order.
  */
 suspend fun paginatedChapterList(
-    context: RefreshContext,
+    existingChapters: List<SChapter>,
     siteTotal: Int,
     assumedPageSize: Int = 100,
     fetchPage: suspend (page: Int) -> Pair<List<SChapter>, Boolean>,
     sortChapters: (List<SChapter>) -> List<SChapter> = ::sortByChapterNumber,
 ): List<SChapter> {
-    val existing = context.existingChapters
+    val existing = existingChapters
     val existingCount = existing.size
 
     if (shouldReturnExisting(existingCount, siteTotal)) {

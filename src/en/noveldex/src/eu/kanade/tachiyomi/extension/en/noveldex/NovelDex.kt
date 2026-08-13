@@ -409,7 +409,7 @@ class NovelDex :
         val novelSlug = slugMatch?.groupValues?.get(2) ?: ""
 
         val chapters = mutableListOf<SChapter>()
-        val showLocked = preferences.getBoolean(SHOW_LOCKED_PREF_KEY, true)
+        val showLocked = preferences.getBoolean(SHOW_LOCKED_PREF_KEY, false)
 
         // PRIMARY: "allChapters":[{...},...] — full list with titles + lock status
         val allChaptersMatch = Regex(""""allChapters"\s*:\s*(\[.*?\])(?=\s*[,}])""", RegexOption.DOT_MATCHES_ALL)
@@ -855,8 +855,8 @@ class NovelDex :
         SwitchPreferenceCompat(screen.context).apply {
             key = SHOW_LOCKED_PREF_KEY
             title = "Show locked chapters"
-            summary = "When disabled, chapters that require coins to unlock will be hidden from the chapter list."
-            setDefaultValue(true)
+            summary = "When enabled, chapters that require coins to unlock will be included in the chapter list. Hidden by default."
+            setDefaultValue(false)
         }.also(screen::addPreference)
     }
 

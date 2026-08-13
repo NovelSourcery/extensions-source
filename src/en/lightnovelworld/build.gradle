@@ -1,7 +1,7 @@
 ext {
     extName = 'Light Novel World'
     extClass = '.LightNovelWorld'
-    extVersionCode = 2
+    extVersionCode = 4
     isNovel = true
 }
 

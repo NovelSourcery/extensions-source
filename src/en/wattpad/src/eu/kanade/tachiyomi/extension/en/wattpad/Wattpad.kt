@@ -48,7 +48,7 @@ class Wattpad :
         get() = preferences.getBoolean(PREF_MATURE, false)
 
     private val excludeLocked: Boolean
-        get() = preferences.getBoolean(PREF_EXCLUDE_LOCKED, false)
+        get() = preferences.getBoolean(PREF_EXCLUDE_LOCKED, true)
 
     private val apiHeaders: Headers
         get() = headersBuilder().add("Referer", "$baseUrl/").build()
@@ -234,8 +234,8 @@ class Wattpad :
         CheckBoxPreference(screen.context).apply {
             key = PREF_EXCLUDE_LOCKED
             title = "Exclude locked chapters"
-            summary = "Hide paid chapters from the chapter list (locked chapters are marked with 🔒)"
-            setDefaultValue(false)
+            summary = "Hide paid chapters from the chapter list (locked chapters are marked with 🔒). Enabled by default."
+            setDefaultValue(true)
         }.also(screen::addPreference)
     }
 

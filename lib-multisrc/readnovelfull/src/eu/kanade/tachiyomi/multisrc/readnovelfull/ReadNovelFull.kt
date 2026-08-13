@@ -13,9 +13,9 @@ import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
-import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.lib.chapterutils.paginatedChapterList
@@ -119,7 +119,7 @@ abstract class ReadNovelFull(
 
     // Set true on sites whose chapter list is split across multiple pages on the novel page
     // (engine convention: a #indexselect page picker, chapters under div.m-newest2 ul.ul-list5).
-    // Enables the RefreshContext-aware paginated path in getChapterList below.
+    // Enables the incremental paginated path in getMangaUpdate below.
     protected open val chaptersPaginated: Boolean = false
     protected open val chapterListPageSize: Int = 100
 
@@ -652,12 +652,43 @@ abstract class ReadNovelFull(
         }
     }
 
-    override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
-        if (!chaptersPaginated) {
-            return super.getChapterList(manga, context)
+    override suspend fun getMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        var updatedManga = manga
+        var updatedChapters = chapters
+
+        if (chaptersPaginated && fetchDetails && fetchChapters) {
+            // Chapter-list page 1 is the same page mangaDetailsRequest would fetch, so fetch it once
+            // and derive both the manga details and the first chapter page from it.
+            val detailDoc = fetchChapterListPage(manga, 1)
+            updatedManga = mangaDetailsParse(detailDoc)
+            updatedChapters = fetchPaginatedChapters(manga, chapters, detailDoc)
+        } else {
+            if (fetchDetails) {
+                val response = client.newCall(mangaDetailsRequest(manga)).execute()
+                updatedManga = mangaDetailsParse(response.asJsoup())
+            }
+            if (fetchChapters) {
+                updatedChapters = if (chaptersPaginated) {
+                    val detailDoc = fetchChapterListPage(manga, 1)
+                    fetchPaginatedChapters(manga, chapters, detailDoc)
+                } else {
+                    val response = client.newCall(chapterListRequest(manga)).execute()
+                    chapterListParse(response)
+                }
+            }
         }
 
-        val detailDoc = fetchChapterListPage(manga, 1)
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    // Shared paginated chapter-list fetch used by both branches of getMangaUpdate above.
+    // [detailDoc] is the already-fetched page 1 (novel page / first chapter-list page).
+    private suspend fun fetchPaginatedChapters(manga: SManga, existingChapters: List<SChapter>, detailDoc: Document): List<SChapter> {
         val pageCount = chapterListPageCount(detailDoc)
 
         // Fast mode (default): synthesize the list from the latest chapter number and a stable chapter
@@ -667,7 +698,7 @@ abstract class ReadNovelFull(
         }
 
         val chapters = paginatedChapterList(
-            context = context,
+            existingChapters = existingChapters,
             siteTotal = siteChapterTotal(detailDoc),
             assumedPageSize = chapterListPageSize,
             sortChapters = { it },

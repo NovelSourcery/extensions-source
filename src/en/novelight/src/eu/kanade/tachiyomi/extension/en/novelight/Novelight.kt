@@ -10,9 +10,9 @@ import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
-import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.utils.formattedText
 import keiyoushi.utils.setNumber
@@ -25,6 +25,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
@@ -48,7 +49,7 @@ class Novelight :
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
-    private val hideLocked get() = preferences.getBoolean(PREF_HIDE_LOCKED, false)
+    private val hideLocked get() = preferences.getBoolean(PREF_HIDE_LOCKED, true)
 
     override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/catalog/?ordering=popularity&page=$page", headers)
 
@@ -82,31 +83,30 @@ class Novelight :
 
     override fun searchMangaParse(response: Response): MangasPage = parseCatalog(response)
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        val doc = Jsoup.parse(response.body.string(), baseUrl)
-        return SManga.create().apply {
-            title = doc.selectFirst("h1")?.text()?.trim().orEmpty()
-            thumbnail_url = doc.selectFirst(".poster > img")?.attr("abs:src")
-            description = doc.selectFirst("section.text-info.section > p, section.text-info.section")?.formattedText()
+    override fun mangaDetailsParse(response: Response): SManga = mangaDetailsParse(Jsoup.parse(response.body.string(), baseUrl))
 
-            var statusText = ""
-            var translation = ""
-            doc.select("div.mini-info > .item").forEach { item ->
-                val type = item.selectFirst(".sub-header")?.text()?.trim()
-                val value = item.selectFirst("div.info")?.text()?.trim().orEmpty()
-                when (type) {
-                    "Status" -> statusText = value.lowercase()
-                    "Translation" -> translation = value.lowercase()
-                    "Author" -> author = value
-                    "Genres" -> genre = item.select("div.info > a").joinToString(", ") { it.text().trim() }
-                }
+    private fun mangaDetailsParse(doc: Document): SManga = SManga.create().apply {
+        title = doc.selectFirst("h1")?.text()?.trim().orEmpty()
+        thumbnail_url = doc.selectFirst(".poster > img")?.attr("abs:src")
+        description = doc.selectFirst("section.text-info.section > p, section.text-info.section")?.formattedText()
+
+        var statusText = ""
+        var translation = ""
+        doc.select("div.mini-info > .item").forEach { item ->
+            val type = item.selectFirst(".sub-header")?.text()?.trim()
+            val value = item.selectFirst("div.info")?.text()?.trim().orEmpty()
+            when (type) {
+                "Status" -> statusText = value.lowercase()
+                "Translation" -> translation = value.lowercase()
+                "Author" -> author = value
+                "Genres" -> genre = item.select("div.info > a").joinToString(", ") { it.text().trim() }
             }
-            status = when {
-                statusText == "cancelled" -> SManga.CANCELLED
-                statusText == "releasing" || translation == "ongoing" -> SManga.ONGOING
-                statusText == "completed" && translation == "completed" -> SManga.COMPLETED
-                else -> SManga.UNKNOWN
-            }
+        }
+        status = when {
+            statusText == "cancelled" -> SManga.CANCELLED
+            statusText == "releasing" || translation == "ongoing" -> SManga.ONGOING
+            statusText == "completed" && translation == "completed" -> SManga.COMPLETED
+            else -> SManga.UNKNOWN
         }
     }
 
@@ -115,23 +115,34 @@ class Novelight :
 
     private val chapterNumberPattern: Regex = Regex("""^\s*(?:\d+\s*vol\.?\s*)?\d+\s*chapter\s*[-–—]?\s*""", RegexOption.IGNORE_CASE)
 
-    override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
-        val rawBody = client.newCall(GET(baseUrl + manga.url, headers)).execute().body.string()
+    override suspend fun getMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        if (!fetchChapters) {
+            val updatedManga = if (fetchDetails) mangaDetailsParse(fetchDetailsResponse(manga)) else manga
+            return SMangaUpdate(updatedManga, chapters)
+        }
+
+        // fetchChapters is true: one fetch of the details page serves both outputs.
+        val rawBody = fetchDetailsResponse(manga).body.string()
         val detailDoc = Jsoup.parse(rawBody, baseUrl)
+        val updatedManga = if (fetchDetails) mangaDetailsParse(detailDoc) else manga
+
         // csrfmiddlewaretoken is optional on the pagination endpoint.
         val csrf = Regex("""window\.CSRF_TOKEN = "([^"]+)"""").find(rawBody)?.groupValues?.get(1)
         val bookId = Regex("""const OBJECT_BY_COMMENT = ([0-9]+)""").find(rawBody)?.groupValues?.get(1)
-            ?: return context.existingChapters
+            ?: return SMangaUpdate(updatedManga, chapters)
         val totalPages = detailDoc.select("#select-pagination-chapter option").size.coerceAtLeast(1)
 
         // "Loaded Chapters" count; skip the full fetch when nothing changed.
         val siteTotal = detailDoc.select("div.mini-info .item, .item")
             .firstOrNull { it.selectFirst(".sub-header")?.text()?.contains("Loaded Chapters", true) == true }
             ?.selectFirst(".info")?.text()?.trim()?.toIntOrNull() ?: 0
-        if (context.existingChapters.isNotEmpty() && siteTotal > 0 &&
-            context.existingChapters.size == siteTotal
-        ) {
-            return context.existingChapters
+        if (chapters.isNotEmpty() && siteTotal > 0 && chapters.size == siteTotal) {
+            return SMangaUpdate(updatedManga, chapters)
         }
 
         fun ajaxPage(sitePage: Int): List<ChapterDto> {
@@ -174,7 +185,7 @@ class Novelight :
 
                         title.replace(chapterNumberPattern, "")
                             .takeIf { !isNullOrBlank() }
-                            .let { append(" - $it") }
+                            ?.let { append(" - $it") }
                     },
                     url = "/" + href.trimStart('/'),
                     chapter = number,
@@ -197,30 +208,28 @@ class Novelight :
 
         // Fetch pages sequentially with a small delay; concurrent/too-fast requests trip the
         // site's rate limiting and pages come back empty.
-        val chapters = mutableListOf<ChapterDto>()
+        val collectedDtos = mutableListOf<ChapterDto>()
         for (p in 1..totalPages) {
-            chapters += ajaxPageRetry(p)
+            collectedDtos += ajaxPageRetry(p)
             delay(100)
         }
 
-        return chapters.sortedWith(compareBy({ it.chapter }, { it.volume ?: 0 })).map {
+        val updatedChapters = collectedDtos.sortedWith(compareBy({ it.chapter }, { it.volume ?: 0 })).map {
             SChapter.create().apply {
                 name = it.name
                 url = it.url
                 chapter_number = it.chapter.toFloat()
                 date_upload = parseDate(it.date)
-                scanlator = when (it.volume) {
-                    null -> "standalone"
-                    else -> "volume"
-                }
 
                 setNumber(it.chapter.toString())
-                it.volume?.let { setVolume(toString()) }
+                it.volume?.let { volume -> setVolume(volume.toString()) }
             }
         }.asReversed()
+
+        return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> = emptyList()
+    private fun fetchDetailsResponse(manga: SManga): Response = client.newCall(GET(baseUrl + manga.url, headers)).execute()
 
     private fun parseDate(date: String?): Long {
         if (date.isNullOrBlank()) return 0L
@@ -263,7 +272,8 @@ class Novelight :
             SwitchPreferenceCompat(screen.context).apply {
                 key = PREF_HIDE_LOCKED
                 title = "Hide locked chapters"
-                setDefaultValue(false)
+                summary = "Hide chapters that require payment (on by default)"
+                setDefaultValue(true)
             },
         )
     }

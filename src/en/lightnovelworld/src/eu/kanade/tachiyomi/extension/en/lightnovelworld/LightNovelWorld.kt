@@ -8,9 +8,9 @@ import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
-import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.lib.chapterutils.paginatedChapterList
 import keiyoushi.lib.chapterutils.shouldReturnExisting
@@ -177,11 +177,12 @@ class LightNovelWorld :
             }
         }
 
-        // 24 results per page; total count shown as "N novels found"
+        // Total count shown as "N novels found"; derive page size from what this page actually
+        // returned instead of assuming a fixed page size, so this survives the site changing it.
         val currentPage = response.request.url.queryParameter("page")?.toIntOrNull() ?: 1
         val totalCount = doc.selectFirst(".results-count")?.text()
             ?.replace(Regex("[^0-9]"), "")?.toIntOrNull() ?: 0
-        val hasNextPage = currentPage * 24 < totalCount
+        val hasNextPage = novels.isNotEmpty() && currentPage * novels.size < totalCount
 
         return MangasPage(novels, hasNextPage)
     }
@@ -260,7 +261,24 @@ class LightNovelWorld :
         return GET("$baseUrl$path/chapters/", headers)
     }
 
-    override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
+    override suspend fun getMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val updatedManga = if (fetchDetails) {
+            client.newCall(mangaDetailsRequest(manga)).execute().let(::mangaDetailsParse)
+        } else {
+            manga
+        }
+
+        val updatedChapters = if (fetchChapters) fetchChapterListInternal(manga, chapters) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    private suspend fun fetchChapterListInternal(manga: SManga, chapters: List<SChapter>): List<SChapter> {
         val response = client.newCall(chapterListRequest(manga)).execute()
         val page1Doc = Jsoup.parse(response.body.string())
         val basePath = response.request.url.encodedPath
@@ -270,15 +288,15 @@ class LightNovelWorld :
             .find(page1Doc.selectFirst(".chapters-description")?.text().orEmpty())
             ?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
-        Log.d(TAG, "getChapterList: url=$basePath existing=${context.existingChapters.size} siteTotal=$currentTotal totalPages=$totalPages")
+        Log.d(TAG, "getChapterList: url=$basePath existing=${chapters.size} siteTotal=$currentTotal totalPages=$totalPages")
 
-        if (shouldReturnExisting(context.existingChapters.size, currentTotal)) {
+        if (shouldReturnExisting(chapters.size, currentTotal)) {
             Log.d(TAG, "getChapterList: count unchanged — returning existing")
-            return context.existingChapters
+            return chapters
         }
 
         return paginatedChapterList(
-            context = context,
+            existingChapters = chapters,
             siteTotal = currentTotal,
             assumedPageSize = CHAPTERS_PER_PAGE,
             fetchPage = { page ->
@@ -294,7 +312,10 @@ class LightNovelWorld :
         ).reversed()
     }
 
-    // Fallback path for when getChapterList is not used; performs a full fetch with no optimisation.
+    // Required override — chapterListParse is ACC_ABSTRACT in the pinned extensions-lib jar
+    // (verified via javap on the real dependency, not just the source-api sources). Unreachable
+    // in practice since getChapterList(manga, context) above is the real entry point and never
+    // delegates here, but the class will not compile without it.
     override fun chapterListParse(response: Response): List<SChapter> {
         val doc = Jsoup.parse(response.body.string())
         val basePath = response.request.url.encodedPath
