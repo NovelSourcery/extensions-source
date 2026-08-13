@@ -11,9 +11,11 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
 import keiyoushi.lib.chapterutils.paginatedChapterList
 import keiyoushi.utils.formattedText
 import keiyoushi.utils.stripChapterNumberPrefix
+import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import org.jsoup.nodes.Document
@@ -28,12 +30,8 @@ import uy.kohesive.injekt.api.get
  * stable /book/<slug>/chapter-<n> pattern, so the default "fast" mode synthesizes the list from
  * the latest chapter number instead of fetching every index page.
  */
-class NovelLive :
-    ReadNovelFull(
-        name = "NovelLive",
-        baseUrl = "https://novellive.app",
-        lang = "en",
-    ) {
+@Source
+abstract class NovelLive : ReadNovelFull() {
 
     private val prefs: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
@@ -41,9 +39,9 @@ class NovelLive :
 
     private val accurateChapters get() = prefs.getBoolean(PREF_ACCURATE, false)
 
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/list/most-popular-novels/$page", headers)
+    override fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/list/most-popular-novels/$page", headers)
 
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/list/latest-novels/$page", headers)
+    override fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/list/latest-novels/$page", headers)
 
     override fun popularMangaSelector() = "div.ul-list1 div.li-row, div.li-row"
 
@@ -57,12 +55,12 @@ class NovelLive :
         }
     }
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val url = "$baseUrl/search".toHttpUrl().newBuilder().addQueryParameter("keyword", query).build()
         return GET(url, headers)
     }
 
-    override fun getFilterList() = FilterList()
+    override fun getFilterList(data: JsonElement?) = FilterList()
 
     override fun mangaDetailsParse(document: Document): SManga = SManga.create().apply {
         title = document.selectFirst(".m-desc h1.tit, h1.tit")?.text()?.trim()
@@ -94,14 +92,13 @@ class NovelLive :
             ?: document.selectFirst("meta[property=og:description], meta[name=description]")?.attr("content")?.trim()
     }
 
-    override suspend fun getMangaUpdate(
+    override suspend fun fetchMangaUpdate(
         manga: SManga,
         chapters: List<SChapter>,
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        @Suppress("DEPRECATION")
-        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(mangaDetailsRequest(manga)).execute()) else manga
+        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(GET(baseUrl + manga.url, headers)).execute().asJsoup()) else manga
         val updatedChapters = if (fetchChapters) fetchNovelLiveChapterList(manga, chapters) else chapters
         return SMangaUpdate(updatedManga, updatedChapters)
     }

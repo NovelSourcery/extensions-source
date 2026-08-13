@@ -16,13 +16,15 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.lib.chapterutils.paginatedChapterList
+import keiyoushi.source.KeiSource
 import keiyoushi.utils.setAltTitles
+import kotlinx.serialization.json.JsonElement
 import okhttp3.FormBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
@@ -48,17 +50,12 @@ import java.util.concurrent.TimeUnit
  * - novelbin.com
  * - lightnovelplus.com
  */
-abstract class ReadNovelFull(
-    override val name: String,
-    override val baseUrl: String,
-    override val lang: String,
-) : HttpSource(),
+abstract class ReadNovelFull :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
     // isNovelSource is provided by NovelSource interface with default value true
-
-    override val supportsLatest = true
 
     // Sliding-window rate limit: the first [rateLimitPermits] requests in any [rateLimitPeriodSeconds]
     // window dispatch immediately, the rest are throttled. This lets the common case (one page in fast
@@ -70,10 +67,8 @@ abstract class ReadNovelFull(
     // Max retries when the site answers 429; each retry waits the Retry-After interval.
     protected open val maxRetriesOn429: Int = 3
 
-    override val client = network.cloudflareClient.newBuilder()
-        .addInterceptor(::retryOnTooManyRequests)
+    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(::retryOnTooManyRequests)
         .rateLimit(permits = rateLimitPermits, period = rateLimitPeriodSeconds, unit = TimeUnit.SECONDS)
-        .build()
 
     private fun retryOnTooManyRequests(chain: Interceptor.Chain): Response {
         val request = chain.request()
@@ -123,12 +118,9 @@ abstract class ReadNovelFull(
     protected open val chaptersPaginated: Boolean = false
     protected open val chapterListPageSize: Int = 100
 
-    override fun headersBuilder() = super.headersBuilder()
-        .add("Referer", "$baseUrl/")
-
     // ======================== Popular ========================
 
-    override fun popularMangaRequest(page: Int): Request = if (pageAsPath && page > 1) {
+    protected open fun buildPopularMangaRequest(page: Int): Request = if (pageAsPath && page > 1) {
         // If this specific page path is listed in `noPages`, fall back to query parameter pagination
         if (noPages.any { it.trim().trimStart('/') == popularPage.trim().trimStart('/') }) {
             GET("$baseUrl/$popularPage?$pageParam=$page", headers)
@@ -139,7 +131,7 @@ abstract class ReadNovelFull(
         GET("$baseUrl/$popularPage?$pageParam=$page", headers)
     }
 
-    override fun popularMangaParse(response: Response): MangasPage = mangaListParse(response, popularMangaSelector(), popularMangaNextPageSelector(), ::popularMangaFromElement)
+    override suspend fun getPopularManga(page: Int): MangasPage = mangaListParse(client.newCall(buildPopularMangaRequest(page)).execute(), popularMangaSelector(), popularMangaNextPageSelector(), ::popularMangaFromElement)
 
     protected fun mangaListParse(
         response: Response,
@@ -202,7 +194,7 @@ abstract class ReadNovelFull(
 
     // ======================== Latest ========================
 
-    override fun latestUpdatesRequest(page: Int): Request = if (pageAsPath && page > 1) {
+    protected open fun buildLatestUpdatesRequest(page: Int): Request = if (pageAsPath && page > 1) {
         if (noPages.any { it.trim().trimStart('/') == latestPage.trim().trimStart('/') }) {
             GET("$baseUrl/$latestPage?$pageParam=$page", headers)
         } else {
@@ -212,7 +204,7 @@ abstract class ReadNovelFull(
         GET("$baseUrl/$latestPage?$pageParam=$page", headers)
     }
 
-    override fun latestUpdatesParse(response: Response): MangasPage = mangaListParse(response, latestUpdatesSelector(), latestUpdatesNextPageSelector(), ::latestUpdatesFromElement)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = mangaListParse(client.newCall(buildLatestUpdatesRequest(page)).execute(), latestUpdatesSelector(), latestUpdatesNextPageSelector(), ::latestUpdatesFromElement)
 
     protected open fun latestUpdatesSelector() = popularMangaSelector() + ", ul.ul-list2 li"
 
@@ -239,7 +231,7 @@ abstract class ReadNovelFull(
 
     // ======================== Search ========================
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    protected open fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         var selectedType = "all"
         val selectedGenres = mutableListOf<String>()
         var selectedStatus = "all"
@@ -366,7 +358,7 @@ abstract class ReadNovelFull(
         }
     }
 
-    override fun searchMangaParse(response: Response): MangasPage = mangaListParse(response, searchMangaSelector(), searchMangaNextPageSelector(), ::searchMangaFromElement)
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = mangaListParse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute(), searchMangaSelector(), searchMangaNextPageSelector(), ::searchMangaFromElement)
 
     protected open fun searchMangaSelector() = popularMangaSelector()
 
@@ -375,8 +367,6 @@ abstract class ReadNovelFull(
     protected open fun searchMangaNextPageSelector() = popularMangaNextPageSelector()
 
     // ======================== Details ========================
-
-    override fun mangaDetailsParse(response: Response): SManga = mangaDetailsParse(response.asJsoup())
 
     protected open fun mangaDetailsParse(document: Document): SManga = SManga.create().apply {
         title = ""
@@ -652,22 +642,20 @@ abstract class ReadNovelFull(
         }
     }
 
-    override suspend fun getMangaUpdate(
+    override suspend fun fetchMangaUpdate(
         manga: SManga,
         chapters: List<SChapter>,
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        @Suppress("DEPRECATION")
-        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(mangaDetailsRequest(manga)).execute()) else manga
+        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(GET(baseUrl + manga.url, headers)).execute().asJsoup()) else manga
         val updatedChapters = if (fetchChapters) fetchReadNovelFullChapterList(manga, chapters) else chapters
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
     private suspend fun fetchReadNovelFullChapterList(manga: SManga, existingChapters: List<SChapter>): List<SChapter> {
         if (!chaptersPaginated) {
-            @Suppress("DEPRECATION")
-            return chapterListParse(client.newCall(chapterListRequest(manga)).execute())
+            return parseChapterListResponse(client.newCall(GET(baseUrl + manga.url, headers)).execute())
         }
 
         val detailDoc = fetchChapterListPage(manga, 1)
@@ -731,7 +719,7 @@ abstract class ReadNovelFull(
         }
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> {
+    protected open fun parseChapterListResponse(response: Response): List<SChapter> {
         val document = response.asJsoup()
         val novelPath = response.request.url.encodedPath
 
@@ -794,9 +782,7 @@ abstract class ReadNovelFull(
 
     // Novel: single text page fetched once in fetchPageText. The app's getPageList short-circuit
     // returns the stub without calling this, so it never double-fetches.
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
-
-    override fun imageUrlParse(response: Response): String = ""
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, baseUrl + chapter.url))
 
     // ======================== Novel Content ========================
 
@@ -846,7 +832,7 @@ abstract class ReadNovelFull(
 
     // ======================== Filters ========================
 
-    override fun getFilterList() = FilterList(
+    override fun getFilterList(data: JsonElement?) = FilterList(
         Filter.Header("Type filters"),
         TypeFilter(getTypeOptions()),
         Filter.Header("Genre filters"),
