@@ -1,26 +1,22 @@
 package eu.kanade.tachiyomi.novelextension.ar.riwyat
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
-import eu.kanade.tachiyomi.multisrc.madaranovel.formattedDescription
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SManga
+import keiyoushi.annotation.Source
 import okhttp3.Headers
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.Response
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import java.util.concurrent.TimeUnit
 
-class Riwyat :
-    MadaraNovel(
-        baseUrl = "https://cenele.com",
-        name = "Riwyat",
-        lang = "ar",
-    ) {
+@Source
+abstract class Riwyat : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
 
     private val mobileUserAgent = "Mozilla/5.0 (Linux; Android 13; Pixel 7) " +
@@ -40,8 +36,33 @@ class Riwyat :
         chain.proceed(request)
     }
 
+    // Applies to every request made through [client] (popular/latest/search listings, manga
+    // details, chapter list and chapter text alike), so it replaces the old per-endpoint
+    // 403/503 + "Just a moment..."/"Attention Required!" checks that used to live in the
+    // now-absorbed popularMangaParse/latestUpdatesParse/searchMangaParse/mangaDetailsParse
+    // overrides.
+    private val cloudflareInterceptor = Interceptor { chain ->
+        val response = chain.proceed(chain.request())
+        val message = "Cloudflare Turnstile — افتح الصفحة في WebView لتجاوز التحدي."
+        if (response.code == 403 || response.code == 503) {
+            response.close()
+            throw Exception(message)
+        }
+        val title = try {
+            Jsoup.parse(response.peekBody(8192L).string()).title().trim()
+        } catch (e: Exception) {
+            ""
+        }
+        if (title == "Just a moment..." || title == "Attention Required!") {
+            response.close()
+            throw Exception(message)
+        }
+        response
+    }
+
     override val client: OkHttpClient = network.cloudflareClient.newBuilder()
         .addInterceptor(mobileHeadersInterceptor)
+        .addInterceptor(cloudflareInterceptor)
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
@@ -52,104 +73,23 @@ class Riwyat :
         .set("Accept-Language", "ar,en;q=0.9")
         .build()
 
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/page/$page/?s=&post_type=wp-manga", mobileHeaders())
+    override fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/page/$page/?s=&post_type=wp-manga", mobileHeaders())
 
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/page/$page/?s=&post_type=wp-manga&m_orderby=latest", mobileHeaders())
+    override fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/page/$page/?s=&post_type=wp-manga&m_orderby=latest", mobileHeaders())
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = super.searchMangaRequest(page, query, filters).newBuilder()
+    override fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request = super.buildSearchMangaRequest(page, query, filters).newBuilder()
         .headers(mobileHeaders())
         .build()
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        if (response.code == 403 || response.code == 503) {
-            throw Exception("Cloudflare Turnstile — افتح المصدر في WebView لتجاوز التحدي.")
-        }
-        val doc = response.asJsoup()
-        if (doc.title().trim() == "Just a moment...") {
-            throw Exception("Cloudflare Turnstile — افتح المصدر في WebView لتجاوز التحدي.")
-        }
-        return parseCeneleNovels(doc)
-    }
+    override suspend fun getPopularManga(page: Int): MangasPage = parseCeneleNovels(client.newCall(buildPopularMangaRequest(page)).execute().asJsoup())
 
-    override fun latestUpdatesParse(response: Response): MangasPage {
-        if (response.code == 403 || response.code == 503) {
-            throw Exception("Cloudflare Turnstile — افتح المصدر في WebView لتجاوز التحدي.")
-        }
-        val doc = response.asJsoup()
-        if (doc.title().trim() == "Just a moment...") {
-            throw Exception("Cloudflare Turnstile — افتح المصدر في WebView لتجاوز التحدي.")
-        }
-        return parseCeneleNovels(doc)
-    }
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseCeneleNovels(client.newCall(buildLatestUpdatesRequest(page)).execute().asJsoup())
 
-    override fun searchMangaParse(response: Response): MangasPage {
-        if (response.code == 403 || response.code == 503) {
-            throw Exception("Cloudflare Turnstile — افتح المصدر في WebView لتجاوز التحدي.")
-        }
-        val doc = response.asJsoup()
-        if (doc.title().trim() == "Just a moment...") {
-            throw Exception("Cloudflare Turnstile — افتح المصدر في WebView لتجاوز التحدي.")
-        }
-        return parseCeneleNovels(doc)
-    }
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseCeneleNovels(client.newCall(buildSearchMangaRequest(page, query, filters)).execute().asJsoup())
 
-    override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, mobileHeaders())
+    override fun buildChapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, mobileHeaders())
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, mobileHeaders())
-
-    override fun mangaDetailsParse(response: Response): SManga {
-        if (response.code == 403 || response.code == 503) {
-            throw Exception("Cloudflare Turnstile — افتح صفحة الرواية في WebView لتجاوز التحدي.")
-        }
-        val doc = response.asJsoup()
-        val title = doc.title().trim()
-        if (title == "Just a moment..." || title == "Attention Required!") {
-            throw Exception("Cloudflare Turnstile — افتح صفحة الرواية في WebView لتجاوز التحدي.")
-        }
-        doc.select(".manga-title-badges, #manga-title span").remove()
-        extractPostId(doc)?.let { cachePostId(response.request.url.encodedPath, it) }
-
-        return SManga.create().apply {
-            this.title = doc.selectFirst(".post-title h1, #manga-title h1")?.text()?.trim() ?: ""
-            val summaryImage = doc.selectFirst(".summary_image img")
-            thumbnail_url = if (summaryImage != null) {
-                summaryImage.attr("data-lazy-src").ifEmpty { null }
-                    ?: summaryImage.attr("data-src").ifEmpty { null }
-                    ?: summaryImage.attr("src").ifEmpty { null }
-            } else {
-                null
-            }
-            description = doc.selectFirst("div.summary__content")?.formattedDescription()
-                ?: doc.selectFirst("#tab-manga-about")?.formattedDescription()
-                ?: doc.selectFirst(".manga-excerpt")?.formattedDescription()
-                ?: ""
-            author = doc.selectFirst(".manga-authors")?.text()?.trim()
-                ?: doc.select(".post-content_item, .post-content")
-                    .find { it.selectFirst("h5")?.text() == "Author" }
-                    ?.selectFirst(".summary-content")?.text()?.trim()
-                ?: ""
-            genre = doc.select(".post-content_item, .post-content")
-                .filter { element ->
-                    val h5Text = element.selectFirst("h5")?.text()?.trim()?.lowercase() ?: ""
-                    h5Text.contains("genre") ||
-                        h5Text.contains("tag") ||
-                        h5Text.contains("género") ||
-                        h5Text.contains("التصنيفات")
-                }
-                .mapNotNull { it.selectFirst(".summary-content")?.select("a") }
-                .flatten()
-                .map { it.text().trim() }
-                .joinToString(", ")
-            status = if (doc.select(".post-content_item, .post-content")
-                    .find { it.selectFirst("h5")?.text() == "Status" }
-                    ?.selectFirst(".summary-content")?.text()?.contains("Ongoing", ignoreCase = true) == true
-            ) {
-                SManga.ONGOING
-            } else {
-                SManga.COMPLETED
-            }
-        }
-    }
+    override fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, mobileHeaders())
 
     private fun parseCeneleNovels(doc: Document): MangasPage {
         val novels = doc.select(
@@ -200,15 +140,7 @@ class Riwyat :
 
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
-        if (response.code == 403 || response.code == 503) {
-            response.close()
-            throw Exception("Cloudflare Turnstile — افتح الفصل في WebView لتجاوز التحدي.")
-        }
         val doc = response.asJsoup()
-        val title = doc.title().trim()
-        if (title == "Just a moment..." || title == "Attention Required!") {
-            throw Exception("Cloudflare Turnstile — افتح الفصل في WebView لتجاوز التحدي.")
-        }
 
         val contentElement = doc.selectFirst(".reading-content.current .text-left")
             ?: doc.selectFirst(".reading-content .text-left")

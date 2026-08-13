@@ -1,12 +1,9 @@
-﻿package eu.kanade.tachiyomi.novelextension.ar.azora
+package eu.kanade.tachiyomi.novelextension.ar.azora
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
+import keiyoushi.annotation.Source
 
-class Azora :
-    MadaraNovel(
-        baseUrl = "https://azoramoon.com",
-        name = "Azora",
-        lang = "ar",
-    ) {
+@Source
+abstract class Azora : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
 }

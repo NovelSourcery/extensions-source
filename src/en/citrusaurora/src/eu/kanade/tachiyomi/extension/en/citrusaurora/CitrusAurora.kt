@@ -1,12 +1,9 @@
 ﻿package eu.kanade.tachiyomi.novelextension.en.citrusaurora
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
+import keiyoushi.annotation.Source
 
-class CitrusAurora :
-    MadaraNovel(
-        baseUrl = "https://citrusaurora.com",
-        name = "CitrusAurora",
-        lang = "en",
-    ) {
+@Source
+abstract class CitrusAurora : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
 }

@@ -1,10 +1,7 @@
-﻿package eu.kanade.tachiyomi.novelextension.en.neosekai
+package eu.kanade.tachiyomi.novelextension.en.neosekai
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
+import keiyoushi.annotation.Source
 
-class NeoSekaiTranslations :
-    MadaraNovel(
-        baseUrl = "https://www.neosekaitranslations.com",
-        name = "NeoSekai Translations",
-        lang = "en",
-    )
+@Source
+abstract class NeoSekaiTranslations : MadaraNovel()

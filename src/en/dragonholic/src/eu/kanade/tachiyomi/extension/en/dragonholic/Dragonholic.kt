@@ -1,12 +1,9 @@
 ﻿package eu.kanade.tachiyomi.novelextension.en.dragonholic
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
+import keiyoushi.annotation.Source
 
-class Dragonholic :
-    MadaraNovel(
-        baseUrl = "https://dragonholictranslations.com/",
-        name = "Dragonholic",
-        lang = "en",
-    ) {
+@Source
+abstract class Dragonholic : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
 }

@@ -14,10 +14,14 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.jsonInstance
 import keiyoushi.utils.setAltTitles
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
@@ -26,12 +30,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Request
-import okhttp3.Response
 import org.jsoup.Jsoup
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
-import uy.kohesive.injekt.injectLazy
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -39,18 +40,13 @@ import java.util.Locale
  * NovelDex.io - Novel reading extension
  * Uses /api/series for listings and RSC (React Server Components) for detail/chapter pages.
  */
-class NovelDex :
-    HttpSource(),
+@Source
+abstract class NovelDex :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
-    override val name = "NovelDex"
-    override val baseUrl = "https://noveldex.io"
-    override val lang = "en"
-    override val supportsLatest = true
-
-    override val client = network.cloudflareClient
-    private val json: Json by injectLazy()
+    private val json: Json = jsonInstance
 
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
@@ -87,33 +83,29 @@ class NovelDex :
 
     // ======================== Popular ========================
 
-    override fun popularMangaRequest(page: Int): Request {
+    override suspend fun getPopularManga(page: Int): MangasPage {
         val url = "$baseUrl/api/series".toHttpUrl().newBuilder()
             .addQueryParameter("page", page.toString())
             .addQueryParameter("limit", "24")
             .addQueryParameter("sort", "popular")
             .build()
-        return GET(url, headers)
+        return parseApiResponse(client.newCall(GET(url, headers)).execute().body.string())
     }
-
-    override fun popularMangaParse(response: Response): MangasPage = parseApiResponse(response.body.string())
 
     // ======================== Latest ========================
 
-    override fun latestUpdatesRequest(page: Int): Request {
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
         val url = "$baseUrl/api/series".toHttpUrl().newBuilder()
             .addQueryParameter("page", page.toString())
             .addQueryParameter("limit", "24")
             // no sort param = recently updated
             .build()
-        return GET(url, headers)
+        return parseApiResponse(client.newCall(GET(url, headers)).execute().body.string())
     }
-
-    override fun latestUpdatesParse(response: Response): MangasPage = parseApiResponse(response.body.string())
 
     // ======================== Search ========================
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val url = "$baseUrl/api/series".toHttpUrl().newBuilder().apply {
             addQueryParameter("page", page.toString())
             addQueryParameter("limit", "24")
@@ -188,10 +180,8 @@ class NovelDex :
             if (statusList.isNotEmpty()) addQueryParameter("status", statusList.joinToString(","))
         }.build()
 
-        return GET(url, headers)
+        return parseApiResponse(client.newCall(GET(url, headers)).execute().body.string())
     }
-
-    override fun searchMangaParse(response: Response): MangasPage = parseApiResponse(response.body.string())
 
     private fun parseApiResponse(body: String): MangasPage {
         // Guard: if the response is HTML (e.g. Cloudflare challenge), bail out
@@ -261,10 +251,8 @@ class NovelDex :
 
     // ======================== Details ========================
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET("$baseUrl${manga.url}", rscHeaders())
-
-    override fun mangaDetailsParse(response: Response): SManga {
-        val (body, redirectedPath) = resolveRedirects(response.body.string())
+    private fun parseMangaDetails(rawBody: String): SManga {
+        val (body, redirectedPath) = resolveRedirects(rawBody)
 
         // RSC response contains a JSON fragment with series data
         // Pattern: "series":{ ... } inside the RSC payload
@@ -394,14 +382,25 @@ class NovelDex :
 
     // ======================== Chapters ========================
 
-    override fun chapterListRequest(manga: SManga): Request {
-        // Fetch the detail page RSC — contains allChapters/chapters/chapterCount
-        return GET("$baseUrl${manga.url}", rscHeaders())
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        // Details and chapters both come from the same detail-page RSC response - fetch it once.
+        val response = client.newCall(GET("$baseUrl${manga.url}", rscHeaders())).execute()
+        val rawBody = response.body.string()
+        val requestPath = response.request.url.encodedPath
+
+        val updatedManga = if (fetchDetails) parseMangaDetails(rawBody) else manga
+        val updatedChapters = if (fetchChapters) parseChapterListBody(rawBody, requestPath) else chapters
+        return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val (body, redirectedPath) = resolveRedirects(response.body.string())
-        val requestUrl = redirectedPath ?: response.request.url.encodedPath
+    private fun parseChapterListBody(rawBody: String, requestPath: String): List<SChapter> {
+        val (body, redirectedPath) = resolveRedirects(rawBody)
+        val requestUrl = redirectedPath ?: requestPath
 
         // Extract type and slug: /series/{type}/{slug} or /series/{type}/{slug}/chapter/1
         val slugMatch = Regex("""/series/([^/]+)/([^/?]+)""").find(requestUrl)
@@ -561,18 +560,11 @@ class NovelDex :
 
     // ======================== Pages ========================
 
-    override fun pageListRequest(chapter: SChapter): Request {
-        val chapterPath = if (chapter.url.startsWith("http")) chapter.url.removePrefix(baseUrl) else chapter.url
-        return GET("$baseUrl$chapterPath", rscHeaders())
-    }
-
-    override fun pageListParse(response: Response): List<Page> {
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
         // Store chapter path (without query) for fetchPageText
-        val path = response.request.url.encodedPath
-        return listOf(Page(0, path))
+        val chapterPath = if (chapter.url.startsWith("http")) chapter.url.removePrefix(baseUrl) else chapter.url
+        return listOf(Page(0, chapterPath))
     }
-
-    override fun imageUrlParse(response: Response): String = ""
 
     // ======================== Novel Content ========================
 
@@ -873,7 +865,7 @@ class NovelDex :
 
     // ======================== Filters ========================
 
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         Filter.Header("Sort & Filters"),
         SortFilter("Sort", sortOptions),
         Filter.Separator(),

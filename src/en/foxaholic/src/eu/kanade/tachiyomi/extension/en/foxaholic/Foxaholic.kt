@@ -3,15 +3,12 @@ package eu.kanade.tachiyomi.novelextension.en.foxaholic
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Page
+import keiyoushi.annotation.Source
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
-class Foxaholic :
-    MadaraNovel(
-        baseUrl = "https://www.foxaholic.com",
-        name = "Foxaholic",
-        lang = "en",
-    ) {
+@Source
+abstract class Foxaholic : MadaraNovel() {
     // Uses new chapter endpoint (/ajax/chapters/) which returns clean chapter HTML
     // The old admin-ajax.php endpoint returns the full page instead of chapter list
     override val useNewChapterEndpointDefault = true

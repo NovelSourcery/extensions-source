@@ -1,13 +1,10 @@
-﻿package eu.kanade.tachiyomi.novelextension.en.noicetranslations
+package eu.kanade.tachiyomi.novelextension.en.noicetranslations
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
+import keiyoushi.annotation.Source
 
-class NoiceTranslations :
-    MadaraNovel(
-        baseUrl = "https://noicetranslations.com",
-        name = "NoiceTranslations",
-        lang = "en",
-    ) {
+@Source
+abstract class NoiceTranslations : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
     override val reverseChapterListDefault = true
 }

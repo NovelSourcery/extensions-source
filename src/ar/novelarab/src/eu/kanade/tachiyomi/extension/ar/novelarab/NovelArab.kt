@@ -3,13 +3,10 @@ package eu.kanade.tachiyomi.novelextension.ar.novelarab
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Page
+import keiyoushi.annotation.Source
 
-class NovelArab :
-    MadaraNovel(
-        baseUrl = "https://novelarab.com",
-        name = "Novel Arab",
-        lang = "ar",
-    ) {
+@Source
+abstract class NovelArab : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
     override val reverseChapterListDefault = true
 

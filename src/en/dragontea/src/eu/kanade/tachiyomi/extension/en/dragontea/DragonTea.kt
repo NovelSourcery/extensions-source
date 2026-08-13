@@ -1,12 +1,9 @@
-﻿package eu.kanade.tachiyomi.novelextension.en.dragontea
+package eu.kanade.tachiyomi.novelextension.en.dragontea
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
+import keiyoushi.annotation.Source
 
-class DragonTea :
-    MadaraNovel(
-        baseUrl = "https://dragontea.ink",
-        name = "DragonTea",
-        lang = "en",
-    ) {
+@Source
+abstract class DragonTea : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
 }
