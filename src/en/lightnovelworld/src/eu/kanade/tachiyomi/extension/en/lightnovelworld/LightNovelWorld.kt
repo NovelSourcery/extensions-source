@@ -11,12 +11,16 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.annotation.Source
 import keiyoushi.lib.chapterutils.paginatedChapterList
 import keiyoushi.lib.chapterutils.shouldReturnExisting
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.parseAs
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -25,21 +29,13 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
-import uy.kohesive.injekt.injectLazy
 import java.io.File
 import java.util.Calendar
 
-class LightNovelWorld :
-    HttpSource(),
+@Source
+abstract class LightNovelWorld :
+    KeiSource(),
     NovelSource {
-
-    override val name = "Light Novel World"
-    override val baseUrl = "https://lightnovelworld.org"
-    override val lang = "en"
-    override val supportsLatest = true
-
-    override val client = network.cloudflareClient
-    private val json: Json by injectLazy()
 
     override val isNovelSource = true
 
@@ -55,8 +51,6 @@ class LightNovelWorld :
         }
     }
 
-    override fun imageUrlParse(response: Response): String = ""
-
     private fun String?.toAbsoluteUrl(): String? = when {
         this.isNullOrEmpty() -> null
         startsWith("http") -> this
@@ -64,37 +58,41 @@ class LightNovelWorld :
         else -> this
     }
 
-    // ======================== Popular/Latest ========================
+    // ======================== Popular/Latest/Search ========================
 
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/advanced-search/?sort=rank&order=asc&page=$page", headers)
+    override suspend fun getPopularManga(page: Int): MangasPage = parseAdvancedSearch(client.newCall(GET("$baseUrl/advanced-search/?sort=rank&order=asc&page=$page", headers)).execute())
 
-    override fun popularMangaParse(response: Response): MangasPage = parseAdvancedSearch(response)
-
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/advanced-search/?sort=updates&order=desc&page=$page", headers)
-
-    override fun latestUpdatesParse(response: Response): MangasPage = parseAdvancedSearch(response)
-
-    // ======================== Search ========================
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseAdvancedSearch(client.newCall(GET("$baseUrl/advanced-search/?sort=updates&order=desc&page=$page", headers)).execute())
 
     @Serializable
-    data class SearchResponse(val novels: List<SearchNovel> = emptyList())
+    class SearchResponse(val novels: List<SearchNovel> = emptyList())
 
     @Serializable
-    data class SearchNovel(
+    class SearchNovel(
         val title: String = "",
         val slug: String = "",
         @SerialName("cover_path") val coverPath: String? = null,
         val author: String? = null,
     )
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         // Text query uses the JSON API (max 50 results, no pagination, filters ignored)
         if (query.isNotEmpty()) {
             val url = "$baseUrl/api/search/".toHttpUrl().newBuilder()
                 .addQueryParameter("q", query)
                 .addQueryParameter("search_type", "title")
                 .build()
-            return GET(url, headers)
+            val response = client.newCall(GET(url, headers)).execute()
+            val result = response.body.string().parseAs<SearchResponse>()
+            val novels = result.novels.map { novel ->
+                SManga.create().apply {
+                    title = novel.title
+                    this.url = "/novel/${novel.slug}/"
+                    thumbnail_url = novel.coverPath.toAbsoluteUrl()
+                    author = novel.author
+                }
+            }
+            return MangasPage(novels, hasNextPage = false)
         }
 
         val url = "$baseUrl/advanced-search/".toHttpUrl().newBuilder()
@@ -138,25 +136,7 @@ class LightNovelWorld :
             }
         }
 
-        return GET(url.build(), headers)
-    }
-
-    override fun searchMangaParse(response: Response): MangasPage {
-        // JSON API response for text queries
-        if (response.request.url.encodedPath.startsWith("/api/search")) {
-            val result = json.decodeFromString<SearchResponse>(response.body.string())
-            val novels = result.novels.map { novel ->
-                SManga.create().apply {
-                    title = novel.title
-                    url = "/novel/${novel.slug}/"
-                    thumbnail_url = novel.coverPath.toAbsoluteUrl()
-                    author = novel.author
-                }
-            }
-            return MangasPage(novels, hasNextPage = false)
-        }
-
-        return parseAdvancedSearch(response)
+        return parseAdvancedSearch(client.newCall(GET(url.build(), headers)).execute())
     }
 
     private fun parseAdvancedSearch(response: Response): MangasPage {
@@ -188,7 +168,7 @@ class LightNovelWorld :
 
     // ======================== Novel Details ========================
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    private fun parseMangaDetails(response: Response): SManga {
         val doc = Jsoup.parse(response.body.string())
 
         return SManga.create().apply {
@@ -255,25 +235,29 @@ class LightNovelWorld :
 
     // ======================== Chapters ========================
 
-    override fun chapterListRequest(manga: SManga): Request {
+    private fun buildChapterListRequest(manga: SManga): Request {
         val path = manga.url.trimEnd('/')
         return GET("$baseUrl$path/chapters/", headers)
     }
 
-    override suspend fun getMangaUpdate(
+    override suspend fun fetchMangaUpdate(
         manga: SManga,
         chapters: List<SChapter>,
         fetchDetails: Boolean,
         fetchChapters: Boolean,
-    ): SMangaUpdate {
-        @Suppress("DEPRECATION")
-        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(mangaDetailsRequest(manga)).execute()) else manga
-        val updatedChapters = if (fetchChapters) fetchLightNovelWorldChapterList(manga, chapters) else chapters
-        return SMangaUpdate(updatedManga, updatedChapters)
+    ): SMangaUpdate = coroutineScope {
+        // Manga details and the chapter list live on different pages - fire both requests
+        // concurrently when both are needed, rather than awaiting them sequentially.
+        val detailsDeferred = if (fetchDetails) async { parseMangaDetails(client.newCall(GET(baseUrl + manga.url, headers)).execute()) } else null
+        val chaptersDeferred = if (fetchChapters) async { fetchLightNovelWorldChapterList(manga, chapters) } else null
+        SMangaUpdate(
+            manga = detailsDeferred?.await() ?: manga,
+            chapters = chaptersDeferred?.await() ?: chapters,
+        )
     }
 
     private suspend fun fetchLightNovelWorldChapterList(manga: SManga, existingChapters: List<SChapter>): List<SChapter> {
-        val response = client.newCall(chapterListRequest(manga)).execute()
+        val response = client.newCall(buildChapterListRequest(manga)).execute()
         val page1Doc = Jsoup.parse(response.body.string())
         val basePath = response.request.url.encodedPath
 
@@ -282,10 +266,10 @@ class LightNovelWorld :
             .find(page1Doc.selectFirst(".chapters-description")?.text().orEmpty())
             ?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
-        Log.d(TAG, "getChapterList: url=$basePath existing=${existingChapters.size} siteTotal=$currentTotal totalPages=$totalPages")
+        Log.d(TAG, "fetchMangaUpdate: url=$basePath existing=${existingChapters.size} siteTotal=$currentTotal totalPages=$totalPages")
 
         if (shouldReturnExisting(existingChapters.size, currentTotal)) {
-            Log.d(TAG, "getChapterList: count unchanged — returning existing")
+            Log.d(TAG, "fetchMangaUpdate: count unchanged — returning existing")
             return existingChapters
         }
 
@@ -304,19 +288,6 @@ class LightNovelWorld :
             },
             sortChapters = { it },
         ).reversed()
-    }
-
-    // Fallback path for when getChapterList is not used; performs a full fetch with no optimisation.
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val doc = Jsoup.parse(response.body.string())
-        val basePath = response.request.url.encodedPath
-        val totalPages = doc.select("#pageSelect option").size.coerceAtLeast(1)
-        val chapters = parseChapterPage(doc).toMutableList()
-        for (page in 2..totalPages) {
-            val pageResponse = client.newCall(GET("$baseUrl$basePath?page=$page", headers)).execute()
-            chapters += parseChapterPage(Jsoup.parse(pageResponse.body.string()))
-        }
-        return chapters.reversed()
     }
 
     private fun parseChapterPage(doc: Document): List<SChapter> {
@@ -340,7 +311,7 @@ class LightNovelWorld :
 
     private fun parseRelativeDate(dateText: String): Long {
         // Normalize NBSP and other whitespace
-        val text = dateText.replace(' ', ' ').trim().lowercase()
+        val text = dateText.replace(' ', ' ').trim().lowercase()
         val match = Regex("""(\d+)\s*(second|minute|hour|day|week|month|year)""").find(text)
             ?: return if (text.contains("just now")) System.currentTimeMillis() else 0L
 
@@ -360,7 +331,7 @@ class LightNovelWorld :
 
     // ======================== Chapter Content ========================
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
@@ -381,7 +352,7 @@ class LightNovelWorld :
 
     // ======================== Filters ========================
 
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         Filter.Header("Filters ignored with text search"),
         SortFilter(),
         OrderFilter(),
