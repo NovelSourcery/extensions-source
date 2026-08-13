@@ -4,22 +4,20 @@ import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
+import keiyoushi.annotation.Source
+import kotlinx.serialization.json.JsonElement
 import okhttp3.Request
 
-class NovelFull :
-    ReadNovelFull(
-        name = "NovelFull",
-        baseUrl = "https://novelfull.com",
-        lang = "en",
-    ) {
+@Source
+abstract class NovelFull : ReadNovelFull() {
     override val latestPage = "latest-release-novel"
     override val searchPage = "search"
     override val chapterListing = "ajax-chapter-option"
 
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/most-popular?page=$page", headers)
+    override fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/most-popular?page=$page", headers)
     // ======================== Filters ========================
 
-    override fun getFilterList() = FilterList(
+    override fun getFilterList(data: JsonElement?) = FilterList(
         Filter.Header("Type filters"),
         TypeFilter(),
         Filter.Header("Genre filters"),
@@ -49,7 +47,7 @@ class NovelFull :
         fun toUriPart() = genres[state].second
     }
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (query.isNotBlank()) {
             return GET("$baseUrl/search?keyword=$query&page=$page", headers)
         }

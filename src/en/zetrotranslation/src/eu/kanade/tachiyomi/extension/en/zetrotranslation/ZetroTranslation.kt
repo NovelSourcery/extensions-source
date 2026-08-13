@@ -9,16 +9,14 @@ import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
 import okhttp3.Response
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
-class ZetroTranslation :
-    MadaraNovel(
-        baseUrl = "https://zetrotranslation.com",
-        name = "Zetro Translation",
-        lang = "en",
-    ),
+@Source
+abstract class ZetroTranslation :
+    MadaraNovel(),
     ConfigurableSource {
     override val reverseChapterListDefault = true
 
@@ -39,23 +37,23 @@ class ZetroTranslation :
         }.also(screen::addPreference)
     }
 
-    // getMangaUpdate is MadaraNovel's real entry point — chapterListParse below is only reachable
-    // via the legacy fetchChapterList path, so the locked-chapter filter has to live here too or it
-    // silently never runs.
-    override suspend fun getMangaUpdate(
+    // fetchMangaUpdate is MadaraNovel's real entry point — parseChapterListResponse below is only
+    // reachable via the legacy fetchChapterList path, so the locked-chapter filter has to live
+    // here too or it silently never runs.
+    override suspend fun fetchMangaUpdate(
         manga: SManga,
         chapters: List<SChapter>,
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val update = super.getMangaUpdate(manga, chapters, fetchDetails, fetchChapters)
+        val update = super.fetchMangaUpdate(manga, chapters, fetchDetails, fetchChapters)
         if (!fetchChapters || includeLocked) return update
 
         return SMangaUpdate(update.manga, update.chapters.filterNot { ch -> ch.isLocked() })
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val list = super.chapterListParse(response)
+    override fun parseChapterListResponse(response: Response): List<SChapter> {
+        val list = super.parseChapterListResponse(response)
         if (includeLocked) return list
 
         return list.filterNot { ch -> ch.isLocked() }

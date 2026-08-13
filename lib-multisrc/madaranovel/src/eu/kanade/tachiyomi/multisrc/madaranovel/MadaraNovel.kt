@@ -16,18 +16,19 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.lib.chapterutils.shouldReturnExisting
+import keiyoushi.source.KeiSource
 import keiyoushi.utils.getPreferencesLazy
+import keiyoushi.utils.jsonInstance
 import keiyoushi.utils.setAltTitles
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import okhttp3.FormBody
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import uy.kohesive.injekt.injectLazy
 import java.util.Calendar
 
 /**
@@ -35,21 +36,15 @@ import java.util.Calendar
  * Handles common parsing and request logic.
  * @see https://github.com/LNReader/lnreader-plugins madara/template.ts
  */
-open class MadaraNovel(
-    override val baseUrl: String,
-    override val name: String,
-    override val lang: String = "en",
-) : HttpSource(),
+abstract class MadaraNovel :
+    KeiSource(),
     NovelSource,
     ConfigurableSource,
     SourceTracker {
 
     override val isNovelSource = true
 
-    override val supportsLatest = true
-    override val client = network.cloudflareClient
-
-    protected val json: Json by injectLazy()
+    protected val json: Json = jsonInstance
 
     private val preferences: SharedPreferences by getPreferencesLazy()
 
@@ -103,12 +98,14 @@ open class MadaraNovel(
         }
     }
 
-    override fun popularMangaRequest(page: Int): Request {
+    protected open fun buildPopularMangaRequest(page: Int): Request {
         val url = "$baseUrl/page/$page/?s=&post_type=wp-manga"
         return GET(url, headers)
     }
 
-    override fun popularMangaParse(response: Response): MangasPage {
+    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.newCall(buildPopularMangaRequest(page)).execute())
+
+    private fun parseMangaListResponse(response: Response): MangasPage {
         val doc = response.asJsoup()
         val mangas = parseNovels(doc)
         // Check multiple pagination selectors for different Madara themes
@@ -120,14 +117,14 @@ open class MadaraNovel(
         return MangasPage(mangas, hasNextPage)
     }
 
-    override fun latestUpdatesRequest(page: Int): Request {
+    protected open fun buildLatestUpdatesRequest(page: Int): Request {
         val url = "$baseUrl/page/$page/?s=&post_type=wp-manga&m_orderby=latest"
         return GET(url, headers)
     }
 
-    override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(client.newCall(buildLatestUpdatesRequest(page)).execute())
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    protected open fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         var url = "$baseUrl/page/$page/?s=${query.replace(" ", "+")}&post_type=wp-manga"
 
         filters.forEach { filter ->
@@ -151,7 +148,7 @@ open class MadaraNovel(
         return GET(url, headers)
     }
 
-    override fun searchMangaParse(response: Response) = popularMangaParse(response)
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseMangaListResponse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
 
     protected fun parseNovels(doc: Document): List<SManga> {
         doc.select(".manga-title-badges").remove()
@@ -214,16 +211,7 @@ open class MadaraNovel(
         }
     }
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
-
-    override fun mangaDetailsParse(response: Response): SManga {
-        val doc = response.asJsoup()
-
-        // LN Reader: Check for captcha before parsing
-        checkCaptcha(doc, response.request.url.toString())
-
-        return mangaDetailsParse(doc, response.request.url.encodedPath)
-    }
+    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
 
     private fun mangaDetailsParse(doc: Document, mangaUrl: String): SManga {
         doc.select(".manga-title-badges, #manga-title span").remove()
@@ -307,22 +295,29 @@ open class MadaraNovel(
     // merely start with a number aren't eaten)
     private val numberSeparatorRegex = Regex("""^(\d+(?:\.\d+)?)\s*[-–—:]\s*""")
 
-    override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+    protected open fun buildChapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
 
-    override suspend fun getMangaUpdate(
+    override suspend fun fetchMangaUpdate(
         manga: SManga,
         chapters: List<SChapter>,
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
         if (!fetchChapters) {
-            val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(mangaDetailsRequest(manga)).execute()) else manga
+            val updatedManga = if (fetchDetails) {
+                val request = buildMangaDetailsRequest(manga)
+                val doc = client.newCall(request).execute().asJsoup()
+                checkCaptcha(doc, request.url.toString())
+                mangaDetailsParse(doc, request.url.encodedPath)
+            } else {
+                manga
+            }
             return SMangaUpdate(updatedManga, chapters)
         }
 
         // mangaDetailsParse and the chapter list both need the exact same novel page
         // (baseUrl + manga.url) — fetch it once here instead of twice.
-        val request = chapterListRequest(manga)
+        val request = buildChapterListRequest(manga)
         val mangaUrl = request.url.encodedPath
         val doc = client.newCall(request).execute().asJsoup()
         checkCaptcha(doc, request.url.toString())
@@ -347,11 +342,11 @@ open class MadaraNovel(
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    // Required override (HttpSource.chapterListParse is abstract) and still reachable via
-    // `super.chapterListParse` from subclasses that post-process the legacy path (e.g.
-    // ZetroTranslation's locked-chapter filter). getMangaUpdate above is the real entry
-    // point and does not call this.
-    override fun chapterListParse(response: Response): List<SChapter> {
+    // Kept as a protected open helper (renamed from the old chapterListParse override, which
+    // KeiSource now makes final) so subclasses that post-process the legacy path (e.g.
+    // ZetroTranslation's locked-chapter filter) can still call super.parseChapterListResponse.
+    // fetchMangaUpdate above is the real entry point and does not call this.
+    protected open fun parseChapterListResponse(response: Response): List<SChapter> {
         val doc = response.asJsoup()
         val mangaUrl = response.request.url.encodedPath
 
@@ -462,13 +457,7 @@ open class MadaraNovel(
      * For novel sources, we return a single Page containing the chapter URL.
      * The actual content is fetched via fetchPageText() which is called for NovelSource.
      */
-    override fun pageListParse(response: Response): List<Page> {
-        // Return a page with the chapter URL - the content will be fetched via fetchPageText
-        val url = response.request.url.encodedPath
-        return listOf(Page(0, url))
-    }
-
-    override fun imageUrlParse(response: Response): String = ""
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, baseUrl + chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
@@ -527,7 +516,7 @@ open class MadaraNovel(
         return content.trim()
     }
 
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         StatusFilter(),
         SortFilter(),
     )

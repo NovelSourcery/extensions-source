@@ -1,24 +1,20 @@
-﻿package eu.kanade.tachiyomi.novelextension.en.libread
+package eu.kanade.tachiyomi.novelextension.en.libread
 
 import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
-import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
+import kotlinx.serialization.json.JsonElement
 import okhttp3.Request
-import okhttp3.Response
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
-class LibRead :
-    ReadNovelFull(
-        name = "LibRead",
-        baseUrl = "https://libread.com",
-        lang = "en",
-    ) {
+@Source
+abstract class LibRead : ReadNovelFull() {
     override val latestPage = "sort/latest-release"
     override val popularPage = "sort/most-popular"
     override val pageAsPath = true
@@ -66,39 +62,7 @@ class LibRead :
 
     override fun popularMangaNextPageSelector() = "li.next:not(.disabled), ul.pagination li.active + li a, div.pages a[href], div.pages ul li a[href]"
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        val document = response.asJsoup()
-        val mangas = document.select(popularMangaSelector()).map { popularMangaFromElement(it) }
-
-        // Try common next-page indicators first
-        var hasNextPage = document.selectFirst("li.next:not(.disabled), ul.pagination li.active + li a") != null
-
-        if (!hasNextPage) {
-            // Fallback: inspect div.pages anchors — look for numeric links greater than current page
-            val path = response.request.url.encodedPath.trimEnd('/')
-            val currentPage = path.substringAfterLast('/').toIntOrNull() ?: 1
-
-            val pageAnchors = document.select("div.pages a[href]").filter { a ->
-                val href = a.attr("href")
-                href.isNotBlank() && !href.startsWith("javascript", true)
-            }
-
-            hasNextPage = pageAnchors.any { a ->
-                val text = a.text().trim()
-                val num = text.toIntOrNull()
-                if (num != null) {
-                    num > currentPage
-                } else {
-                    // treat arrows (>, >>) or next labels as next page
-                    text.contains(">") || a.attr("rel") == "next"
-                }
-            }
-        }
-
-        return MangasPage(mangas, hasNextPage)
-    }
-
-    override fun latestUpdatesRequest(page: Int): Request = okhttp3.Request.Builder()
+    override fun buildLatestUpdatesRequest(page: Int): Request = okhttp3.Request.Builder()
         .url("$baseUrl/$latestPage?page=$page")
         .headers(headers)
         .build()
@@ -107,9 +71,7 @@ class LibRead :
 
     override fun latestUpdatesFromElement(element: Element) = popularMangaFromElement(element)
 
-    override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
-
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (query.isNotBlank()) {
             // Text search
             return Request.Builder()
@@ -154,12 +116,10 @@ class LibRead :
         }
 
         // Default: popular
-        return popularMangaRequest(page)
+        return buildPopularMangaRequest(page)
     }
 
-    override fun searchMangaParse(response: Response) = popularMangaParse(response)
-
-    override fun getFilterList() = FilterList(
+    override fun getFilterList(data: JsonElement?) = FilterList(
         Filter.Header("Note: Genre/Type filter only works with empty search"),
         TypeFilter(),
         GenreFilter(),

@@ -4,14 +4,12 @@ import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
+import keiyoushi.annotation.Source
+import kotlinx.serialization.json.JsonElement
 import okhttp3.Request
 
-class LightNovelPlus :
-    ReadNovelFull(
-        name = "LightNovelPlus",
-        baseUrl = "https://lightnovelplus.com",
-        lang = "en",
-    ) {
+@Source
+abstract class LightNovelPlus : ReadNovelFull() {
     // LightNovelPlus has a very different URL structure from the standard ReadNovelFull
     override val latestPage = "last_release"
     override val searchPage = "book/search.html"
@@ -21,11 +19,11 @@ class LightNovelPlus :
     override val pageParam = "page_num"
     override val searchKey = "keyword"
 
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/book/bookclass.html?$pageParam=$page", headers)
+    override fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/book/bookclass.html?$pageParam=$page", headers)
 
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/$latestPage?$pageParam=$page", headers)
+    override fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/$latestPage?$pageParam=$page", headers)
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (query.isNotBlank()) {
             return GET("$baseUrl/$searchPage?keyword=$query&$pageParam=$page", headers)
         }
@@ -52,7 +50,7 @@ class LightNovelPlus :
     }
     // ======================== Filters ========================
 
-    override fun getFilterList() = FilterList(
+    override fun getFilterList(data: JsonElement?) = FilterList(
         Filter.Header("Type filters"),
         TypeFilter(),
         Filter.Header("Genre filters"),

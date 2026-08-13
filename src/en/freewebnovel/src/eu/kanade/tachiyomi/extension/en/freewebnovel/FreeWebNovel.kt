@@ -3,6 +3,7 @@
 import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.SManga
+import keiyoushi.annotation.Source
 import okhttp3.Request
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -11,12 +12,8 @@ import org.jsoup.nodes.Element
  * FreeWebNovel - ReadNovelFull-based novel site
  * Uses the ReadNovelFull multisrc template which handles all the parsing logic.
  */
-class FreeWebNovel :
-    ReadNovelFull(
-        name = "FreeWebNovel",
-        baseUrl = "https://freewebnovel.com",
-        lang = "en",
-    ) {
+@Source
+abstract class FreeWebNovel : ReadNovelFull() {
     override val popularPage = "sort/most-popular"
 
     // freewebnovel uses "latest-release" for the latest-release listing
