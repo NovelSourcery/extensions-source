@@ -168,38 +168,57 @@ class RewayatClub :
     }
 
     override suspend fun fetchPageText(page: Page): String {
+        val parts = page.url.trim('/').split("/")
+        val slug = parts.getOrNull(parts.size - 2).orEmpty()
+        val number = parts.lastOrNull().orEmpty()
+        if (slug.isNotEmpty() && number.isNotEmpty()) {
+            val apiText = runCatching {
+                val resp = client.newCall(GET("$apiUrl/api/chapters/$slug/$number/", headers)).execute()
+                val item = json.decodeFromString<ChapterDetail>(resp.body.string())
+                parseChapterContent(item.content)
+            }.getOrNull()
+            if (!apiText.isNullOrEmpty()) return apiText
+        }
+        return parseChapterWebPage(page)
+    }
+
+    private fun parseChapterContent(content: List<List<String>>): String {
+        if (content.isEmpty()) return ""
+        val html = content.flatten().joinToString("\n")
+        val doc = org.jsoup.Jsoup.parseBodyFragment(html)
+        val paragraphs = doc.select("p").mapNotNull { it.text().trim().ifEmpty { null } }
+        return if (paragraphs.isNotEmpty()) paragraphs.joinToString("\n\n") else doc.text().trim()
+    }
+
+    private suspend fun parseChapterWebPage(page: Page): String {
         val doc = client.newCall(GET("$baseUrl${page.url}", headers)).execute().asJsoup()
 
         val nuxtScript = doc.select("script").firstOrNull { it.html().contains("window.__NUXT__") }
         if (nuxtScript != null) {
-            val scriptHtml = nuxtScript.html()
-            val nuxtContent = extractNuxtContent(scriptHtml)
+            val nuxtContent = extractNuxtContent(nuxtScript.html())
             if (nuxtContent.isNotEmpty()) return nuxtContent
         }
 
         val contentEl = doc.selectFirst(
-            ".chapter-content, .entry-content, .reading-content, [data-v-53cd2902] .v-card:last-child",
+            ".v-card__text.unselectable, .pre-formatted, .chapter-content, .entry-content, .reading-content",
         )
         if (contentEl != null) {
             contentEl.select(
                 "script, style, nav, footer, header, .ads, .navigation, .chapter-nav, .prev-next, .share, .comments, .breadcrumb, .v-data-table, table",
             ).remove()
-            val paragraphs = contentEl.select("p")
+            val paragraphs = contentEl.select("p").mapNotNull { it.text().trim().ifEmpty { null } }
             if (paragraphs.isNotEmpty()) {
-                return paragraphs.joinToString("\n\n") { it.html().trim() }
+                return paragraphs.joinToString("\n\n")
             }
-            return contentEl.html().trim()
+            return contentEl.text().trim()
         }
 
         return ""
     }
 
     private fun extractNuxtContent(scriptHtml: String): String {
-        val startMarker = "e.content=\""
-        val startIdx = scriptHtml.indexOf(startMarker)
-        if (startIdx < 0) return ""
-
-        val valueStart = startIdx + startMarker.length
+        val match = Regex("""[A-Za-z_$][A-Za-z0-9_$]*\.content=""").find(scriptHtml) ?: return ""
+        val valueStart = match.range.first + match.value.length
         val sb = StringBuilder()
         var i = valueStart
         val len = scriptHtml.length
@@ -292,6 +311,10 @@ class RewayatClub :
 
     override fun imageUrlParse(response: Response): String = ""
 
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl${manga.url}"
+
+    override fun getChapterUrl(chapter: SChapter): String = "$baseUrl${chapter.url}"
+
     private fun NovelItem.toSManga() = SManga.create().apply {
         url = "/novel/$slug"
         title = arabic
@@ -350,6 +373,14 @@ class RewayatClub :
         val date: String = "",
         @SerialName("novel_slug") val novel_slug: String = "",
         val uploader: UploaderItem? = null,
+    )
+
+    @Serializable
+    data class ChapterDetail(
+        val id: Int = 0,
+        val number: Int = 0,
+        val title: String = "",
+        val content: List<List<String>> = emptyList(),
     )
 
     @Serializable
