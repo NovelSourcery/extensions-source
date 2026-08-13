@@ -18,11 +18,14 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.annotation.Source
 import keiyoushi.lib.chapterutils.mergeChapters
 import keiyoushi.lib.chapterutils.shouldReturnExisting
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.jsonInstance
 import keiyoushi.utils.setAltTitles
-import kotlinx.serialization.json.Json
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -36,6 +39,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
@@ -43,51 +47,43 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
-import uy.kohesive.injekt.injectLazy
 import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-class WtrLab :
-    HttpSource(),
+@Source
+abstract class WtrLab :
+    KeiSource(),
     NovelSource,
     ConfigurableSource,
     SourceTracker {
 
-    override val name = "WTR-LAB"
-    override val baseUrl = "https://wtr-lab.com"
-    override val lang = "en"
-    override val supportsLatest = true
-
-    override val client = network.client.newBuilder()
-        .addInterceptor { chain ->
-            val original = chain.request()
-            if (!original.url.encodedPath.contains("/_next/data/")) {
-                chain.proceed(original)
-            } else {
-
-                var currentRequest = original
-                var response = chain.proceed(currentRequest)
-                var attempt = 0
-                while (!response.isSuccessful && attempt < MAX_BUILD_ID_RETRIES) {
-                    val failedBuildId = BUILD_ID_IN_PATH_REGEX.find(currentRequest.url.encodedPath)
-                        ?.groupValues?.get(1) ?: break
-                    response.close()
-                    cachedBuildId = null
-                    val freshBuildId = runCatching { getBuildId() }.getOrNull() ?: break
-                    currentRequest = currentRequest.newBuilder()
-                        .url(currentRequest.url.toString().replace(failedBuildId, freshBuildId))
-                        .build()
-                    response = chain.proceed(currentRequest)
-                    attempt++
-                }
-                response
+    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor { chain ->
+        val original = chain.request()
+        if (!original.url.encodedPath.contains("/_next/data/")) {
+            chain.proceed(original)
+        } else {
+            var currentRequest = original
+            var response = chain.proceed(currentRequest)
+            var attempt = 0
+            while (!response.isSuccessful && attempt < MAX_BUILD_ID_RETRIES) {
+                val failedBuildId = BUILD_ID_IN_PATH_REGEX.find(currentRequest.url.encodedPath)
+                    ?.groupValues?.get(1) ?: break
+                response.close()
+                cachedBuildId = null
+                val freshBuildId = runCatching { getBuildId() }.getOrNull() ?: break
+                currentRequest = currentRequest.newBuilder()
+                    .url(currentRequest.url.toString().replace(failedBuildId, freshBuildId))
+                    .build()
+                response = chain.proceed(currentRequest)
+                attempt++
             }
+            response
         }
-        .build()
+    }
 
-    private val json: Json by injectLazy()
+    private val json = jsonInstance
     private val preferences = Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
 
     private val apiHeaders by lazy {
@@ -455,13 +451,14 @@ class WtrLab :
         return result
     }
 
-    override fun popularMangaRequest(page: Int): Request {
+    override suspend fun getPopularManga(page: Int): MangasPage {
         val buildId = getBuildId()
         val url = "$baseUrl/_next/data/$buildId/en/novel-finder.json?orderBy=views&order=desc&page=$page"
-        return GET(url, headers)
+        val response = client.newCall(GET(url, headers)).execute()
+        return parseSeriesPage(response)
     }
 
-    override fun popularMangaParse(response: Response): MangasPage {
+    private fun parseSeriesPage(response: Response): MangasPage {
         val jsonResult = json.parseToJsonElement(response.body.string()).jsonObject
         val pageProps = jsonResult["pageProps"]?.jsonObject
         val series = pageProps?.get("series") as? JsonArray
@@ -497,15 +494,12 @@ class WtrLab :
         return MangasPage(mangas, hasNextPage)
     }
 
-    override fun latestUpdatesRequest(page: Int): Request {
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
         val requestBody = buildJsonObject {
             put("page", page)
         }.toString().toRequestBody("application/json".toMediaType())
 
-        return POST("$baseUrl/api/home/recent", apiHeaders, requestBody)
-    }
-
-    override fun latestUpdatesParse(response: Response): MangasPage {
+        val response = client.newCall(POST("$baseUrl/api/home/recent", apiHeaders, requestBody)).execute()
         val jsonResult = json.parseToJsonElement(response.body.string()).jsonObject
         val data = jsonResult["data"] as? JsonArray ?: return MangasPage(emptyList(), false)
 
@@ -528,7 +522,7 @@ class WtrLab :
         return MangasPage(mangas, hasNextPage)
     }
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val buildId = getBuildId()
 
         val params = mutableListOf<String>()
@@ -619,10 +613,11 @@ class WtrLab :
         params.add("page=$page")
 
         val url = "$baseUrl/_next/data/$buildId/en/novel-finder.json?${params.joinToString("&")}"
-        return GET(url, headers)
-    } override fun searchMangaParse(response: Response) = popularMangaParse(response)
+        val response = client.newCall(GET(url, headers)).execute()
+        return parseSeriesPage(response)
+    }
 
-    override fun mangaDetailsRequest(manga: SManga): Request {
+    private fun buildMangaDetailsRequest(manga: SManga): Request {
         val buildId = getBuildId()
         // url shape: /en/novel/<raw_id>/<slug> (legacy: /en/serie-<raw_id>/<slug>). The _next/data
         // JSON route 308s straight to the plain HTML page for legacy paths, so always request the
@@ -637,7 +632,7 @@ class WtrLab :
 
     override fun getMangaUrl(manga: SManga): String = "$baseUrl${manga.url}"
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    private fun parseMangaDetailsJson(response: Response): SManga {
         val manga = SManga.create()
         var root = json.parseToJsonElement(response.body.string()).jsonObject
 
@@ -764,27 +759,31 @@ class WtrLab :
         return manga
     }
 
-    override fun chapterListRequest(manga: SManga): Request = GET("$baseUrl${manga.url}", headers)
+    private fun buildChapterListRequest(manga: SManga): Request = GET("$baseUrl${manga.url}", headers)
 
-    override suspend fun getMangaUpdate(
+    override suspend fun fetchMangaUpdate(
         manga: SManga,
         chapters: List<SChapter>,
         fetchDetails: Boolean,
         fetchChapters: Boolean,
-    ): SMangaUpdate {
-        val updatedManga = if (fetchDetails) {
-            client.newCall(mangaDetailsRequest(manga)).execute().let(::mangaDetailsParse)
+    ): SMangaUpdate = coroutineScope {
+        // Details (JSON API) and chapters (plain HTML page) live on different endpoints - fire
+        // both concurrently when both are needed, rather than awaiting them sequentially.
+        val detailsDeferred = if (fetchDetails) {
+            async { client.newCall(buildMangaDetailsRequest(manga)).execute().let(::parseMangaDetailsJson) }
         } else {
-            manga
+            null
         }
+        val chaptersDeferred = if (fetchChapters) async { fetchChapterListInternal(manga, chapters) } else null
 
-        val updatedChapters = if (fetchChapters) fetchChapterListInternal(manga, chapters) else chapters
-
-        return SMangaUpdate(updatedManga, updatedChapters)
+        SMangaUpdate(
+            manga = detailsDeferred?.await() ?: manga,
+            chapters = chaptersDeferred?.await() ?: chapters,
+        )
     }
 
     private fun fetchChapterListInternal(manga: SManga, chapters: List<SChapter>): List<SChapter> {
-        val response = client.newCall(chapterListRequest(manga)).execute()
+        val response = client.newCall(buildChapterListRequest(manga)).execute()
         val html = response.body.string()
         val doc = Jsoup.parse(html)
         val url = response.request.url.toString()
@@ -896,14 +895,10 @@ class WtrLab :
         }
     }
 
-    override fun pageListRequest(chapter: SChapter): Request = GET("$baseUrl${chapter.url}", headers)
-
-    override fun pageListParse(response: Response): List<Page> {
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
         // fetchPageText will parse the URL to extract rawId and chapterNo
-        return listOf(Page(0, response.request.url.toString(), null))
+        return listOf(Page(0, "$baseUrl${chapter.url}", null))
     }
-
-    override fun imageUrlParse(response: Response) = ""
 
     private fun getTranslationMode() = preferences.getString(TRANSLATION_MODE_KEY, "ai") ?: "ai"
     private fun getDecryptionKey() = preferences.getString(DECRYPTION_KEY, "") ?: ""
@@ -951,7 +946,7 @@ class WtrLab :
     }
 
     private fun fetchSerieId(manga: SManga, rawId: Int): Int? = try {
-        val response = client.newCall(mangaDetailsRequest(manga)).execute()
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
         val root = json.parseToJsonElement(response.body.string()).jsonObject
         val sid = root["pageProps"]?.jsonObject
             ?.get("serie")?.jsonObject
@@ -1281,7 +1276,7 @@ class WtrLab :
         }.also(screen::addPreference)
     }
 
-    override fun getFilterList() = FilterList(
+    override fun getFilterList(data: JsonElement?) = FilterList(
         Filter.Header("Note: Filters are applied together with search"),
         OrderByFilter(),
         OrderFilter(),
