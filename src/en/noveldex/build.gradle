@@ -1,6 +1,8 @@
 ext {
+    libVersion = '1.4'
     extName = 'NovelDex'
     extClass = '.NovelDex'
+    baseUrl = 'https://noveldex.io'
     extVersionCode = 4
     isNsfw = true
     isNovel = true

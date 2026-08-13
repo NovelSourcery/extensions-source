@@ -177,12 +177,11 @@ class LightNovelWorld :
             }
         }
 
-        // Total count shown as "N novels found"; derive page size from what this page actually
-        // returned instead of assuming a fixed page size, so this survives the site changing it.
+        // 24 results per page; total count shown as "N novels found"
         val currentPage = response.request.url.queryParameter("page")?.toIntOrNull() ?: 1
         val totalCount = doc.selectFirst(".results-count")?.text()
             ?.replace(Regex("[^0-9]"), "")?.toIntOrNull() ?: 0
-        val hasNextPage = novels.isNotEmpty() && currentPage * novels.size < totalCount
+        val hasNextPage = currentPage * 24 < totalCount
 
         return MangasPage(novels, hasNextPage)
     }
@@ -267,18 +266,13 @@ class LightNovelWorld :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val updatedManga = if (fetchDetails) {
-            client.newCall(mangaDetailsRequest(manga)).execute().let(::mangaDetailsParse)
-        } else {
-            manga
-        }
-
-        val updatedChapters = if (fetchChapters) fetchChapterListInternal(manga, chapters) else chapters
-
+        @Suppress("DEPRECATION")
+        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(mangaDetailsRequest(manga)).execute()) else manga
+        val updatedChapters = if (fetchChapters) fetchLightNovelWorldChapterList(manga, chapters) else chapters
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private suspend fun fetchChapterListInternal(manga: SManga, chapters: List<SChapter>): List<SChapter> {
+    private suspend fun fetchLightNovelWorldChapterList(manga: SManga, existingChapters: List<SChapter>): List<SChapter> {
         val response = client.newCall(chapterListRequest(manga)).execute()
         val page1Doc = Jsoup.parse(response.body.string())
         val basePath = response.request.url.encodedPath
@@ -288,15 +282,15 @@ class LightNovelWorld :
             .find(page1Doc.selectFirst(".chapters-description")?.text().orEmpty())
             ?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
-        Log.d(TAG, "getChapterList: url=$basePath existing=${chapters.size} siteTotal=$currentTotal totalPages=$totalPages")
+        Log.d(TAG, "getChapterList: url=$basePath existing=${existingChapters.size} siteTotal=$currentTotal totalPages=$totalPages")
 
-        if (shouldReturnExisting(chapters.size, currentTotal)) {
+        if (shouldReturnExisting(existingChapters.size, currentTotal)) {
             Log.d(TAG, "getChapterList: count unchanged — returning existing")
-            return chapters
+            return existingChapters
         }
 
         return paginatedChapterList(
-            existingChapters = chapters,
+            existingChapters = existingChapters,
             siteTotal = currentTotal,
             assumedPageSize = CHAPTERS_PER_PAGE,
             fetchPage = { page ->
@@ -312,10 +306,7 @@ class LightNovelWorld :
         ).reversed()
     }
 
-    // Required override — chapterListParse is ACC_ABSTRACT in the pinned extensions-lib jar
-    // (verified via javap on the real dependency, not just the source-api sources). Unreachable
-    // in practice since getChapterList(manga, context) above is the real entry point and never
-    // delegates here, but the class will not compile without it.
+    // Fallback path for when getChapterList is not used; performs a full fetch with no optimisation.
     override fun chapterListParse(response: Response): List<SChapter> {
         val doc = Jsoup.parse(response.body.string())
         val basePath = response.request.url.encodedPath

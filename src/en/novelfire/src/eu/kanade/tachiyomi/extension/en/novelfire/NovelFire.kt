@@ -9,6 +9,7 @@ import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
+import eu.kanade.tachiyomi.source.RateLimited
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -20,6 +21,8 @@ import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.lib.chapterutils.checkCloudflare
 import keiyoushi.lib.chapterutils.paginatedChapterList
 import keiyoushi.lib.chapterutils.shouldReturnExisting
+import keiyoushi.lib.chapterutils.sortByChapterNumber
+import keiyoushi.network.rateLimit
 import keiyoushi.utils.tryParse
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -42,18 +45,35 @@ import java.text.SimpleDateFormat
  * @see https://github.com/LNReader/lnreader-plugins novelfire.ts
  * Features: Advanced filters, JSON chapter API, rate limiting detection,
  *           tag caching with include/exclude advanced search
+ *
+ * NovelFire rebranded to Novel Phoenix (novelphoenix.com) on the same backend - same DOM,
+ * same endpoints, only the domain and the novel path segment changed (/book/ -> /novel/).
+ * [id] is pinned to the pre-rebrand value so existing libraries migrate without a source
+ * change; absoluteUrl() rewrites any /book/ paths still stored from before the move.
  */
 class NovelFire :
     HttpSource(),
     NovelSource,
-    ConfigurableSource {
+    ConfigurableSource,
+    RateLimited {
 
-    override val name = "NovelFire"
-    override val baseUrl = "https://novelfire.net"
+    override val name = "Novel Phoenix"
+    override val id = 7165539527173321330L
+    override val baseUrl = "https://novelphoenix.com"
     override val lang = "en"
     override val supportsLatest = true
 
-    override val client = network.client
+    // NovelFire actively detects and blocks rapid requests server-side (see
+    // NovelFireThrottlingError below), so this self-throttle is a real floor, not a formality -
+    // it keeps working even if the host app's own rate limiting is missing, disabled, or stripped
+    // by a hostile fork.
+    override val minimumDelayMillis = 1000L
+    override val recommendedDelayMillis = 1500L
+    override val recommendedPermits = 2
+
+    override val client = network.client.newBuilder()
+        .rateLimit(minimumDelayMillis, recommendedPermits)
+        .build()
     private val json: Json by injectLazy()
 
     override val isNovelSource = true
@@ -177,7 +197,12 @@ class NovelFire :
         // Pass through already-absolute urls (a mirror base or a differing host would otherwise
         // glue into baseUrl, producing a broken host like "novelfire.nethttps://...").
         if (path.startsWith("http://") || path.startsWith("https://")) return path
-        return baseUrl.trimEnd('/') + "/" + path.trimStart('/')
+        // Manga/chapter urls stored before the novelfire.net -> novelphoenix.com rebrand still
+        // use the old /book/ prefix; the new site serves the same pages under /novel/.
+        val migratedPath = path.trimStart('/').let {
+            if (it.startsWith("book/")) "novel/" + it.removePrefix("book/") else it
+        }
+        return baseUrl.trimEnd('/') + "/" + migratedPath
     }
 
     override suspend fun fetchPageText(page: Page): String {
@@ -339,13 +364,17 @@ class NovelFire :
 
     // ======================== Novel Details ========================
 
+    // Default HttpSource request builders concatenate baseUrl + manga.url directly, bypassing
+    // absoluteUrl()'s /book/ -> /novel/ rewrite. Route both through it explicitly so manga still
+    // stored with a pre-rebrand url resolve correctly.
+    override fun mangaDetailsRequest(manga: SManga): Request = GET(absoluteUrl(manga.url), headers)
+
+    override fun chapterListRequest(manga: SManga): Request = GET(absoluteUrl(manga.url), headers)
+
     override fun mangaDetailsParse(response: Response): SManga {
         val doc = Jsoup.parse(response.body.string())
         checkCloudflare(doc)
-        return mangaDetailsParse(doc)
-    }
 
-    private fun mangaDetailsParse(doc: Document): SManga {
         val manga = SManga.create().apply {
             // Multiple fallbacks for title
             title = doc.selectFirst(".novel-title")?.text()?.trim()?.takeIf { it.isNotBlank() }
@@ -411,21 +440,17 @@ class NovelFire :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        if (!fetchChapters) {
-            val updatedManga = if (fetchDetails) {
-                client.newCall(mangaDetailsRequest(manga)).execute().let(::mangaDetailsParse)
-            } else {
-                manga
-            }
-            return SMangaUpdate(updatedManga, chapters)
-        }
+        @Suppress("DEPRECATION")
+        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(mangaDetailsRequest(manga)).execute()) else manga
+        val updatedChapters = if (fetchChapters) fetchNovelFireChapterList(manga, chapters) else chapters
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
 
+    private suspend fun fetchNovelFireChapterList(manga: SManga, existingChapters: List<SChapter>): List<SChapter> {
         val response = client.newCall(GET(absoluteUrl(manga.url), headers)).execute()
         val body = response.body.string()
         val doc = Jsoup.parse(body)
         checkCloudflare(doc)
-
-        val updatedManga = if (fetchDetails) mangaDetailsParse(doc) else manga
 
         val novelPath = response.request.url.encodedPath.trimStart('/')
 
@@ -435,57 +460,89 @@ class NovelFire :
                 ?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
             ?: 0
 
-        val existingCount = chapters.size
-        Log.d(TAG, "getMangaUpdate: manga=${manga.url} existing=$existingCount siteTotal=$totalChapters")
+        val existingCount = existingChapters.size
+        Log.d(TAG, "getChapterList: manga=${manga.url} existing=$existingCount siteTotal=$totalChapters")
 
-        val updatedChapters = if (shouldReturnExisting(existingCount, totalChapters)) {
-            Log.d(TAG, "getMangaUpdate: count unchanged — returning existing chapters immediately")
-            chapters
-        } else {
-            val postId = extractPostId(doc)
-            val fetchMethod = preferences.getString(CHAPTER_FETCH_METHOD_KEY, "auto") ?: "auto"
-            Log.d(TAG, "getMangaUpdate: fetch needed (method=$fetchMethod postId=$postId)")
+        if (shouldReturnExisting(existingCount, totalChapters)) {
+            Log.d(TAG, "getChapterList: count unchanged — returning existing chapters immediately")
+            return existingChapters
+        }
 
-            when (fetchMethod) {
-                "ajax" -> {
-                    if (postId != null) {
-                        getAllChaptersFromAjax(novelPath, postId).reversed()
-                    } else {
-                        throw Exception("Ajax method selected but post_id not found on page")
-                    }
+        val postId = extractPostId(doc)
+        val fetchMethod = preferences.getString(CHAPTER_FETCH_METHOD_KEY, "auto") ?: "auto"
+        Log.d(TAG, "getChapterList: fetch needed (method=$fetchMethod postId=$postId)")
+
+        return when (fetchMethod) {
+            "ajax" -> {
+                if (postId != null) {
+                    getAllChaptersFromAjax(novelPath, postId).reversed()
+                } else {
+                    throw Exception("Ajax method selected but post_id not found on page")
                 }
-                "html" -> paginatedChapterList(
-                    existingChapters = chapters,
-                    siteTotal = totalChapters,
-                    assumedPageSize = CHAPTERS_PER_PAGE,
-                    fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
-                ).reversed()
-                else -> {
-                    if (postId != null) {
-                        try {
-                            paginatedChapterList(
-                                existingChapters = chapters,
-                                siteTotal = totalChapters,
-                                assumedPageSize = CHAPTERS_PER_PAGE,
-                                fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
-                            ).reversed()
-                        } catch (e: Exception) {
-                            Log.d(TAG, "getMangaUpdate: HTML incremental failed (${e.message}), falling back to AJAX")
-                            getAllChaptersFromAjax(novelPath, postId).reversed()
-                        }
-                    } else {
+            }
+            "html" -> paginatedChapterList(
+                existingChapters = existingChapters,
+                siteTotal = totalChapters,
+                assumedPageSize = CHAPTERS_PER_PAGE,
+                fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
+            ).reversed()
+            else -> {
+                if (postId != null) {
+                    try {
                         paginatedChapterList(
-                            existingChapters = chapters,
+                            existingChapters = existingChapters,
                             siteTotal = totalChapters,
                             assumedPageSize = CHAPTERS_PER_PAGE,
                             fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
                         ).reversed()
+                    } catch (e: Exception) {
+                        Log.d(TAG, "getChapterList: HTML incremental failed (${e.message}), falling back to AJAX")
+                        getAllChaptersFromAjax(novelPath, postId).reversed()
                     }
+                } else {
+                    paginatedChapterList(
+                        existingChapters = existingChapters,
+                        siteTotal = totalChapters,
+                        assumedPageSize = CHAPTERS_PER_PAGE,
+                        fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
+                    ).reversed()
                 }
             }
         }
+    }
 
-        return SMangaUpdate(updatedManga, updatedChapters)
+    override fun chapterListParse(response: Response): List<SChapter> {
+        val body = response.body.string()
+        val doc = Jsoup.parse(body)
+        checkCloudflare(doc)
+
+        val novelPath = response.request.url.encodedPath.trimStart('/')
+
+        val postId = extractPostId(doc)
+
+        val fetchMethod = preferences.getString(CHAPTER_FETCH_METHOD_KEY, "auto") ?: "auto"
+
+        return when (fetchMethod) {
+            "ajax" -> {
+                if (postId != null) {
+                    getAllChaptersFromAjax(novelPath, postId).reversed()
+                } else {
+                    throw Exception("Ajax method selected but post_id not found on page")
+                }
+            }
+            "html" -> getAllChaptersFromHtml(novelPath).reversed()
+            else -> {
+                if (postId != null) {
+                    try {
+                        getAllChaptersFromHtml(novelPath).reversed()
+                    } catch (e: Exception) {
+                        getAllChaptersFromAjax(novelPath, postId).reversed()
+                    }
+                } else {
+                    getAllChaptersFromHtml(novelPath).reversed()
+                }
+            }
+        }
     }
 
     private fun extractPostId(doc: Document): String? {
@@ -555,7 +612,7 @@ class NovelFire :
         Log.d(TAG, "ajax fetch: received ${ajaxResponse.data.size} chapters (recordsTotal=${ajaxResponse.recordsTotal})")
 
         // Build chapter URLs using the novel path and slug
-        // Format: /book/novel-name/chapter-number
+        // Format: /novel/novel-name/chapter-number
         return ajaxResponse.data.mapIndexed { index, chapter ->
             SChapter.create().apply {
                 name = chapter.title
@@ -594,6 +651,18 @@ class NovelFire :
         val hasNextPage = doc.selectFirst("a[rel=\"next\"]") != null
         Log.d(TAG, "html fetch: page $page parsed ${chapters.size} chapters (hasNext=$hasNextPage)")
         return Pair(chapters, hasNextPage)
+    }
+
+    private fun getAllChaptersFromHtml(novelPath: String, startPage: Int = 1): List<SChapter> {
+        val allChapters = mutableListOf<SChapter>()
+        var page = startPage
+        while (true) {
+            val (pageChapters, hasNextPage) = fetchSingleHtmlPage(novelPath, page)
+            allChapters += pageChapters
+            if (!hasNextPage) break
+            page++
+        }
+        return sortByChapterNumber(allChapters)
     }
 
     // ======================== Chapter Content ========================

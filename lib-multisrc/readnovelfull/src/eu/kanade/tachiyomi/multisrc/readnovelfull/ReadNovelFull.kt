@@ -119,7 +119,7 @@ abstract class ReadNovelFull(
 
     // Set true on sites whose chapter list is split across multiple pages on the novel page
     // (engine convention: a #indexselect page picker, chapters under div.m-newest2 ul.ul-list5).
-    // Enables the incremental paginated path in getMangaUpdate below.
+    // Enables the existing-chapters-aware paginated path in fetchReadNovelFullChapterList below.
     protected open val chaptersPaginated: Boolean = false
     protected open val chapterListPageSize: Int = 100
 
@@ -658,37 +658,19 @@ abstract class ReadNovelFull(
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        var updatedManga = manga
-        var updatedChapters = chapters
-
-        if (chaptersPaginated && fetchDetails && fetchChapters) {
-            // Chapter-list page 1 is the same page mangaDetailsRequest would fetch, so fetch it once
-            // and derive both the manga details and the first chapter page from it.
-            val detailDoc = fetchChapterListPage(manga, 1)
-            updatedManga = mangaDetailsParse(detailDoc)
-            updatedChapters = fetchPaginatedChapters(manga, chapters, detailDoc)
-        } else {
-            if (fetchDetails) {
-                val response = client.newCall(mangaDetailsRequest(manga)).execute()
-                updatedManga = mangaDetailsParse(response.asJsoup())
-            }
-            if (fetchChapters) {
-                updatedChapters = if (chaptersPaginated) {
-                    val detailDoc = fetchChapterListPage(manga, 1)
-                    fetchPaginatedChapters(manga, chapters, detailDoc)
-                } else {
-                    val response = client.newCall(chapterListRequest(manga)).execute()
-                    chapterListParse(response)
-                }
-            }
-        }
-
+        @Suppress("DEPRECATION")
+        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(mangaDetailsRequest(manga)).execute()) else manga
+        val updatedChapters = if (fetchChapters) fetchReadNovelFullChapterList(manga, chapters) else chapters
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    // Shared paginated chapter-list fetch used by both branches of getMangaUpdate above.
-    // [detailDoc] is the already-fetched page 1 (novel page / first chapter-list page).
-    private suspend fun fetchPaginatedChapters(manga: SManga, existingChapters: List<SChapter>, detailDoc: Document): List<SChapter> {
+    private suspend fun fetchReadNovelFullChapterList(manga: SManga, existingChapters: List<SChapter>): List<SChapter> {
+        if (!chaptersPaginated) {
+            @Suppress("DEPRECATION")
+            return chapterListParse(client.newCall(chapterListRequest(manga)).execute())
+        }
+
+        val detailDoc = fetchChapterListPage(manga, 1)
         val pageCount = chapterListPageCount(detailDoc)
 
         // Fast mode (default): synthesize the list from the latest chapter number and a stable chapter

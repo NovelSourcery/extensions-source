@@ -1,6 +1,8 @@
 ext {
+    libVersion = '1.4'
     extName = 'NovelBuddy'
     extClass = '.NovelBuddy'
+    baseUrl = 'https://novelbuddy.me'
     extVersionCode = 4
     isNsfw = false
     isNovel = true

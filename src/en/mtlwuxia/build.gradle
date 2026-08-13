@@ -1,6 +1,8 @@
 ext {
+    libVersion = '1.4'
     extName = 'MTL Wuxia'
     extClass = '.MTLWuxia'
+    baseUrl = 'https://mtlwuxia.com'
     extVersionCode = 1
     isNsfw = false
     isNovel = true

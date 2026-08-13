@@ -1,7 +1,9 @@
 ext {
+    libVersion = '1.4'
     extName = 'Novelight'
     extClass = '.Novelight'
-    extVersionCode = 4
+    baseUrl = 'https://novelight.net'
+    extVersionCode = 2
     isNsfw = false
     isNovel = true
 }

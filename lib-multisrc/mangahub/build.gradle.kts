@@ -1,10 +1,11 @@
-import keiyoushi.gradle.extensions.baseVersionCode
-
 plugins {
     alias(kei.plugins.multisrc)
 }
 
-baseVersionCode = 34
+keiyoushi {
+    baseVersionCode = 34
+    libVersion = "1.4"
+}
 
 dependencies {
     //noinspection UseTomlInstead

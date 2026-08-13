@@ -1,10 +1,11 @@
-import keiyoushi.gradle.extensions.baseVersionCode
-
 plugins {
     alias(kei.plugins.multisrc)
 }
 
-baseVersionCode = 2
+keiyoushi {
+    baseVersionCode = 2
+    libVersion = "1.4"
+}
 
 dependencies {
     implementation(project(":lib:unpacker"))

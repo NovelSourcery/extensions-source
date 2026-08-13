@@ -1,7 +1,9 @@
 ext {
+    libVersion = '1.4'
     extName = 'Wattpad'
     extClass = '.Wattpad'
-    extVersionCode = 3
+    baseUrl = 'https://www.wattpad.com'
+    extVersionCode = 2
     isNovel = true
 }
 

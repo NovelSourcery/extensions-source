@@ -1,6 +1,8 @@
 ext {
+    libVersion = '1.4'
     extName = 'Scribble Hub'
     extClass = '.ScribbleHub'
+    baseUrl = 'https://www.scribblehub.com'
     extVersionCode = 4
     isNsfw = false
     isNovel = true

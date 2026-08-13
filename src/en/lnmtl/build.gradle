@@ -1,6 +1,8 @@
 ext {
+    libVersion = '1.4'
     extName = 'LNMTL'
     extClass = '.LNMTL'
+    baseUrl = 'https://lnmtl.com'
     extVersionCode = 1
     isNsfw = false
     isNovel = true

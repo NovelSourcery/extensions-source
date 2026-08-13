@@ -1,7 +1,9 @@
 ext {
+    libVersion = '1.6'
     extName = 'Light Novel World'
     extClass = '.LightNovelWorld'
-    extVersionCode = 4
+    baseUrl = 'https://lightnovelworld.org'
+    extVersionCode = 2
     isNovel = true
 }
 

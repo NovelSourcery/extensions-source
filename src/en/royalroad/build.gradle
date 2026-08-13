@@ -1,6 +1,8 @@
 ext {
+    libVersion = '1.4'
     extName = 'Royal Road'
     extClass = '.RoyalRoad'
+    baseUrl = 'https://www.royalroad.com'
     extVersionCode = 3
     isNovel = true
 }

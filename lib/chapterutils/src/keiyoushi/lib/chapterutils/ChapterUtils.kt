@@ -6,14 +6,12 @@ import org.jsoup.nodes.Document
 // ── High-level entry point ────────────────────────────────────────────────────
 
 /**
- * Fetches a paginated chapter list, reusing [existingChapters] to avoid redundant requests.
+ * Fetches a paginated chapter list, using [existingChapters] (as passed into
+ * getMangaUpdate) to avoid redundant requests.
  *
  * The caller supplies [fetchPage], a lambda that takes a 1-based page number and returns
  * the chapters on that page plus whether a next page exists.  URL construction is entirely
  * the caller's responsibility, so any URL scheme (query param, path segment, etc.) works.
- *
- * To force a full re-fetch, pass an empty [existingChapters] list (this is how the app signals
- * a manual/forced refresh at the `getMangaUpdate` layer).
  *
  * Behaviour:
  * - Returns [existingChapters] immediately when [siteTotal] confirms nothing changed.
@@ -21,6 +19,7 @@ import org.jsoup.nodes.Document
  * - Otherwise probes the estimated start page, detects the real page size, then fetches only
  *   the pages that could contain new chapters and prepends the known-good existing chapters.
  *
+ * @param existingChapters  Chapters that already exist locally for this manga.
  * @param siteTotal  Chapter count reported by the site (0 or negative = unknown, skips early exit).
  * @param assumedPageSize  Initial guess for chapters-per-page used before the probe.
  * @param fetchPage  Lambda `(pageNumber) -> Pair<chapters, hasNextPage>`.

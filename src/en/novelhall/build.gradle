@@ -1,6 +1,8 @@
 ext {
+    libVersion = '1.4'
     extName = 'NovelHall'
     extClass = '.NovelHall'
+    baseUrl = 'https://novelhall.com'
     extVersionCode = 4
     isNovel = true
 }

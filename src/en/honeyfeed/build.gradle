@@ -1,6 +1,8 @@
 ext {
+    libVersion = '1.4'
     extName = 'Honeyfeed'
     extClass = '.Honeyfeed'
+    baseUrl = 'https://www.honeyfeed.fm'
     extVersionCode = 2
     isNovel = true
 }

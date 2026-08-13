@@ -1,6 +1,8 @@
 ext {
+    libVersion = '1.4'
     extName = 'Bright Novels'
     extClass = '.BrightNovels'
+    baseUrl = 'https://brightnovels.com'
     extVersionCode = 6
     isNovel = true
 }

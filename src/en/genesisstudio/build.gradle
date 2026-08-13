@@ -1,6 +1,8 @@
 ext {
+    libVersion = '1.4'
     extName = 'GenesisStudio'
     extClass = '.GenesisStudio'
+    baseUrl = 'https://genesistudio.com'
     extVersionCode = 1
     isNsfw = false
     isNovel = true

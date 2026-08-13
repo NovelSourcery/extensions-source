@@ -1,6 +1,8 @@
 ext {
+    libVersion = '1.4'
     extName = 'LnCrawler'
     extClass = '.LnCrawler'
+    baseUrl = 'https://lncrawler.monster'
     extVersionCode = 3
     isNovel = true
 }

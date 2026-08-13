@@ -1,6 +1,8 @@
 ext {
+    libVersion = '1.4'
     extName = 'PawRead'
     extClass = '.PawRead'
+    baseUrl = 'https://m.pawread.com'
     extVersionCode = 1
     isNovel = true
 }

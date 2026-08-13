@@ -13,7 +13,6 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.lib.chapterutils.paginatedChapterList
 import keiyoushi.utils.formattedText
-import keiyoushi.utils.setAltTitles
 import keiyoushi.utils.stripChapterNumberPrefix
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
@@ -88,16 +87,6 @@ class NovelLive :
             "hiatus" -> SManga.ON_HIATUS
             else -> SManga.UNKNOWN
         }
-        // Best-effort: this template exposes author/genre/status via og:novel:* meta tags
-        // (see above), so alt names are assumed to follow the same og:novel:alt_name convention.
-        // Unverified against a live page (site is Cloudflare-gated) — confirm the meta key exists.
-        document.selectFirst("meta[property=og:novel:alt_name]")?.attr("content")
-            ?.split(",", ";")
-            ?.map { it.trim() }
-            ?.filter { it.isNotBlank() && it.lowercase() != title.lowercase() }
-            ?.distinct()
-            ?.takeIf { it.isNotEmpty() }
-            ?.let { setAltTitles(it) }
         description = document.selectFirst(".m-desc .txt .inner, .m-desc .inner")?.let { el ->
             el.select("script, style").remove()
             el.formattedText()
@@ -111,21 +100,15 @@ class NovelLive :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        if (!fetchChapters) {
-            val updatedManga = if (fetchDetails) {
-                mangaDetailsParse(client.newCall(mangaDetailsRequest(manga)).execute())
-            } else {
-                manga
-            }
-            return SMangaUpdate(updatedManga, chapters)
-        }
+        @Suppress("DEPRECATION")
+        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(mangaDetailsRequest(manga)).execute()) else manga
+        val updatedChapters = if (fetchChapters) fetchNovelLiveChapterList(manga, chapters) else chapters
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
 
-        // fetchChapters implies a details-page fetch is needed anyway (chapter count/#indexselect
-        // live there), so fetch it once and build both manga and chapters from that one Document.
+    private suspend fun fetchNovelLiveChapterList(manga: SManga, existingChapters: List<SChapter>): List<SChapter> {
         val novelPath = manga.url.trimEnd('/')
         val detailDoc = client.newCall(GET(baseUrl + novelPath, headers)).execute().asJsoup()
-        val updatedManga = if (fetchDetails) mangaDetailsParse(detailDoc) else manga
-
         val options = detailDoc.select("#indexselect option")
         val totalPages = options.size.coerceAtLeast(1)
 
@@ -138,44 +121,42 @@ class NovelLive :
             ?: 0
 
         // Fast mode (default): synthesize from the stable /book/<slug>/chapter-<n> url pattern.
-        val updatedChapters = if (!accurateChapters && latestNum > 0) {
-            (latestNum downTo 1).map { n ->
+        if (!accurateChapters && latestNum > 0) {
+            return (latestNum downTo 1).map { n ->
                 SChapter.create().apply {
                     setUrlWithoutDomain("$novelPath/chapter-$n")
                     name = "Chapter $n"
                     chapter_number = n.toFloat()
                 }
             }
-        } else {
-            // Accurate mode: fetch every index page for real chapter titles.
-            // Pages are oldest-first (#indexselect C.1-C.40, C.41-C.80, ...). Keep fetch order, then
-            // number by position (href chapter numbers are unreliable) and present newest-first.
-            val ascending = paginatedChapterList(
-                existingChapters = chapters,
-                siteTotal = latestNum,
-                assumedPageSize = 40,
-                sortChapters = { it },
-                fetchPage = { page ->
-                    val doc = if (page == 1) {
-                        detailDoc
-                    } else {
-                        client.newCall(GET("$baseUrl$novelPath/$page", headers)).execute().asJsoup()
-                    }
-                    val pageChapters = doc.select("ul.ul-list5 li a").mapNotNull { a ->
-                        val href = a.attr("abs:href").ifBlank { return@mapNotNull null }
-                        SChapter.create().apply {
-                            setUrlWithoutDomain(href)
-                            name = a.attr("title").ifBlank { a.text().trim() }.stripChapterNumberPrefix()
-                        }
-                    }
-                    Pair(pageChapters, page < totalPages)
-                },
-            )
-            ascending.forEachIndexed { i, ch -> ch.chapter_number = (i + 1).toFloat() }
-            ascending.reversed()
         }
 
-        return SMangaUpdate(updatedManga, updatedChapters)
+        // Accurate mode: fetch every index page for real chapter titles.
+        // Pages are oldest-first (#indexselect C.1-C.40, C.41-C.80, ...). Keep fetch order, then
+        // number by position (href chapter numbers are unreliable) and present newest-first.
+        val ascending = paginatedChapterList(
+            existingChapters = existingChapters,
+            siteTotal = latestNum,
+            assumedPageSize = 40,
+            sortChapters = { it },
+            fetchPage = { page ->
+                val doc = if (page == 1) {
+                    detailDoc
+                } else {
+                    client.newCall(GET("$baseUrl$novelPath/$page", headers)).execute().asJsoup()
+                }
+                val chapters = doc.select("ul.ul-list5 li a").mapNotNull { a ->
+                    val href = a.attr("abs:href").ifBlank { return@mapNotNull null }
+                    SChapter.create().apply {
+                        setUrlWithoutDomain(href)
+                        name = a.attr("title").ifBlank { a.text().trim() }.stripChapterNumberPrefix()
+                    }
+                }
+                Pair(chapters, page < totalPages)
+            },
+        )
+        ascending.forEachIndexed { i, ch -> ch.chapter_number = (i + 1).toFloat() }
+        return ascending.reversed()
     }
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
