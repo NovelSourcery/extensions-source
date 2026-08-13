@@ -71,7 +71,13 @@ class RewayatClub :
         return SManga.create().apply {
             url = "/novel/${item.slug}"
             title = item.arabic
-            thumbnail_url = "$apiUrl${item.poster_url}"
+            thumbnail_url = poster_url.let { url ->
+                when {
+                    url.startsWith("http") -> url
+                    url.startsWith("/") -> "$apiUrl$url"
+                    else -> "$baseUrl/$url"
+                }
+            }
             description = item.about
             genre = item.genre.joinToString { it.arabic }
             status = when (item.get_novel_status) {
@@ -164,7 +170,14 @@ class RewayatClub :
 
     override fun pageListParse(response: Response): List<Page> {
         val url = response.request.url.encodedPath
-        return listOf(Page(0, url))
+        val webPath = if (url.startsWith("/api/")) {
+            val slug = url.substringAfter("/api/chapters/").trimEnd('/')
+            val chapterNum = url.substringAfterLast("=").toIntOrNull() ?: 1
+            "/novel/$slug/$chapterNum"
+        } else {
+            url
+        }
+        return listOf(Page(0, webPath))
     }
 
     override suspend fun fetchPageText(page: Page): String {
@@ -291,6 +304,10 @@ class RewayatClub :
     }
 
     override fun imageUrlParse(response: Response): String = ""
+
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl${manga.url}"
+
+    override fun getChapterUrl(chapter: SChapter): String = "$baseUrl${chapter.url}"
 
     private fun NovelItem.toSManga() = SManga.create().apply {
         url = "/novel/$slug"
