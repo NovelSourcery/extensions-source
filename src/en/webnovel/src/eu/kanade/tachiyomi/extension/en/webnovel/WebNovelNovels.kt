@@ -13,42 +13,37 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.serialization.json.JsonElement
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
-class WebNovelNovels :
-    HttpSource(),
+@Source
+abstract class WebNovelNovels :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
-    override val name = "Webnovel Novels"
-
-    override val baseUrl = "https://www.webnovel.com"
-
-    override val lang = "en"
-
-    override val supportsLatest = true
-
     override val isNovelSource = true
 
-    override val client = network.cloudflareClient
-
-    override fun headersBuilder(): Headers.Builder = super.headersBuilder()
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = this
         .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .set("Accept-Language", "en-US,en;q=0.9")
         .set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
         .set("Referer", baseUrl)
 
     // Popular
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/stories/novel?orderBy=1&pageIndex=$page", headers)
+    override suspend fun getPopularManga(page: Int): MangasPage = parsePopularOrLatest(client.newCall(GET("$baseUrl/stories/novel?orderBy=1&pageIndex=$page", headers)).execute())
 
-    override fun popularMangaParse(response: Response): MangasPage {
+    private fun parsePopularOrLatest(response: Response): MangasPage {
         val document = Jsoup.parse(response.body.string())
         val finalUrl = response.request.url.toString()
         val isMobile = finalUrl.contains("m.webnovel.com")
@@ -127,14 +122,12 @@ class WebNovelNovels :
     }
 
     // Latest
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/stories/novel?orderBy=5&pageIndex=$page", headers)
-
-    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parsePopularOrLatest(client.newCall(GET("$baseUrl/stories/novel?orderBy=5&pageIndex=$page", headers)).execute())
 
     // Search
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         if (query.isNotBlank()) {
-            return GET("$baseUrl/search?keywords=$query&pageIndex=$page", headers)
+            return parseSearchResponse(client.newCall(GET("$baseUrl/search?keywords=$query&pageIndex=$page", headers)).execute())
         }
 
         // Filters
@@ -173,7 +166,7 @@ class WebNovelNovels :
         val builder = "$baseUrl/stories".toHttpUrl().newBuilder()
 
         if (genre.isNotEmpty()) {
-            return GET("$baseUrl/stories/$genre?bookStatus=$status&orderBy=$sort&pageIndex=$page", headers)
+            return parseSearchResponse(client.newCall(GET("$baseUrl/stories/$genre?bookStatus=$status&orderBy=$sort&pageIndex=$page", headers)).execute())
         } else {
             builder.addPathSegment("novel")
             builder.addQueryParameter("gender", gender)
@@ -190,10 +183,10 @@ class WebNovelNovels :
         builder.addQueryParameter("orderBy", sort)
         builder.addQueryParameter("pageIndex", page.toString())
 
-        return GET(builder.build().toString(), headers)
+        return parseSearchResponse(client.newCall(GET(builder.build().toString(), headers)).execute())
     }
 
-    override fun searchMangaParse(response: Response): MangasPage {
+    private fun parseSearchResponse(response: Response): MangasPage {
         val document = Jsoup.parse(response.body.string())
         val finalUrl = response.request.url.toString()
         val isMobile = finalUrl.contains("m.webnovel.com")
@@ -260,7 +253,7 @@ class WebNovelNovels :
     }
 
     // Details
-    override fun mangaDetailsParse(response: Response): SManga {
+    private fun parseMangaDetails(response: Response): SManga {
         val document = Jsoup.parse(response.body.string())
         return SManga.create().apply {
             title = document.selectFirst(".g_thumb > img")?.attr("alt") ?: "No Title"
@@ -338,9 +331,31 @@ class WebNovelNovels :
     }
 
     // Chapters
-    override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url + "/catalog", headers)
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate = coroutineScope {
+        // Details and chapters live on different pages - fire both concurrently when both are needed.
+        val detailsDeferred = if (fetchDetails) {
+            async { parseMangaDetails(client.newCall(GET(baseUrl + manga.url, headers)).execute()) }
+        } else {
+            null
+        }
+        val chaptersDeferred = if (fetchChapters) {
+            async { parseChapterList(client.newCall(GET(baseUrl + manga.url + "/catalog", headers)).execute()) }
+        } else {
+            null
+        }
 
-    override fun chapterListParse(response: Response): List<SChapter> {
+        SMangaUpdate(
+            manga = detailsDeferred?.await() ?: manga,
+            chapters = chaptersDeferred?.await() ?: chapters,
+        )
+    }
+
+    private fun parseChapterList(response: Response): List<SChapter> {
         val document = Jsoup.parse(response.body.string())
         val chapters = mutableListOf<SChapter>()
         document.select(".volume-item").forEach { volumeItem ->
@@ -393,12 +408,7 @@ class WebNovelNovels :
     }
 
     // Pages - novel content - return single page with chapter URL for text fetching
-    override fun pageListParse(response: Response): List<Page> {
-        val chapterUrl = response.request.url.toString().removePrefix(baseUrl)
-        return listOf(Page(0, chapterUrl))
-    }
-
-    override fun imageUrlParse(response: Response): String = ""
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     // Novel content
     override suspend fun fetchPageText(page: Page): String {
@@ -421,7 +431,7 @@ class WebNovelNovels :
     }
 
     // Filters
-    override fun getFilterList() = FilterList(
+    override fun getFilterList(data: JsonElement?) = FilterList(
         GenderFilter(),
         MaleGenreFilter(),
         FemaleGenreFilter(),
