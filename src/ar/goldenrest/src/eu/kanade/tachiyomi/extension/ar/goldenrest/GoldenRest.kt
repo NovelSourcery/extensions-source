@@ -97,7 +97,7 @@ class GoldenRest :
     }
 
     override fun mangaDetailsRequest(manga: SManga): Request {
-        val id = manga.url.substringAfterLast("/")
+        val id = manga.url.substringBeforeLast("/").substringAfterLast("/")
         return GET("$baseUrl/api/mangas/$id", apiHeaders)
     }
 
@@ -107,7 +107,7 @@ class GoldenRest :
     }
 
     override fun chapterListRequest(manga: SManga): Request {
-        val id = manga.url.substringAfterLast("/")
+        val id = manga.url.substringBeforeLast("/").substringAfterLast("/")
         return GET("$baseUrl/api/mangas/$id/releases?page=1", apiHeaders)
     }
 
@@ -187,6 +187,10 @@ class GoldenRest :
 
     override fun imageUrlParse(response: Response): String = ""
 
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl${manga.url}"
+
+    override fun getChapterUrl(chapter: SChapter): String = "$baseUrl${chapter.url}"
+
     override fun getFilterList(): FilterList = FilterList(
         StatusFilter(),
         TypeFilter(),
@@ -215,10 +219,10 @@ class GoldenRest :
             .build()
     }
 
-    private val coverUrl = "https://dilar.tube"
+    private val coverUrl = "https://golden.rest"
 
     private fun MangaDto.toSManga(): SManga = SManga.create().apply {
-        url = "/mangas/$id"
+        url = "/mangas/$id/${this@toSManga.title.toSlug()}"
         title = arabic_title?.takeIf { it.isNotBlank() } ?: this@toSManga.title
         thumbnail_url = if (cover.isNotBlank()) {
             "$coverUrl/manga/cover/$id/medium_$cover"
@@ -235,6 +239,14 @@ class GoldenRest :
             else -> SManga.UNKNOWN
         }
     }
+
+    private fun String.toSlug(): String = this
+        .lowercase()
+        .trim()
+        .replace("[^a-z0-9\\s-]".toRegex(), "")
+        .replace("\\s+".toRegex(), "-")
+        .replace("-+".toRegex(), "-")
+        .trim('-')
 
     private fun parseDate(dateStr: String): Long = try {
         val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)

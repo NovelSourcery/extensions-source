@@ -2,7 +2,7 @@ ext {
     extName = 'Golden Rest'
     extClass = '.GoldenRest'
     baseUrl = 'https://golden.rest'
-    extVersionCode = 3
+    extVersionCode = 4
     isNsfw = false
 }
 
