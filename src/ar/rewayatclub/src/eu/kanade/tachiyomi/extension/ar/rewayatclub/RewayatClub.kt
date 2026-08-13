@@ -305,9 +305,19 @@ class RewayatClub :
 
     override fun imageUrlParse(response: Response): String = ""
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl${manga.url}"
+    override fun getMangaUrl(manga: SManga): String {
+        val fixedUrl = manga.url
+            .replaceFirst("/api/novels/", "/novel/")
+            .replaceFirst("/api/chapters/", "/novel/")
+        return "$baseUrl$fixedUrl"
+    }
 
-    override fun getChapterUrl(chapter: SChapter): String = "$baseUrl${chapter.url}"
+    override fun getChapterUrl(chapter: SChapter): String {
+        val fixedUrl = chapter.url
+            .replaceFirst("/api/novels/", "/novel/")
+            .replaceFirst("/api/chapters/", "/novel/")
+        return "$baseUrl$fixedUrl"
+    }
 
     private fun NovelItem.toSManga() = SManga.create().apply {
         val poster = this@toSManga.poster_url
