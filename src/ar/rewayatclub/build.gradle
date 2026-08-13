@@ -1,7 +1,7 @@
 ext {
     extName = 'Rewayat Club'
     extClass = '.RewayatClub'
-    extVersionCode = 4
+    extVersionCode = 5
     isNsfw = false
     isNovel = true
 }
