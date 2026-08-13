@@ -13,10 +13,12 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import okhttp3.Headers
+import kotlinx.serialization.json.JsonElement
 import okhttp3.Request
 import okhttp3.Response
 import uy.kohesive.injekt.Injekt
@@ -26,17 +28,13 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
 
-class Wattpad :
-    HttpSource(),
+@Source
+abstract class Wattpad :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
-    override val name = "Wattpad"
-    override val baseUrl = "https://www.wattpad.com"
-    override val lang = "en"
-    override val supportsLatest = true
-
-    override val client = network.cloudflareClient
+    override val isNovelSource = true
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -50,14 +48,11 @@ class Wattpad :
     private val excludeLocked: Boolean
         get() = preferences.getBoolean(PREF_EXCLUDE_LOCKED, true)
 
-    private val apiHeaders: Headers
-        get() = headersBuilder().add("Referer", "$baseUrl/").build()
+    // region Browse (Popular / Latest / Search)
 
-    // region Browse (Popular / Latest)
+    override suspend fun getPopularManga(page: Int): MangasPage = parseStories(client.newCall(browseRequest("hot", page)).execute())
 
-    override fun popularMangaRequest(page: Int): Request = browseRequest("hot", page)
-
-    override fun latestUpdatesRequest(page: Int): Request = browseRequest("new", page)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseStories(client.newCall(browseRequest("new", page)).execute())
 
     private fun browseRequest(filter: String, page: Int, category: Int = 0): Request {
         val offset = (page - 1) * LIMIT
@@ -66,51 +61,40 @@ class Wattpad :
         return GET(
             "$baseUrl/v4/stories?fields=stories(id,title,cover,url),total,nextUrl" +
                 "&filter=$filter&language=1&mature=$mature$categoryParam&limit=$LIMIT&offset=$offset",
-            apiHeaders,
+            headers,
         )
     }
 
-    override fun popularMangaParse(response: Response): MangasPage {
+    private fun parseStories(response: Response): MangasPage {
         val result = json.decodeFromString<StoriesResponse>(response.body.string())
         val mangas = result.stories.map { it.toSManga() }
         return MangasPage(mangas, result.nextUrl != null)
     }
 
-    override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
-
-    // endregion
-
-    // region Search
-
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val completed = filters.filterIsInstance<StatusFilter>().firstOrNull()?.state == 1
 
         // No text query: browse the catalog by category/sort instead of hitting the search endpoint.
         if (query.isBlank()) {
             val category = filters.filterIsInstance<CategoryFilter>().firstOrNull()?.selectedId ?: 0
             val sort = if (completed) "complete" else filters.filterIsInstance<SortFilter>().firstOrNull()?.value ?: "hot"
-            return browseRequest(sort, page, category)
+            return parseStories(client.newCall(browseRequest(sort, page, category)).execute())
         }
 
         val offset = (page - 1) * LIMIT
         val statusParam = if (completed) "&filter=complete" else ""
         val q = URLEncoder.encode(query, "UTF-8")
-        return GET(
+        val request = GET(
             "$baseUrl/v4/search/stories?query=$q$statusParam&free=1" +
                 "&fields=stories(title,cover,url),nextUrl&limit=$LIMIT&mature=true&offset=$offset",
-            apiHeaders,
+            headers,
         )
+        return parseStories(client.newCall(request).execute())
     }
-
-    override fun searchMangaParse(response: Response) = popularMangaParse(response)
 
     // endregion
 
     // region Details + Chapters
-
-    override fun mangaDetailsRequest(manga: SManga): Request = storyInfoRequest(manga.url)
-
-    override fun chapterListRequest(manga: SManga): Request = storyInfoRequest(manga.url)
 
     // Details/chapters come from the api/v3 endpoint, but "open in browser" must point at the
     // human story/part page, not the API URL that getMangaUrl/getChapterUrl default to.
@@ -126,30 +110,40 @@ class Wattpad :
         return GET(
             "$baseUrl/api/v3/stories/$id?fields=id,title,description,cover,completed," +
                 "isPaywalled,user(name,fullname),tags,parts(id,title,createDate,restricted)",
-            apiHeaders,
+            headers,
         )
     }
 
     private fun storyId(mangaUrl: String): String = STORY_ID_REGEX.find(mangaUrl)?.groupValues?.get(1)
         ?: throw Exception("Could not resolve Wattpad story id from $mangaUrl")
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        val story = json.decodeFromString<StoryDetails>(response.body.string())
-        return SManga.create().apply {
-            title = story.title
-            thumbnail_url = story.cover
-            author = story.user?.fullname?.ifBlank { story.user.name } ?: story.user?.name
-            genre = story.tags.joinToString()
-            status = if (story.completed) SManga.COMPLETED else SManga.ONGOING
-            description = buildString {
-                if (story.isPaywalled) append("!! Contains Paid Chapters !!\n\n")
-                append(story.description)
-            }.trim()
-        }
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        // Details and chapters both come from the same story-info endpoint - fetch it once.
+        val story = json.decodeFromString<StoryDetails>(client.newCall(storyInfoRequest(manga.url)).execute().body.string())
+
+        val updatedManga = if (fetchDetails) parseMangaDetails(story) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(story) else chapters
+        return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val story = json.decodeFromString<StoryDetails>(response.body.string())
+    private fun parseMangaDetails(story: StoryDetails): SManga = SManga.create().apply {
+        title = story.title
+        thumbnail_url = story.cover
+        author = story.user?.fullname?.ifBlank { story.user.name } ?: story.user?.name
+        genre = story.tags.joinToString()
+        status = if (story.completed) SManga.COMPLETED else SManga.ONGOING
+        description = buildString {
+            if (story.isPaywalled) append("!! Contains Paid Chapters !!\n\n")
+            append(story.description)
+        }.trim()
+    }
+
+    private fun parseChapterList(story: StoryDetails): List<SChapter> {
         return story.parts.mapIndexedNotNull { i, part ->
             if (excludeLocked && part.restricted) return@mapIndexedNotNull null
             SChapter.create().apply {
@@ -171,18 +165,16 @@ class Wattpad :
 
     // region Pages
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, baseUrl + chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val html = client.newCall(GET(url, apiHeaders)).execute().body.string()
+        val html = client.newCall(GET(url, headers)).execute().body.string()
         if (html.trimStart().startsWith("{\"result\":\"ERROR\"")) {
             return "<p>This chapter is locked or unavailable.</p>"
         }
         return html
     }
-
-    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
 
     // endregion
 
@@ -198,7 +190,7 @@ class Wattpad :
 
     // region Filters
 
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         Filter.Header("Category and Sort apply only when the search box is empty"),
         CategoryFilter(),
         SortFilter(),
@@ -244,20 +236,20 @@ class Wattpad :
     // region Data classes
 
     @Serializable
-    data class StoriesResponse(
+    class StoriesResponse(
         val stories: List<WattpadStory> = emptyList(),
         val nextUrl: String? = null,
     )
 
     @Serializable
-    data class WattpadStory(
+    class WattpadStory(
         val title: String = "",
         val url: String = "",
         val cover: String = "",
     )
 
     @Serializable
-    data class StoryDetails(
+    class StoryDetails(
         val title: String = "",
         val description: String = "",
         val cover: String = "",
@@ -269,13 +261,13 @@ class Wattpad :
     )
 
     @Serializable
-    data class WattpadUser(
+    class WattpadUser(
         val name: String = "",
         val fullname: String = "",
     )
 
     @Serializable
-    data class WattpadPart(
+    class WattpadPart(
         val id: Long = 0,
         val title: String = "",
         val createDate: String = "",
