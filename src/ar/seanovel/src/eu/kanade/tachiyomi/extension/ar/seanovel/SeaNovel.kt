@@ -135,8 +135,11 @@ class SeaNovel :
     }
 
     override fun pageListParse(response: Response): List<Page> {
-        val url = response.request.url.encodedPath
-        return listOf(Page(0, url))
+        val path = response.request.url.encodedPath
+        val webPath = path
+            .replaceFirst("/api/novel/", "/novels/")
+            .replaceFirst("/api/novels/", "/novels/")
+        return listOf(Page(0, webPath))
     }
 
     override suspend fun fetchPageText(page: Page): String {
@@ -213,6 +216,16 @@ class SeaNovel :
     }
 
     override fun imageUrlParse(response: Response): String = ""
+
+    override fun getMangaUrl(manga: SManga): String {
+        val fixedUrl = manga.url.replaceFirst("/api/novel/", "/novels/").replaceFirst("/api/novels/", "/novels/")
+        return "$baseUrl$fixedUrl"
+    }
+
+    override fun getChapterUrl(chapter: SChapter): String {
+        val fixedUrl = chapter.url.replaceFirst("/api/novel/", "/novels/").replaceFirst("/api/novels/", "/novels/")
+        return "$baseUrl$fixedUrl"
+    }
 
     private fun NovelDto.toSManga(): SManga = SManga.create().apply {
         url = "/novels/$slug"
