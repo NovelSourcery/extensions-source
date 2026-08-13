@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
 import okhttp3.Request
 import okhttp3.Response
+import org.jsoup.nodes.Element
 
 class RewayahFans :
     HttpSource(),
@@ -30,6 +31,16 @@ class RewayahFans :
         else -> "/$this"
     }
 
+    private fun Element.thumbnailUrl(): String = selectFirst("img")?.let { img ->
+        img.attr("data-orig-file")
+            .takeIf { it.isNotEmpty() }
+            ?: img.attr("data-large-file")
+            .takeIf { it.isNotEmpty() }
+            ?: img.attr("src")
+            .takeIf { it.isNotEmpty() }
+            ?: ""
+    } ?: ""
+
     private fun parseNovelList(document: org.jsoup.nodes.Document): List<SManga> {
         return document.select("figure.wp-block-image").mapNotNull { figure ->
             val captionLink = figure.selectFirst("figcaption a[href]")
@@ -43,7 +54,7 @@ class RewayahFans :
                 SManga.create().apply {
                     url = relativeUrl
                     this.title = title
-                    thumbnail_url = imgElement?.attr("src") ?: ""
+                    thumbnail_url = figure.thumbnailUrl()
                 }
             } else {
                 null
@@ -63,7 +74,8 @@ class RewayahFans :
     override fun popularMangaParse(response: Response): MangasPage {
         val document = response.asJsoup()
         val novels = parseNovelList(document)
-        return MangasPage(novels, false)
+        val hasNextPage = document.selectFirst(".page-links a.post-page-numbers") != null
+        return MangasPage(novels, hasNextPage)
     }
 
     override fun latestUpdatesRequest(page: Int): Request {
@@ -78,7 +90,8 @@ class RewayahFans :
     override fun latestUpdatesParse(response: Response): MangasPage {
         val document = response.asJsoup()
         val novels = parseNovelList(document)
-        return MangasPage(novels, false)
+        val hasNextPage = document.selectFirst(".page-links a.post-page-numbers") != null
+        return MangasPage(novels, hasNextPage)
     }
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = GET("$baseUrl/?s=$query", headers)
@@ -96,13 +109,17 @@ class RewayahFans :
                 SManga.create().apply {
                     url = relativeUrl
                     this.title = title
-                    thumbnail_url = imgElement?.attr("src") ?: ""
+                    thumbnail_url = imgElement?.attr("data-orig-file")
+                        ?: imgElement?.attr("data-large-file")
+                        ?: imgElement?.attr("src")
+                        ?: ""
                 }
             } else {
                 null
             }
         }.distinctBy { it.url }
-        return MangasPage(novels, false)
+        val hasNextPage = document.selectFirst(".page-links a.post-page-numbers") != null
+        return MangasPage(novels, hasNextPage)
     }
 
     override fun mangaDetailsParse(response: Response): SManga {
