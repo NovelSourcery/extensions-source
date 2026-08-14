@@ -17,6 +17,6 @@ keiyoushi {
 
     deeplink {
         host("turkcelightnovels.com")
-        path("/{slug}")
+        path("/light-novel/..*")
     }
 }

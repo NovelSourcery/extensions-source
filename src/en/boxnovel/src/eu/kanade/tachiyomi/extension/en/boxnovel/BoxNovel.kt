@@ -5,6 +5,7 @@ import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import keiyoushi.annotation.Source
+import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
@@ -13,6 +14,7 @@ import okhttp3.Request
 abstract class BoxNovel : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
     override val reverseChapterListDefault = true
+    override val mangaPathTemplate = SlugPath("/read/")
 
     override fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val url = "$baseUrl/page/$page/".toHttpUrl().newBuilder()

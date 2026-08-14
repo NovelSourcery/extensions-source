@@ -18,6 +18,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.lib.chapterutils.shouldReturnExisting
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.jsonInstance
 import keiyoushi.utils.setAltTitles
@@ -47,6 +48,14 @@ abstract class MadaraNovel :
     protected val json: Json = jsonInstance
 
     private val preferences: SharedPreferences by getPreferencesLazy()
+
+    /**
+     * The site's manga detail URL shape, as `<prefix><slug>`. [SManga.url] is stored as the bare
+     * slug (see [SlugPath]); override when a site doesn't use the common "/novel/" prefix.
+     * A stored value starting with "/" is a pre-existing full-path entry from before this source
+     * adopted slug storage, and is resolved unchanged regardless of this template.
+     */
+    protected open val mangaPathTemplate: SlugPath = SlugPath("/novel/")
 
     /**
      * Override this in subclass to set default value.
@@ -202,7 +211,7 @@ abstract class MadaraNovel :
 
                 SManga.create().apply {
                     this.title = title
-                    this.url = relativeUrl
+                    this.url = mangaPathTemplate.slug(relativeUrl)
                     thumbnail_url = cover
                 }
             } catch (e: Exception) {
@@ -211,7 +220,7 @@ abstract class MadaraNovel :
         }
     }
 
-    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
 
     private fun mangaDetailsParse(doc: Document, mangaUrl: String): SManga {
         doc.select(".manga-title-badges, #manga-title span").remove()
@@ -295,7 +304,7 @@ abstract class MadaraNovel :
     // merely start with a number aren't eaten)
     private val numberSeparatorRegex = Regex("""^(\d+(?:\.\d+)?)\s*[-–—:]\s*""")
 
-    protected open fun buildChapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+    protected open fun buildChapterListRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -453,6 +462,8 @@ abstract class MadaraNovel :
         return if (reverseChapterList) chapters else chapters.reversed()
     }
 
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
     /**
      * For novel sources, we return a single Page containing the chapter URL.
      * The actual content is fetched via fetchPageText() which is called for NovelSource.
@@ -460,11 +471,12 @@ abstract class MadaraNovel :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, baseUrl + chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        val pageUrl = if (page.url.startsWith("http")) page.url else baseUrl + page.url
+        val response = client.newCall(GET(pageUrl, headers)).execute()
         val doc = response.asJsoup()
 
         // LN Reader: Check for captcha before parsing
-        checkCaptcha(doc, baseUrl + page.url)
+        checkCaptcha(doc, pageUrl)
 
         // Remove ads and unwanted elements FIRST (comprehensive list from LN Reader)
         doc.select(
@@ -595,7 +607,7 @@ abstract class MadaraNovel :
         // The history endpoint requires a fresh wp-manga nonce. It lives in the
         // `var manga = {...}` JS object on the chapter reading page, so scrape it
         // from there (with the novel page as fallback).
-        val nonce = fetchNonce(target.url) ?: fetchNonce(manga.url) ?: return
+        val nonce = fetchNonce(target.url) ?: fetchNonce(mangaPathTemplate.resolve(manga.url)) ?: return
 
         val historyBody = FormBody.Builder()
             .add("action", "manga-user-history")
@@ -656,12 +668,13 @@ abstract class MadaraNovel :
 
     /** Returns the cached post id, or scrapes the novel page when missing. */
     private fun resolvePostId(manga: SManga): String? {
-        cachedPostId(cacheKey(manga.url))?.let { return it }
+        val mangaUrl = mangaPathTemplate.resolve(manga.url)
+        cachedPostId(cacheKey(mangaUrl))?.let { return it }
         return try {
-            val url = baseUrl + manga.url
+            val url = baseUrl + mangaUrl
             val response = client.newCall(GET(url, headers)).execute()
             val doc = Jsoup.parse(response.use { it.body.string() }, url)
-            extractPostId(doc)?.also { cachePostId(manga.url, it) }
+            extractPostId(doc)?.also { cachePostId(mangaUrl, it) }
         } catch (e: Exception) {
             null
         }

@@ -17,6 +17,7 @@ keiyoushi {
 
     deeplink {
         host("lightnovelheaven.com")
+        path("/series/..*")
         path("/novel/..*")
     }
 }

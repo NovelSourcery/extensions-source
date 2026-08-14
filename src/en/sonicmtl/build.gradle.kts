@@ -12,10 +12,11 @@ keiyoushi {
 
     source {
         lang = "en"
-        baseUrl = "https://sonicmtl.com"
+        baseUrl = "https://www.sonicmtl.com"
     }
 
     deeplink {
+        host("www.sonicmtl.com")
         host("sonicmtl.com")
         path("/novel/..*")
     }

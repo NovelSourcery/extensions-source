@@ -17,6 +17,7 @@ keiyoushi {
 
     deeplink {
         host("novelnice.com")
+        path("/read/..*")
         path("/novel/..*")
     }
 }

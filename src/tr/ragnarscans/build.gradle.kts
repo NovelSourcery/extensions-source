@@ -17,6 +17,6 @@ keiyoushi {
 
     deeplink {
         host("ragnarscans.com")
-        path("/{slug}")
+        path("/..*")
     }
 }

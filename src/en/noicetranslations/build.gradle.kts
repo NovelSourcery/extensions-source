@@ -17,6 +17,7 @@ keiyoushi {
 
     deeplink {
         host("noicetranslations.com")
+        path("/manga/..*")
         path("/novel/..*")
     }
 }

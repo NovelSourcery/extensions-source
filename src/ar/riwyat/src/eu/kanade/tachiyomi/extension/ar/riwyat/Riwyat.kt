@@ -137,7 +137,8 @@ abstract class Riwyat : MadaraNovel() {
     }
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        val pageUrl = if (page.url.startsWith("http")) page.url else baseUrl + page.url
+        val response = client.newCall(GET(pageUrl, headers)).execute()
         val doc = response.asJsoup()
 
         val contentElement = doc.selectFirst(".reading-content.current .text-left")
