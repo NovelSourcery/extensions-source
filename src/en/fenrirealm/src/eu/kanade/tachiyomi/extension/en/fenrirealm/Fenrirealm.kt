@@ -423,13 +423,13 @@ abstract class Fenrirealm :
 
     // Data classes
     @Serializable
-    data class SearchResponse(
+    class SearchResponse(
         val data: List<NovelDto>,
         val meta: MetaDto,
     )
 
     @Serializable
-    data class MetaDto(
+    class MetaDto(
         @SerialName("current_page") val currentPage: Int,
         @SerialName("last_page") val lastPage: Int,
         @SerialName("per_page") val perPage: Int,
@@ -437,25 +437,25 @@ abstract class Fenrirealm :
     )
 
     @Serializable
-    data class NovelDto(
-        val id: Int,
-        val title: String,
-        val slug: String,
-        @SerialName("alt_title") val altTitle: String? = null,
-        val description: String? = null,
-        val type: String? = null,
-        val genres: List<GenreDto>? = null,
-        val tags: List<TagDto>? = null,
-        val cover: String? = null,
-        @SerialName("cover_data_url") val coverDataUrl: String? = null,
-        @SerialName("user") val author: AuthorDto? = null,
-        @SerialName("chapters_count") val chaptersCount: Int? = null,
-        val status: String? = null,
-        val subscribers: Int? = null,
-        val stats: StatsDto? = null,
-        val schedules: SchedulesDto? = null,
-        val notices: List<NoticeDto>? = null,
-        @SerialName("global_note") val globalNote: String? = null,
+    class NovelDto(
+        private val id: Int,
+        private val title: String,
+        private val slug: String,
+        @SerialName("alt_title") private val altTitle: String? = null,
+        private val description: String? = null,
+        private val type: String? = null,
+        private val genres: List<GenreDto>? = null,
+        private val tags: List<TagDto>? = null,
+        private val cover: String? = null,
+        @SerialName("cover_data_url") private val coverDataUrl: String? = null,
+        @SerialName("user") private val author: AuthorDto? = null,
+        @SerialName("chapters_count") private val chaptersCount: Int? = null,
+        private val status: String? = null,
+        private val subscribers: Int? = null,
+        private val stats: StatsDto? = null,
+        private val schedules: SchedulesDto? = null,
+        private val notices: List<NoticeDto>? = null,
+        @SerialName("global_note") private val globalNote: String? = null,
     ) {
         fun toSManga(baseUrl: String, mangaPathTemplate: SlugPath): SManga = SManga.create().apply {
             url = mangaPathTemplate.slug("/series/$slug")
@@ -590,7 +590,7 @@ abstract class Fenrirealm :
     }
 
     @Serializable
-    data class StatsDto(
+    class StatsDto(
         @SerialName("total_views") val totalViews: Int? = null,
         @SerialName("daily_views") val dailyViews: Int? = null,
         @SerialName("weekly_views") val weeklyViews: Int? = null,
@@ -601,7 +601,7 @@ abstract class Fenrirealm :
     )
 
     @Serializable
-    data class AuthorStatsDto(
+    class AuthorStatsDto(
         @SerialName("total_works") val totalWorks: Int? = null,
         @SerialName("total_followers") val totalFollowers: Int? = null,
         @SerialName("total_views") val totalViews: Int? = null,
@@ -609,7 +609,7 @@ abstract class Fenrirealm :
     )
 
     @Serializable
-    data class ChapterFrequencyDto(
+    class ChapterFrequencyDto(
         @SerialName("chapters_per_week") val chaptersPerWeek: Double? = null,
         @SerialName("frequency_text") val frequencyText: String? = null,
         @SerialName("last_chapter_days_ago") val lastChapterDaysAgo: Double? = null,
@@ -621,14 +621,14 @@ abstract class Fenrirealm :
     )
 
     @Serializable
-    data class SeriesAgeDto(
+    class SeriesAgeDto(
         @SerialName("start_year") val startYear: Int? = null,
         @SerialName("years_active") val yearsActive: Int? = null,
         @SerialName("age_text") val ageText: String? = null,
     )
 
     @Serializable
-    data class SchedulesDto(
+    class SchedulesDto(
         val days: List<String>? = null,
         val values: List<Int>? = null,
         val time: List<String>? = null,
@@ -636,32 +636,32 @@ abstract class Fenrirealm :
     )
 
     @Serializable
-    data class NoticeDto(
+    class NoticeDto(
         val message: String? = null,
     )
 
     @Serializable
-    data class GenreDto(
+    class GenreDto(
         val id: Int,
         val name: String,
         val slug: String,
     )
 
     @Serializable
-    data class TagDto(
+    class TagDto(
         val id: Int,
         val name: String,
         val slug: String,
     )
 
     @Serializable
-    data class AuthorDto(
+    class AuthorDto(
         val username: String? = null,
         val name: String? = null,
     )
 
     @Serializable
-    data class GroupDto(
+    class GroupDto(
         val index: Int? = null,
         val slug: String? = null,
         val name: String? = null,
@@ -669,7 +669,7 @@ abstract class Fenrirealm :
     )
 
     @Serializable
-    data class ChapterApiDto(
+    class ChapterApiDto(
         val number: Int,
         val part: Int?,
         val title: String? = null,
@@ -681,7 +681,7 @@ abstract class Fenrirealm :
     )
 
     @Serializable
-    data class LockedDto(
+    class LockedDto(
         val price: Int? = null,
         @SerialName("unlocked_at") val unlockedAt: String? = null,
     )

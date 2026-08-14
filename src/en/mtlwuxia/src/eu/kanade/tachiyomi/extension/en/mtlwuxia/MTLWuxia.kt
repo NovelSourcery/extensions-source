@@ -237,7 +237,7 @@ abstract class MTLWuxia :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     @Serializable
-    private data class PageChapterDto(
+    private class PageChapterDto(
         val content: String,
         val translatorNote: String? = null,
     )
@@ -260,7 +260,7 @@ abstract class MTLWuxia :
     // ---- Filter metadata (fetched once, cached in preferences) ----
 
     @Serializable
-    private data class FilterOption(val name: String, val slug: String)
+    private class FilterOption(val name: String, val slug: String)
 
     private fun loadCachedOptions(key: String): List<FilterOption> {
         val raw = preferences.getString(key, null) ?: return emptyList()
@@ -390,25 +390,25 @@ abstract class MTLWuxia :
     // ---- DTOs ----
 
     @Serializable
-    private data class NovelListJson(
+    private class NovelListJson(
         val novels: List<NovelDto>,
         val nextCursor: String? = null,
     )
 
     @Serializable
-    private data class NovelDto(
-        val title: String,
-        val slug: String,
-        val author: String? = null,
-        val synopsis: String? = null,
-        val coverImage: String? = null,
-        val status: String? = null,
-        val totalChapters: Int? = null,
-        val views: Int? = null,
-        val rating: Double? = null,
-        @SerialName("_count") val count: CountDto? = null,
-        val genres: List<GenreWrapper> = emptyList(),
-        val tags: List<TagWrapper> = emptyList(),
+    private class NovelDto(
+        private val title: String,
+        private val slug: String,
+        private val author: String? = null,
+        private val synopsis: String? = null,
+        private val coverImage: String? = null,
+        private val status: String? = null,
+        private val totalChapters: Int? = null,
+        private val views: Int? = null,
+        private val rating: Double? = null,
+        @SerialName("_count") private val count: CountDto? = null,
+        private val genres: List<GenreWrapper> = emptyList(),
+        private val tags: List<TagWrapper> = emptyList(),
     ) {
         fun toSManga(mangaPathTemplate: SlugPath): SManga = SManga.create().apply {
             url = mangaPathTemplate.slug("/novel/${this@NovelDto.slug}")
@@ -444,26 +444,26 @@ abstract class MTLWuxia :
     }
 
     @Serializable
-    private data class CountDto(
+    private class CountDto(
         val bookmarks: Int? = null,
         val comments: Int? = null,
         val ratings: Int? = null,
     )
 
     @Serializable
-    private data class GenreWrapper(val genre: FilterOption? = null)
+    private class GenreWrapper(val genre: FilterOption? = null)
 
     @Serializable
-    private data class TagWrapper(val tag: FilterOption? = null)
+    private class TagWrapper(val tag: FilterOption? = null)
 
     @Serializable
-    private data class ChapterListJson(
+    private class ChapterListJson(
         val chapters: List<ChapterDto>,
         val nextCursor: String? = null,
     )
 
     @Serializable
-    private data class ChapterDto(
+    private class ChapterDto(
         val number: Float,
         val title: String? = null,
         val publishedAt: String? = null,

@@ -350,13 +350,13 @@ abstract class Calibre :
     }
 
     @Serializable
-    private data class SearchResponse(
+    private class SearchResponse(
         @SerialName("book_ids") val bookIds: List<Long> = emptyList(),
         @SerialName("total_num") val totalNum: Int = 0,
     )
 
     @Serializable
-    private data class BookMetadata(
+    private class BookMetadata(
         val title: String = "",
         val authors: List<String> = emptyList(),
         val comments: String? = null,
@@ -365,32 +365,32 @@ abstract class Calibre :
     )
 
     @Serializable
-    private data class BookManifest(
+    private class BookManifest(
         val spine: List<String> = emptyList(),
         val toc: TocItem = TocItem(),
         @SerialName("book_hash") val bookHash: BookHash = BookHash(),
     )
 
     @Serializable
-    private data class BookHash(
+    private class BookHash(
         val size: Long = 0,
         val mtime: Long = 0,
     )
 
     @Serializable
-    private data class TocItem(
+    private class TocItem(
         val title: String? = null,
         val dest: String? = null,
         val children: List<TocItem> = emptyList(),
     )
 
     @Serializable
-    private data class TreeFile(
+    private class TreeFile(
         val tree: TreeNode = TreeNode(),
     )
 
     @Serializable
-    private data class TreeNode(
+    private class TreeNode(
         val n: String? = null,
         // Attribute pairs; entries are [name, value] with an occasional trailing flag.
         val a: List<List<JsonElement>> = emptyList(),
