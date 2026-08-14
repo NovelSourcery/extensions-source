@@ -11,8 +11,13 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.double
@@ -37,37 +42,24 @@ import uy.kohesive.injekt.api.get
  * `/novels/{slug}/chapter-{n}`) page as the single largest `self.__next_f.push([1,"..."])` RSC
  * string literal, so we just decode that instead of touching Supabase.
  *
- * manga.url packs 3 values needed by different endpoints: "{abbreviation}|{novelId}|{slug}".
+ * manga.url packs 3 values needed by different endpoints: "{abbreviation}|{novelId}|{slug}" - not
+ * a single-prefix path shape, so it's stored as-is rather than through SlugPath.
  * chapter.url packs "{novelId}|{chapterId}".
  */
-class GenesisStudio :
-    HttpSource(),
+@Source
+abstract class GenesisStudio :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
-    override val name = "GenesisStudio"
-    override val baseUrl = "https://genesistudio.com"
     private val apiUrl = "https://api.genesistudio.com"
-    override val lang = "en"
     override val supportsLatest = false
-    override val isNovelSource = true
 
     private val json = Json { ignoreUnknownKeys = true }
 
     private val listFields = """["id","novel_title","cover","abbreviation","slug","coverFile.filename_disk"]"""
 
     // ======================== Browse / Search ========================
-
-    override fun popularMangaRequest(page: Int): Request = novelsListRequest()
-
-    // No separate "latest" feed exists (single unpaginated catalog call); supportsLatest is
-    // false so these are never actually invoked, but HttpSource requires an implementation.
-    override fun latestUpdatesRequest(page: Int): Request = novelsListRequest()
-    override fun latestUpdatesParse(response: Response): MangasPage = parseNovelsList(response, null)
-
-    // The catalog is a single unpaginated call; the query rides in the URL fragment (never sent
-    // over the wire) so searchMangaParse can filter client-side without a second request.
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = novelsListRequest().let { it.newBuilder().url(it.url.newBuilder().fragment(query).build()).build() }
 
     private fun novelsListRequest(): Request {
         val url = "$baseUrl/api/directus/novels".toHttpUrl().newBuilder()
@@ -78,9 +70,18 @@ class GenesisStudio :
         return GET(url, headers)
     }
 
-    override fun popularMangaParse(response: Response): MangasPage = parseNovelsList(response, null)
+    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelsList(client.newCall(novelsListRequest()).execute(), null)
 
-    override fun searchMangaParse(response: Response): MangasPage = parseNovelsList(response, response.request.url.fragment)
+    // No separate "latest" feed exists (single unpaginated catalog call); supportsLatest is
+    // false so this is never actually invoked, but KeiSource requires an implementation.
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelsList(client.newCall(novelsListRequest()).execute(), null)
+
+    // The catalog is a single unpaginated call; the query rides in the URL fragment (never sent
+    // over the wire) so parseNovelsList can filter client-side without a second request.
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val request = novelsListRequest().let { it.newBuilder().url(it.url.newBuilder().fragment(query).build()).build() }
+        return parseNovelsList(client.newCall(request).execute(), request.url.fragment)
+    }
 
     private fun parseNovelsList(response: Response, query: String?): MangasPage {
         val array = json.parseToJsonElement(response.body.string()).jsonArray
@@ -109,16 +110,45 @@ class GenesisStudio :
 
     private fun normalize(value: String) = value.lowercase().filter { it.isLetterOrDigit() }
 
-    // ======================== Details ========================
+    // ======================== Details + Chapters ========================
 
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/novels/${manga.url.split('|').getOrElse(2) { manga.url }}"
 
-    override fun mangaDetailsRequest(manga: SManga): Request {
+    private fun buildMangaDetailsRequest(manga: SManga): Request {
         val abbreviation = manga.url.substringBefore('|')
         return GET("$baseUrl/api/directus/novels/by-abbreviation/$abbreviation", headers)
     }
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    private fun buildChapterListRequest(manga: SManga): Request {
+        val id = manga.url.split('|').getOrElse(1) { "" }
+        return GET("$baseUrl/api/novels-chapter/$id", headers)
+    }
+
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate = coroutineScope {
+        // Details and chapters live on different API endpoints - fire both concurrently.
+        val detailsDeferred = if (fetchDetails) {
+            async { parseMangaDetails(client.newCall(buildMangaDetailsRequest(manga)).execute()) }
+        } else {
+            null
+        }
+        val chaptersDeferred = if (fetchChapters) {
+            async { parseChapterList(client.newCall(buildChapterListRequest(manga)).execute()) }
+        } else {
+            null
+        }
+
+        SMangaUpdate(
+            manga = detailsDeferred?.await() ?: manga,
+            chapters = chaptersDeferred?.await() ?: chapters,
+        )
+    }
+
+    private fun parseMangaDetails(response: Response): SManga {
         val data = json.parseToJsonElement(response.body.string()).jsonObject
         val abbreviation = data["abbreviation"]?.jsonPrimitive?.contentOrNull.orEmpty()
         val id = data["id"]?.jsonPrimitive?.contentOrNull.orEmpty()
@@ -142,14 +172,7 @@ class GenesisStudio :
         }
     }
 
-    // ======================== Chapters ========================
-
-    override fun chapterListRequest(manga: SManga): Request {
-        val id = manga.url.split('|').getOrElse(1) { "" }
-        return GET("$baseUrl/api/novels-chapter/$id", headers)
-    }
-
-    override fun chapterListParse(response: Response): List<SChapter> {
+    private fun parseChapterList(response: Response): List<SChapter> {
         val novelId = response.request.url.pathSegments.last()
         val chapters = json.parseToJsonElement(response.body.string())
             .jsonObject["data"]?.jsonObject?.get("chapters")?.jsonArray ?: return emptyList()
@@ -185,11 +208,7 @@ class GenesisStudio :
     // the page is reliably the chapter body (verified: ~14000 chars vs ~5000 for the next-largest
     // metadata push).
 
-    override fun pageListRequest(chapter: SChapter): Request = throw UnsupportedOperationException("Not used")
-    override fun pageListParse(response: Response): List<Page> = throw UnsupportedOperationException("Not used")
-    override fun fetchPageList(chapter: SChapter): rx.Observable<List<Page>> = rx.Observable.just(listOf(Page(0, getChapterUrl(chapter))))
-
-    override fun imageUrlParse(response: Response): String = ""
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, getChapterUrl(chapter)))
 
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET(page.url, headers)).execute()
@@ -216,7 +235,7 @@ class GenesisStudio :
             .joinToString("") { "<p>$it</p>" }
     }
 
-    override fun getFilterList(): FilterList = FilterList()
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList()
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         SwitchPreferenceCompat(screen.context).apply {
