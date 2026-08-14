@@ -7,7 +7,12 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.Headers
@@ -20,16 +25,12 @@ import uy.kohesive.injekt.injectLazy
  * WordExcerpt is a React SPA backed by a public Supabase REST API.
  * All data comes from the `novels` and `chapters` tables.
  */
-class WordExcerpt :
-    HttpSource(),
+@Source
+abstract class WordExcerpt :
+    KeiSource(),
     NovelSource {
 
-    override val name = "WordExcerpt"
-    override val baseUrl = "https://wordexcerpt.com"
-    override val lang = "en"
     override val supportsLatest = true
-    override val isNovelSource = true
-    override val client = network.cloudflareClient
 
     private val json: Json by injectLazy()
 
@@ -42,7 +43,15 @@ class WordExcerpt :
 
     private val pageSize = 30
 
-    override fun headersBuilder(): Headers.Builder = super.headersBuilder()
+    /**
+     * The site's novel detail URL shape, as `/<slug>` (root-level). [SManga.url] is stored as
+     * the bare slug (see [SlugPath]); a stored value starting with "/" is a pre-existing
+     * full-path entry from before this source adopted slug storage, and is resolved unchanged
+     * regardless of this template.
+     */
+    private val mangaPathTemplate = SlugPath("/")
+
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = this
         .add("apikey", anonKey)
         .add("Authorization", "Bearer $anonKey")
         .add("Accept", "application/json")
@@ -70,7 +79,7 @@ class WordExcerpt :
 
     private fun Novel.toSManga() = SManga.create().apply {
         title = this@toSManga.title
-        url = "/$slug"
+        url = mangaPathTemplate.slug("/$slug")
         thumbnail_url = cover_url
         author = author_name
         description = synopsis
@@ -105,17 +114,13 @@ class WordExcerpt :
         return MangasPage(novels.map { it.toSManga() }, novels.size >= pageSize)
     }
 
-    override fun popularMangaRequest(page: Int): Request = novelsListRequest(page, "view_count.desc")
-    override fun popularMangaParse(response: Response): MangasPage = parseNovels(response)
+    override suspend fun getPopularManga(page: Int): MangasPage = parseNovels(client.newCall(novelsListRequest(page, "view_count.desc")).execute())
 
-    override fun latestUpdatesRequest(page: Int): Request = novelsListRequest(page, "updated_at.desc")
-    override fun latestUpdatesParse(response: Response): MangasPage = parseNovels(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovels(client.newCall(novelsListRequest(page, "updated_at.desc")).execute())
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = novelsListRequest(page, "view_count.desc", mapOf("title" to "ilike.*$query*"))
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseNovels(client.newCall(novelsListRequest(page, "view_count.desc", mapOf("title" to "ilike.*$query*"))).execute())
 
-    override fun searchMangaParse(response: Response): MangasPage = parseNovels(response)
-
-    private fun slugOf(mangaUrl: String) = mangaUrl.trim('/')
+    private fun slugOf(mangaUrl: String) = mangaPathTemplate.resolve(mangaUrl).trim('/')
 
     private fun novelBySlugRequest(slug: String): Request {
         val url = "$api/novels".toHttpUrl().newBuilder()
@@ -126,20 +131,30 @@ class WordExcerpt :
         return GET(url, headers)
     }
 
-    override fun mangaDetailsRequest(manga: SManga): Request = novelBySlugRequest(slugOf(manga.url))
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        val novel = json.decodeFromString<List<Novel>>(response.body.string()).firstOrNull()
-            ?: return SManga.create()
-        return novel.toSManga()
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate = coroutineScope {
+        // Both details and chapters need the novel's internal id, so resolve the novel row once
+        // and fan out from there instead of looking it up twice.
+        val novel = client.newCall(novelBySlugRequest(slugOf(manga.url))).execute()
+            .let { json.decodeFromString<List<Novel>>(it.body.string()) }
+            .firstOrNull()
+
+        val detailsDeferred = if (fetchDetails) async { novel?.toSManga() ?: manga } else null
+        val chaptersDeferred = if (fetchChapters) async { novel?.id?.let { fetchChapterList(it) } ?: chapters } else null
+
+        SMangaUpdate(
+            manga = detailsDeferred?.await() ?: manga,
+            chapters = chaptersDeferred?.await() ?: chapters,
+        )
     }
 
-    override fun chapterListRequest(manga: SManga): Request = novelBySlugRequest(slugOf(manga.url))
-
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val novelId = json.decodeFromString<List<Novel>>(response.body.string()).firstOrNull()?.id
-            ?: return emptyList()
-
+    private fun fetchChapterList(novelId: String): List<SChapter> {
         val url = "$api/chapters".toHttpUrl().newBuilder()
             .addQueryParameter("select", "id,number,title,is_free")
             .addQueryParameter("novel_id", "eq.$novelId")
@@ -163,9 +178,7 @@ class WordExcerpt :
         }.reversed()
     }
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
-
-    override fun imageUrlParse(response: Response): String = ""
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
         val chapterId = page.url.trim('/').substringAfterLast('/')
