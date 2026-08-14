@@ -448,18 +448,18 @@ abstract class MtlBooks :
     // ======================== Data Classes ========================
 
     @Serializable
-    data class SearchResponse(
+    class SearchResponse(
         val status: Int,
         val result: SearchResult,
     )
 
     @Serializable
-    data class SearchResult(
+    class SearchResult(
         val data: List<NovelItem>,
     )
 
     @Serializable
-    data class NovelItem(
+    class NovelItem(
         val name: String,
         val slug: String,
         @SerialName("alt_name") val altName: List<String> = emptyList(),
@@ -474,19 +474,19 @@ abstract class MtlBooks :
     )
 
     @Serializable
-    data class AuthorInfo(
+    class AuthorInfo(
         val id: Int? = null,
         val name: String? = null,
     )
 
     @Serializable
-    data class NovelDetailResponse(
+    class NovelDetailResponse(
         val status: Int,
         val result: NovelDetail,
     )
 
     @Serializable
-    data class NovelDetail(
+    class NovelDetail(
         val id: Int,
         val name: String,
         val slug: String,
@@ -501,62 +501,62 @@ abstract class MtlBooks :
     )
 
     @Serializable
-    data class ChapterListRequest(
-        @SerialName("novel_slug") val novelSlug: String,
-        val page: Int,
-        val order: String,
+    class ChapterListRequest(
+        @SerialName("novel_slug") private val novelSlug: String,
+        private val page: Int,
+        private val order: String,
     )
 
     @Serializable
-    data class ChapterListResponse(
+    class ChapterListResponse(
         val status: Int,
         val result: ChapterListResult,
     )
 
     @Serializable
-    data class ChapterListResult(
+    class ChapterListResult(
         @SerialName("novel_slug") val novelSlug: String,
-        @SerialName("total_chapters") val totalChapters: Int,
+        @SerialName("total_chapters") private val totalChapters: Int,
         @SerialName("chapter_lists") val chapterLists: List<ChapterItem>,
         val pagination: Pagination,
     )
 
     @Serializable
-    data class ChapterItem(
+    class ChapterItem(
         @SerialName("chapter_number") val chapterNumber: Int,
         @SerialName("chapter_title") val chapterTitle: String,
         @SerialName("chapter_slug") val chapterSlug: String,
     )
 
     @Serializable
-    data class Pagination(
-        val page: Int,
+    class Pagination(
+        private val page: Int,
         val limit: Int,
         val total: Int,
     )
 
     @Serializable
-    data class ChapterReadRequest(
-        @SerialName("novel_slug") val novelSlug: String,
-        @SerialName("chapter_slug") val chapterSlug: String,
+    class ChapterReadRequest(
+        @SerialName("novel_slug") private val novelSlug: String,
+        @SerialName("chapter_slug") private val chapterSlug: String,
     )
 
     @Serializable
-    data class ChapterReadResponse(
+    class ChapterReadResponse(
         val status: Int,
         val result: ChapterReadResult,
     )
 
     @Serializable
-    data class ChapterReadResult(
+    class ChapterReadResult(
         @SerialName("novel_slug") val novelSlug: String,
         val chapter: ChapterContent,
     )
 
     @Serializable
-    data class ChapterContent(
-        @SerialName("chapter_number") val chapterNumber: Int,
-        @SerialName("chapter_title") val chapterTitle: String,
+    class ChapterContent(
+        @SerialName("chapter_number") private val chapterNumber: Int,
+        @SerialName("chapter_title") private val chapterTitle: String,
         @SerialName("chapter_slug") val chapterSlug: String,
         val content: String? = null,
     )
