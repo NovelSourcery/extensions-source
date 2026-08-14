@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -42,7 +43,6 @@ abstract class WebNovelNovels :
     private fun SManga.setSlugUrl(href: String) = setSlugUrl(mangaPath, href)
 
     override fun Headers.Builder.configureHeaders(): Headers.Builder = this
-        .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .set("Accept-Language", "en-US,en;q=0.9")
         .set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
         .set("Referer", baseUrl)
@@ -363,7 +363,7 @@ abstract class WebNovelNovels :
     }
 
     private fun parseChapterList(response: Response): List<SChapter> {
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
         val chapters = mutableListOf<SChapter>()
         document.select(".volume-item").forEach { volumeItem ->
             val originalVolumeName = volumeItem.first()?.text()?.trim().orEmpty()
@@ -379,7 +379,7 @@ abstract class WebNovelNovels :
 
                 val chapter = SChapter.create().apply {
                     name = if (isLocked) "$volumeName: $chapterName 🔒" else "$volumeName: $chapterName"
-                    setUrlWithoutDomain(a.attr("href"))
+                    setUrlWithoutDomain(a.attr("abs:href"))
                     chapter_number = (chapters.size + 1).toFloat()
                 }
                 chapters.add(chapter)

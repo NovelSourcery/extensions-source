@@ -11,7 +11,6 @@ import org.jsoup.Jsoup
 @Source
 abstract class SystemTranslation : LightNovelWPNovel() {
     override fun Headers.Builder.configureHeaders(): Headers.Builder = this
-        .add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .add("Referer", baseUrl)
 
     // Latest updates from homepage

@@ -6,6 +6,7 @@ import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
+import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
@@ -586,12 +587,7 @@ abstract class FictionZone :
      * Scrape the chapter content from the HTML page.
      */
     private fun fetchFromHtml(fullUrl: String): String {
-        val request = Request.Builder()
-            .url(fullUrl)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            .build()
-
-        val response = client.newCall(request).execute()
+        val response = client.newCall(GET(fullUrl, headers)).execute()
         val html = response.body?.string() ?: throw Exception("Empty response from chapter page")
 
         val doc = Jsoup.parse(html)
