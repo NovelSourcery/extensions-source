@@ -15,6 +15,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.formattedText
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.setNumber
@@ -39,6 +40,8 @@ abstract class Novelight :
 
     override val isNovelSource = true
 
+    private val mangaPath = SlugPath("/book/")
+
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
@@ -54,7 +57,7 @@ abstract class Novelight :
             val href = el.attr("href").ifBlank { return@mapNotNull null }
             SManga.create().apply {
                 title = el.selectFirst("div.title")?.text()?.trim().orEmpty()
-                url = "/" + href.trimStart('/')
+                url = mangaPath.slug("/" + href.trimStart('/'))
                 thumbnail_url = el.selectFirst("img")?.attr("abs:src")
             }
         }
@@ -113,7 +116,7 @@ abstract class Novelight :
         }
 
         // fetchChapters is true: one fetch of the details page serves both outputs.
-        val rawBody = client.newCall(GET(baseUrl + manga.url, headers)).execute().body.string()
+        val rawBody = client.newCall(GET(baseUrl + mangaPath.resolve(manga.url), headers)).execute().body.string()
         val detailDoc = Jsoup.parse(rawBody, baseUrl)
         val updatedManga = if (fetchDetails) parseMangaDetails(detailDoc) else manga
 
@@ -140,7 +143,7 @@ abstract class Novelight :
             val req = GET(
                 ajaxUrl,
                 headers.newBuilder()
-                    .add("Referer", baseUrl + manga.url)
+                    .add("Referer", baseUrl + mangaPath.resolve(manga.url))
                     .add("X-Requested-With", "XMLHttpRequest")
                     .build(),
             )
@@ -215,7 +218,7 @@ abstract class Novelight :
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private fun fetchDetailsDoc(manga: SManga): Document = Jsoup.parse(client.newCall(GET(baseUrl + manga.url, headers)).execute().body.string(), baseUrl)
+    private fun fetchDetailsDoc(manga: SManga): Document = Jsoup.parse(client.newCall(GET(baseUrl + mangaPath.resolve(manga.url), headers)).execute().body.string(), baseUrl)
 
     private fun parseDate(date: String?): Long {
         if (date.isNullOrBlank()) return 0L
@@ -226,15 +229,17 @@ abstract class Novelight :
         }
     }
 
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, "$baseUrl${chapter.url}"))
 
     @Serializable
     private class ReadChapter(val content: String = "")
 
     override suspend fun fetchPageText(page: Page): String {
-        // page.url is /book/chapter/<id>; content comes from the read-chapter JSON endpoint.
+        // page.url is an absolute /book/chapter/<id> URL; content comes from the read-chapter JSON endpoint.
         val chapterId = page.url.trimEnd('/').substringAfterLast('/')
-        val chapterUrl = baseUrl + "/" + page.url.trimStart('/')
+        val chapterUrl = if (page.url.startsWith("http")) page.url else baseUrl + "/" + page.url.trimStart('/')
         val req = GET(
             "$baseUrl/book/ajax/read-chapter/$chapterId",
             headers.newBuilder()
