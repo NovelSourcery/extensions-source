@@ -7,21 +7,24 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.source.model.UpdateStrategy
-import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import okhttp3.Request
-import okhttp3.Response
+import org.jsoup.nodes.Document
 
-class RewayahFans :
-    HttpSource(),
+@Source
+abstract class RewayahFans :
+    KeiSource(),
     NovelSource {
 
-    override val name = "Rewayah Fans"
-    override val baseUrl = "https://rewayahfans.net"
-    override val lang = "ar"
     override val supportsLatest = true
-    override val isNovelSource = true
+
+    /** [SManga.url] stored as a bare slug (root-level WP post permalink, no fixed prefix). */
+    private val mangaPathTemplate = SlugPath("/")
 
     private fun String.toRelativeUrl(): String = when {
         startsWith("http://rewayahfans.net") -> removePrefix("http://rewayahfans.net")
@@ -30,7 +33,7 @@ class RewayahFans :
         else -> "/$this"
     }
 
-    private fun parseNovelList(document: org.jsoup.nodes.Document): List<SManga> {
+    private fun parseNovelList(document: Document): List<SManga> {
         return document.select("figure.wp-block-image").mapNotNull { figure ->
             val captionLink = figure.selectFirst("figcaption a[href]")
                 ?: figure.selectFirst("a[href]")
@@ -41,7 +44,7 @@ class RewayahFans :
             val relativeUrl = href.toRelativeUrl()
             if (relativeUrl.isNotEmpty() && title.isNotEmpty()) {
                 SManga.create().apply {
-                    url = relativeUrl
+                    url = mangaPathTemplate.slug(relativeUrl)
                     this.title = title
                     thumbnail_url = imgElement?.attr("src") ?: ""
                 }
@@ -51,7 +54,7 @@ class RewayahFans :
         }.distinctBy { it.url }
     }
 
-    override fun popularMangaRequest(page: Int): Request {
+    private fun buildPopularMangaRequest(page: Int): Request {
         val url = if (page == 1) {
             "$baseUrl/%d9%82%d8%a7%d8%a6%d9%85%d8%a9-%d8%a7%d9%84%d8%b1%d9%88%d8%a7%d9%8a%d8%a7%d8%aa/"
         } else {
@@ -60,13 +63,14 @@ class RewayahFans :
         return GET(url, headers)
     }
 
-    override fun popularMangaParse(response: Response): MangasPage {
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val response = client.newCall(buildPopularMangaRequest(page)).execute()
         val document = response.asJsoup()
         val novels = parseNovelList(document)
         return MangasPage(novels, false)
     }
 
-    override fun latestUpdatesRequest(page: Int): Request {
+    private fun buildLatestUpdatesRequest(page: Int): Request {
         val url = if (page == 1) {
             baseUrl
         } else {
@@ -75,15 +79,17 @@ class RewayahFans :
         return GET(url, headers)
     }
 
-    override fun latestUpdatesParse(response: Response): MangasPage {
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val response = client.newCall(buildLatestUpdatesRequest(page)).execute()
         val document = response.asJsoup()
         val novels = parseNovelList(document)
         return MangasPage(novels, false)
     }
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = GET("$baseUrl/?s=$query", headers)
+    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request = GET("$baseUrl/?s=$query", headers)
 
-    override fun searchMangaParse(response: Response): MangasPage {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val response = client.newCall(buildSearchMangaRequest(page, query, filters)).execute()
         val document = response.asJsoup()
         val novels = document.select("li.wp-block-post").mapNotNull { item ->
             val titleLink = item.selectFirst("h2.wp-block-post-title a[href]")
@@ -94,7 +100,7 @@ class RewayahFans :
             val relativeUrl = href.toRelativeUrl()
             if (relativeUrl.isNotEmpty() && title.isNotEmpty()) {
                 SManga.create().apply {
-                    url = relativeUrl
+                    url = mangaPathTemplate.slug(relativeUrl)
                     this.title = title
                     thumbnail_url = imgElement?.attr("src") ?: ""
                 }
@@ -105,45 +111,60 @@ class RewayahFans :
         return MangasPage(novels, false)
     }
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
+
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
         val document = response.asJsoup()
-        return SManga.create().apply {
-            title = document.selectFirst("h1.wp-block-post-title")
-                ?.text()?.trim()
-                ?: run {
-                    val pageTitle = document.title()
-                        .substringBefore(" - الصفحة الرئيسية")
-                        .substringBefore(" – الصفحة الرئيسية")
-                        .substringBefore(" - روايه فانز")
-                        .substringBefore(" – روايه فانز")
-                        .trim()
-                    if (pageTitle.isNotEmpty()) {
-                        pageTitle
-                    } else {
-                        document.selectFirst("meta[property=og:title]")
-                            ?.attr("content")
-                            ?.substringBefore(" - الصفحة الرئيسية")
-                            ?.substringBefore(" – الصفحة الرئيسية")
-                            ?.substringBefore(" - روايه فانز")
-                            ?.substringBefore(" – روايه فانز")
-                            ?.trim()
-                            ?.takeIf { it.isNotEmpty() }
-                            ?: document.selectFirst("h1")?.text()?.trim()
-                            ?: ""
-                    }
-                }
-            thumbnail_url = document.select("meta[property=og:image]").attr("content")
-            description = document.select("meta[property=og:description]").attr("content").trim()
-            if (description.isNullOrBlank()) {
-                description = document.select(".entry-content p").firstOrNull()?.text()?.trim()
-            }
-            status = SManga.UNKNOWN
-            update_strategy = UpdateStrategy.ALWAYS_UPDATE
-        }
+
+        val updatedManga = if (fetchDetails) parseMangaDetails(document) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(document) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val document = response.asJsoup()
+    private fun parseMangaDetails(document: Document): SManga = SManga.create().apply {
+        title = document.selectFirst("h1.wp-block-post-title")
+            ?.text()?.trim()
+            ?: run {
+                val pageTitle = document.title()
+                    .substringBefore(" - الصفحة الرئيسية")
+                    .substringBefore(" – الصفحة الرئيسية")
+                    .substringBefore(" - روايه فانز")
+                    .substringBefore(" – روايه فانز")
+                    .trim()
+                if (pageTitle.isNotEmpty()) {
+                    pageTitle
+                } else {
+                    document.selectFirst("meta[property=og:title]")
+                        ?.attr("content")
+                        ?.substringBefore(" - الصفحة الرئيسية")
+                        ?.substringBefore(" – الصفحة الرئيسية")
+                        ?.substringBefore(" - روايه فانز")
+                        ?.substringBefore(" – روايه فانز")
+                        ?.trim()
+                        ?.takeIf { it.isNotEmpty() }
+                        ?: document.selectFirst("h1")?.text()?.trim()
+                        ?: ""
+                }
+            }
+        thumbnail_url = document.select("meta[property=og:image]").attr("content")
+        description = document.select("meta[property=og:description]").attr("content").trim()
+        if (description.isNullOrBlank()) {
+            description = document.select(".entry-content p").firstOrNull()?.text()?.trim()
+        }
+        status = SManga.UNKNOWN
+        update_strategy = UpdateStrategy.ALWAYS_UPDATE
+    }
+
+    private fun parseChapterList(document: Document): List<SChapter> {
         val chapters = document.select("p.has-medium-font-size a[href]").mapNotNull { link ->
             val href = link.attr("href")
             val text = link.text().trim()
@@ -161,9 +182,9 @@ class RewayahFans :
         return chapters.reversed()
     }
 
-    override fun pageListParse(response: Response): List<Page> {
-        val url = response.request.url.encodedPath
-        return listOf(Page(0, url))
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        return listOf(Page(0, response.request.url.encodedPath))
     }
 
     override suspend fun fetchPageText(page: Page): String {
@@ -180,6 +201,4 @@ class RewayahFans :
         }
         return paragraphs.joinToString("<br><br>") { it.html() }
     }
-
-    override fun imageUrlParse(response: Response): String = ""
 }
