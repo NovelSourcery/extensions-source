@@ -18,6 +18,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.Headers
+import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -194,6 +195,14 @@ abstract class GoldenRest :
             append("<p>الفصل ${releaseData?.chapter?.toInt() ?: 0}</p>")
             append("<p>${releaseData?.manga?.summary ?: ""}</p>")
         }
+    }
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        if (!response.isSuccessful) return null
+        val data = json.decodeFromString<MangaResponse>(response.body.string()).mangaData ?: return null
+        return data.toSManga()
     }
 
     override fun getFilterList(data: JsonElement?): FilterList = FilterList(

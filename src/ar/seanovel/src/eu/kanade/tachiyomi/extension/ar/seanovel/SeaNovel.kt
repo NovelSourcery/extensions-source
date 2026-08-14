@@ -15,6 +15,7 @@ import keiyoushi.utils.SlugPath
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import okhttp3.HttpUrl
 import okhttp3.Request
 import org.jsoup.nodes.Document
 
@@ -109,6 +110,13 @@ abstract class SeaNovel :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        if (!response.isSuccessful) return null
+        return json.decodeFromString<NovelDto>(response.body.string()).toSManga()
+    }
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
