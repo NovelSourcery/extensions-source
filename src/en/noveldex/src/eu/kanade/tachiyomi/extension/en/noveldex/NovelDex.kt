@@ -17,6 +17,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.jsonInstance
 import keiyoushi.utils.setAltTitles
 import kotlinx.serialization.json.Json
@@ -53,6 +54,10 @@ abstract class NovelDex :
     }
 
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
+
+    // Stored value is "<type>/<slug>" (e.g. "novel/some-title") - the type prefix can't be
+    // dropped, it's needed to rebuild a working URL, so it rides along inside the "slug".
+    private val mangaPath = SlugPath("/series/")
 
     // RSC headers - required for React Server Component response
     // Minimal approach (NovelsHub style): just rsc:1 + Accept: */*
@@ -210,7 +215,7 @@ abstract class NovelDex :
 
                     SManga.create().apply {
                         this.title = title
-                        this.url = "/series/$urlType/$slug"
+                        this.url = "$urlType/$slug"
                         this.thumbnail_url = cover
                     }
                 } catch (e: Exception) {
@@ -389,7 +394,7 @@ abstract class NovelDex :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and chapters both come from the same detail-page RSC response - fetch it once.
-        val response = client.newCall(GET("$baseUrl${manga.url}", rscHeaders())).execute()
+        val response = client.newCall(GET("$baseUrl${mangaPath.resolve(manga.url)}", rscHeaders())).execute()
         val rawBody = response.body.string()
         val requestPath = response.request.url.encodedPath
 
@@ -557,6 +562,8 @@ abstract class NovelDex :
             } catch (_: Exception) {}
         }
     }
+
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
     // ======================== Pages ========================
 
