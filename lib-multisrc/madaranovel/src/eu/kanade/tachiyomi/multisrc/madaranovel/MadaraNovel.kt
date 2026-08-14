@@ -25,6 +25,7 @@ import keiyoushi.utils.setAltTitles
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import okhttp3.FormBody
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -463,6 +464,14 @@ abstract class MadaraNovel :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga {
+        val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
+        val request = buildMangaDetailsRequest(manga)
+        val doc = client.newCall(request).execute().asJsoup()
+        checkCaptcha(doc, request.url.toString())
+        return mangaDetailsParse(doc, request.url.encodedPath).apply { this.url = manga.url }
+    }
 
     /**
      * For novel sources, we return a single Page containing the chapter URL.

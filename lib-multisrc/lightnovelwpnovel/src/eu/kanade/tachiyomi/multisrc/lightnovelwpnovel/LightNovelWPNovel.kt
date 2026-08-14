@@ -14,6 +14,7 @@ import keiyoushi.utils.SlugPath
 import keiyoushi.utils.formattedText
 import keiyoushi.utils.setAltTitles
 import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -260,6 +261,12 @@ abstract class LightNovelWPNovel :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga {
+        val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
+        val doc = client.newCall(buildMangaDetailsRequest(manga)).execute().asJsoup()
+        return parseMangaDetails(doc).apply { this.url = manga.url }
+    }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
         val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()

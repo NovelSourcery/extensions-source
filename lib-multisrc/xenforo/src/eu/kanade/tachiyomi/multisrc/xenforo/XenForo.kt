@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -305,6 +306,12 @@ abstract class XenForo :
     // endregion
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga {
+        val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
+        val doc = client.newCall(buildMangaDetailsRequest(manga)).execute().asJsoup()
+        return parseMangaDetails(doc).apply { this.url = manga.url }
+    }
 
     // region Pages (novel content)
 

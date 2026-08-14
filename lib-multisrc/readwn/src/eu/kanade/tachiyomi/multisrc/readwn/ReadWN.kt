@@ -16,6 +16,7 @@ import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.JsonElement
 import okhttp3.FormBody
 import okhttp3.Headers
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
@@ -295,6 +296,12 @@ abstract class ReadWN :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga {
+        val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
+        val doc = client.newCall(buildMangaDetailsRequest(manga)).execute().asJsoup()
+        return mangaDetailsParse(doc).apply { this.url = manga.url }
+    }
 
     // ======================== Pages ========================
 

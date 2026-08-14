@@ -23,6 +23,7 @@ import keiyoushi.utils.SlugPath
 import keiyoushi.utils.setAltTitles
 import kotlinx.serialization.json.JsonElement
 import okhttp3.FormBody
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
@@ -792,6 +793,11 @@ abstract class ReadNovelFull :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga {
+        val doc = client.newCall(GET(url, headers)).execute().asJsoup()
+        return mangaDetailsParse(doc).apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
+    }
 
     // ======================== Pages ========================
 
