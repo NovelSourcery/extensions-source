@@ -16,6 +16,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonElement
@@ -33,6 +34,11 @@ abstract class WebNovelNovels :
     ConfigurableSource {
 
     override val isNovelSource = true
+
+    private val mangaPath = SlugPath("/book/")
+
+    /** Stores [SManga.url] as a bare slug via [mangaPath]. */
+    private fun SManga.setSlugUrl(href: String) = setSlugUrl(mangaPath, href)
 
     override fun Headers.Builder.configureHeaders(): Headers.Builder = this
         .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -75,7 +81,7 @@ abstract class WebNovelNovels :
                 mangas.add(
                     SManga.create().apply {
                         this.title = title
-                        setUrlWithoutDomain(href.replace("m.webnovel.com", "www.webnovel.com"))
+                        setSlugUrl(href.replace("m.webnovel.com", "www.webnovel.com"))
                         thumbnail_url = if (imgSrc.isNotEmpty()) {
                             if (imgSrc.startsWith("http")) imgSrc else "https:$imgSrc"
                         } else {
@@ -97,7 +103,7 @@ abstract class WebNovelNovels :
                 mangas.add(
                     SManga.create().apply {
                         title = thumb.attr("title").ifEmpty { img.attr("alt") }
-                        setUrlWithoutDomain(thumb.attr("href"))
+                        setSlugUrl(thumb.attr("href"))
                         thumbnail_url = img.attr("data-original").let { src ->
                             if (src.isNotEmpty()) "https:$src" else "https:" + img.attr("src")
                         }
@@ -215,7 +221,7 @@ abstract class WebNovelNovels :
                 mangas.add(
                     SManga.create().apply {
                         this.title = title
-                        setUrlWithoutDomain(href.replace("m.webnovel.com", "www.webnovel.com"))
+                        setSlugUrl(href.replace("m.webnovel.com", "www.webnovel.com"))
                         thumbnail_url = if (imgSrc.isNotEmpty()) {
                             if (imgSrc.startsWith("http")) imgSrc else "https:$imgSrc"
                         } else {
@@ -240,7 +246,7 @@ abstract class WebNovelNovels :
                 mangas.add(
                     SManga.create().apply {
                         title = thumb.attr("title").ifEmpty { img.attr("alt") }
-                        setUrlWithoutDomain(thumb.attr("href"))
+                        setSlugUrl(thumb.attr("href"))
                         // Search uses 'src', category uses 'data-original'
                         val imgSrc = if (isSearch) img.attr("src") else img.attr("data-original").ifEmpty { img.attr("src") }
                         thumbnail_url = if (imgSrc.startsWith("http")) imgSrc else "https:$imgSrc"
@@ -339,12 +345,12 @@ abstract class WebNovelNovels :
     ): SMangaUpdate = coroutineScope {
         // Details and chapters live on different pages - fire both concurrently when both are needed.
         val detailsDeferred = if (fetchDetails) {
-            async { parseMangaDetails(client.newCall(GET(baseUrl + manga.url, headers)).execute()) }
+            async { parseMangaDetails(client.newCall(GET(baseUrl + mangaPath.resolve(manga.url), headers)).execute()) }
         } else {
             null
         }
         val chaptersDeferred = if (fetchChapters) {
-            async { parseChapterList(client.newCall(GET(baseUrl + manga.url + "/catalog", headers)).execute()) }
+            async { parseChapterList(client.newCall(GET(baseUrl + mangaPath.resolve(manga.url) + "/catalog", headers)).execute()) }
         } else {
             null
         }
@@ -408,6 +414,8 @@ abstract class WebNovelNovels :
     }
 
     // Pages - novel content - return single page with chapter URL for text fetching
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     // Novel content
