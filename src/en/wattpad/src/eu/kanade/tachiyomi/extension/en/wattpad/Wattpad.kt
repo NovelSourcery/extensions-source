@@ -16,6 +16,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -35,6 +36,8 @@ abstract class Wattpad :
     ConfigurableSource {
 
     override val isNovelSource = true
+
+    private val mangaPath = SlugPath("/story/")
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -98,7 +101,7 @@ abstract class Wattpad :
 
     // Details/chapters come from the api/v3 endpoint, but "open in browser" must point at the
     // human story/part page, not the API URL that getMangaUrl/getChapterUrl default to.
-    override fun getMangaUrl(manga: SManga): String = baseUrl + manga.url
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
     override fun getChapterUrl(chapter: SChapter): String {
         val partId = PART_ID_REGEX.find(chapter.url)?.groupValues?.get(1)
@@ -124,7 +127,7 @@ abstract class Wattpad :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and chapters both come from the same story-info endpoint - fetch it once.
-        val story = json.decodeFromString<StoryDetails>(client.newCall(storyInfoRequest(manga.url)).execute().body.string())
+        val story = json.decodeFromString<StoryDetails>(client.newCall(storyInfoRequest(mangaPath.resolve(manga.url))).execute().body.string())
 
         val updatedManga = if (fetchDetails) parseMangaDetails(story) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(story) else chapters
@@ -182,7 +185,7 @@ abstract class Wattpad :
 
     private fun WattpadStory.toSManga() = SManga.create().apply {
         title = this@toSManga.title
-        url = this@toSManga.url.removePrefix(baseUrl)
+        url = mangaPath.slug(this@toSManga.url.removePrefix(baseUrl))
         thumbnail_url = cover
     }
 
