@@ -8,24 +8,26 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
 import keiyoushi.utils.parseAs
+import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
-import okhttp3.Response
 
-class NovelArchive :
-    HttpSource(),
+// NOTE: manga.url is already stored as a bare opaque id (no site-path prefix at all - see
+// createSMangaFromJson/toSManga below) and is combined with different prefixes for the webview
+// link ("/novel/") vs the API endpoint ("/api/novels/"), so there's no single site-path shape to
+// apply SlugPath to; it's left as-is.
+@Source
+abstract class NovelArchive :
+    KeiSource(),
     NovelSource {
 
-    override val name = "Novel Archive"
-    override val baseUrl = "https://novelarchive.cc"
-    override val lang = "en"
     override val supportsLatest = true
 
-    override val client = network.client
-
-    private fun listRequest(page: Int, sort: String, query: String, filters: FilterList): Request {
+    private fun buildListRequest(page: Int, sort: String, query: String, filters: FilterList): Request {
         val url = "$baseUrl/api/novels".toHttpUrl().newBuilder()
             .addQueryParameter("page", page.toString())
             .addQueryParameter("per_page", "24")
@@ -49,23 +51,21 @@ class NovelArchive :
         return GET(url.build(), headers)
     }
 
-    override fun popularMangaRequest(page: Int): Request = listRequest(page, "popular", "", FilterList())
-
-    override fun popularMangaParse(response: Response): MangasPage {
-        val result = response.parseAs<NovelListResponse>()
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val result = client.newCall(buildListRequest(page, "popular", "", FilterList())).execute().parseAs<NovelListResponse>()
         return MangasPage(result.novels.map { it.toSManga() }, result.pagination.hasNext)
     }
 
-    override fun latestUpdatesRequest(page: Int): Request = listRequest(page, "recent", "", FilterList())
-
-    override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
-
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val sort = filters.filterIsInstance<SortFilter>().firstOrNull()?.toUriPart() ?: "recent"
-        return listRequest(page, sort, query, filters)
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val result = client.newCall(buildListRequest(page, "recent", "", FilterList())).execute().parseAs<NovelListResponse>()
+        return MangasPage(result.novels.map { it.toSManga() }, result.pagination.hasNext)
     }
 
-    override fun searchMangaParse(response: Response) = popularMangaParse(response)
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val sort = filters.filterIsInstance<SortFilter>().firstOrNull()?.toUriPart() ?: "recent"
+        val result = client.newCall(buildListRequest(page, sort, query, filters)).execute().parseAs<NovelListResponse>()
+        return MangasPage(result.novels.map { it.toSManga() }, result.pagination.hasNext)
+    }
 
     private fun absoluteCover(url: String?): String? = when {
         url.isNullOrBlank() -> null
@@ -91,56 +91,63 @@ class NovelArchive :
 
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.url}"
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET("$baseUrl/api/novels/${manga.url}", headers)
+    private fun buildMangaDetailsRequest(manga: SManga): Request = GET("$baseUrl/api/novels/${manga.url}", headers)
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        val dto = response.parseAs<NovelDetailResponse>().novel
-        return SManga.create().apply {
-            title = dto.title
-            url = dto.id
-            author = dto.author
-            thumbnail_url = absoluteCover(dto.coverUrl)
-            genre = cleanGenres(dto.genres)
-            status = when {
-                dto.releaseStatus?.contains("complete", ignoreCase = true) == true -> SManga.COMPLETED
-                dto.ongoing.equals("ongoing", ignoreCase = true) -> SManga.ONGOING
-                else -> SManga.UNKNOWN
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        // Details and the chapter list both live in the same API response - fetch it once.
+        val dto = client.newCall(buildMangaDetailsRequest(manga)).execute().parseAs<NovelDetailResponse>().novel
+
+        val updatedManga = if (fetchDetails) {
+            SManga.create().apply {
+                title = dto.title
+                url = dto.id
+                author = dto.author
+                thumbnail_url = absoluteCover(dto.coverUrl)
+                genre = cleanGenres(dto.genres)
+                status = when {
+                    dto.releaseStatus?.contains("complete", ignoreCase = true) == true -> SManga.COMPLETED
+                    dto.ongoing.equals("ongoing", ignoreCase = true) -> SManga.ONGOING
+                    else -> SManga.UNKNOWN
+                }
+                description = buildString {
+                    dto.rating?.takeIf { it > 0 }?.let {
+                        append("Rating: $it")
+                        dto.ratingCount?.let { c -> append(" ($c)") }
+                        append("\n")
+                    }
+                    dto.views?.takeIf { it.isNotBlank() }?.let { append("Views: $it\n") }
+                    dto.totalChapters?.let { append("Chapters: $it\n") }
+                    val desc = dto.description?.trim()
+                    if (!desc.isNullOrBlank()) {
+                        if (isNotEmpty()) append("\n")
+                        append(desc)
+                    }
+                }.trim()
             }
-            description = buildString {
-                dto.rating?.takeIf { it > 0 }?.let {
-                    append("Rating: $it")
-                    dto.ratingCount?.let { c -> append(" ($c)") }
-                    append("\n")
-                }
-                dto.views?.takeIf { it.isNotBlank() }?.let { append("Views: $it\n") }
-                dto.totalChapters?.let { append("Chapters: $it\n") }
-                val desc = dto.description?.trim()
-                if (!desc.isNullOrBlank()) {
-                    if (isNotEmpty()) append("\n")
-                    append(desc)
-                }
-            }.trim()
+        } else {
+            manga
         }
-    }
 
-    override fun chapterListRequest(manga: SManga): Request = GET("$baseUrl/api/novels/${manga.url}", headers)
+        val updatedChapters = if (fetchChapters) {
+            val novelId = dto.id
+            dto.chapterNames.mapIndexed { index, chapterName ->
+                val number = index + 1
+                SChapter.create().apply {
+                    name = chapterName
+                    url = "$novelId/$number"
+                    chapter_number = number.toFloat()
+                }
+            }.reversed()
+        } else {
+            chapters
+        }
 
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val dto = response.parseAs<NovelDetailResponse>().novel
-        val novelId = dto.id
-        return dto.chapterNames.mapIndexed { index, chapterName ->
-            val number = index + 1
-            SChapter.create().apply {
-                name = chapterName
-                url = "$novelId/$number"
-                chapter_number = number.toFloat()
-            }
-        }.reversed()
-    }
-
-    override fun pageListRequest(chapter: SChapter): Request {
-        val (novelId, number) = chapter.url.split("/")
-        return GET("$baseUrl/api/novels/$novelId/chapters/$number", headers)
+        return SMangaUpdate(updatedManga, updatedChapters)
     }
 
     override fun getChapterUrl(chapter: SChapter): String {
@@ -148,7 +155,7 @@ class NovelArchive :
         return "$baseUrl/novel/$novelId/chapters/$number"
     }
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
         val (novelId, number) = page.url.split("/")
@@ -160,9 +167,7 @@ class NovelArchive :
             .joinToString("") { "<p>$it</p>" }
     }
 
-    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
-
-    override fun getFilterList() = FilterList(
+    override fun getFilterList(data: JsonElement?) = FilterList(
         SortFilter(),
         StatusFilter(),
         AiFilter(),
