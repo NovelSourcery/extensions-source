@@ -25,7 +25,6 @@ import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import uy.kohesive.injekt.injectLazy
@@ -134,7 +133,7 @@ abstract class NovelLib :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val updatedManga = if (fetchDetails) {
-            val doc = Jsoup.parse(client.newCall(buildMangaDetailsRequest(manga)).execute().body.string())
+            val doc = client.newCall(buildMangaDetailsRequest(manga)).execute().asJsoup()
             parseMangaDetails(doc)
         } else {
             manga

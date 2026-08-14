@@ -16,7 +16,6 @@ import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
 import okhttp3.Request
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.text.SimpleDateFormat
@@ -40,7 +39,7 @@ abstract class FUCKNOVELPIA :
     private fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/?page=$page", headers)
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val document = Jsoup.parse(client.newCall(buildPopularMangaRequest(page)).execute().body.string())
+        val document = client.newCall(buildPopularMangaRequest(page)).execute().asJsoup()
 
         parseTotalPages(document)
 
@@ -90,7 +89,7 @@ abstract class FUCKNOVELPIA :
             }
         }
 
-        val document = Jsoup.parse(client.newCall(request ?: GET(url, headers)).execute().body.string())
+        val document = client.newCall(request ?: GET(url, headers)).execute().asJsoup()
         parseTotalPages(document)
         val novels = document.select("div.card").mapNotNull { parseNovelCard(it) }
         return MangasPage(novels, hasNextPage(document))
@@ -106,7 +105,7 @@ abstract class FUCKNOVELPIA :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val document = Jsoup.parse(client.newCall(buildMangaDetailsRequest(manga)).execute().body.string())
+        val document = client.newCall(buildMangaDetailsRequest(manga)).execute().asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(document) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(document) else chapters

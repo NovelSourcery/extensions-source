@@ -374,14 +374,14 @@ abstract class NovelUpdates :
     private fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/series-ranking/?rank=popmonth&pg=$page", headers)
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val doc = Jsoup.parse(client.newCall(buildPopularMangaRequest(page)).execute().body.string())
+        val doc = client.newCall(buildPopularMangaRequest(page)).execute().asJsoup()
         return parseNovelsFromSearch(doc)
     }
 
     private fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/series-finder/?sf=1&sort=sdate&order=desc&pg=$page", headers)
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val doc = Jsoup.parse(client.newCall(buildLatestUpdatesRequest(page)).execute().body.string())
+        val doc = client.newCall(buildLatestUpdatesRequest(page)).execute().asJsoup()
         return parseNovelsFromSearch(doc)
     }
 
@@ -398,7 +398,7 @@ abstract class NovelUpdates :
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val doc = Jsoup.parse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute().body.string())
+        val doc = client.newCall(buildSearchMangaRequest(page, query, filters)).execute().asJsoup()
         return parseNovelsFromSearch(doc)
     }
 

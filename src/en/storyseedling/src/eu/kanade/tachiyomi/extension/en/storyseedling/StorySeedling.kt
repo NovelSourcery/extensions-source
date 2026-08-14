@@ -225,7 +225,7 @@ abstract class StorySeedling :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list toc data both live on the same story page.
-        val doc = Jsoup.parse(client.newCall(buildMangaDetailsRequest(manga)).execute().body.string())
+        val doc = client.newCall(buildMangaDetailsRequest(manga)).execute().asJsoup()
         checkTurnstile(doc)
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga

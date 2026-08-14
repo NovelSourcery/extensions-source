@@ -24,7 +24,6 @@ import okhttp3.FormBody
 import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.Jsoup
 import java.net.URLEncoder
 
 @Source
@@ -335,7 +334,7 @@ abstract class Ranobes :
     private fun fetchAllChapters(manga: SManga): List<SChapter> {
         val allChapters = mutableListOf<SChapter>()
         var currentPage = 1
-        var document = Jsoup.parse(client.newCall(buildChapterListRequest(manga)).execute().body.string())
+        var document = client.newCall(buildChapterListRequest(manga)).execute().asJsoup()
 
         val baseChapterUrl = buildChapterListRequest(manga).url.toString()
             .substringBefore("/page/")

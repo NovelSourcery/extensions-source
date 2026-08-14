@@ -262,7 +262,7 @@ abstract class NovelBuddy :
         }
 
         if (content.isBlank()) {
-            val document = Jsoup.parse(client.newCall(GET(buildUrl(page.url), headers)).execute().body.string())
+            val document = client.newCall(GET(buildUrl(page.url), headers)).execute().asJsoup()
             val script = document.selectFirst("#__NEXT_DATA__")?.html()
             content = if (script != null) {
                 runCatching {
