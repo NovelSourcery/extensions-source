@@ -13,7 +13,10 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -26,28 +29,28 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.HttpUrl
 import okhttp3.Request
-import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
 
-class Lnori :
-    HttpSource(),
+@Source
+abstract class Lnori :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
-    override val name = "Lnori"
-    override val baseUrl = "https://lnori.com"
-    override val lang = "en"
     override val supportsLatest = true
-    override val isNovelSource = true
 
-    override val id: Long = 787226943935256051
-
-    override val client = network.cloudflareClient
+    /**
+     * The site's novel detail URL shape, as `/series/<id>/<slug>`. [SManga.url] is stored as the
+     * bare (possibly multi-segment) remainder via [mangaPathTemplate]; a stored value starting
+     * with "/" is a pre-existing full-path entry and is resolved unchanged.
+     */
+    private val mangaPathTemplate = SlugPath("/series/")
 
     private val json: Json by injectLazy()
 
@@ -351,13 +354,14 @@ class Lnori :
     }
 
     private fun novelDataToSManga(novel: NovelData): SManga = SManga.create().apply {
-        url = novel.url.let {
+        val relativeUrl = novel.url.let {
             when {
                 it.startsWith("http") -> it.removePrefix(baseUrl)
                 it.startsWith("/") -> it
                 else -> "/$it"
             }
         }
+        url = mangaPathTemplate.slug(relativeUrl)
         title = novel.title
         thumbnail_url = novel.coverUrl
         author = novel.author
@@ -367,9 +371,7 @@ class Lnori :
 
     // ======================== Popular ========================
 
-    override fun popularMangaRequest(page: Int): Request = GET(baseUrl, headers)
-
-    override fun popularMangaParse(response: Response): MangasPage {
+    override suspend fun getPopularManga(page: Int): MangasPage {
         val novels = loadAllNovels()
         val sorted = novels.sortedByDescending { it.rel }
         val mangas = sorted.map { novelDataToSManga(it) }
@@ -378,9 +380,7 @@ class Lnori :
 
     // ======================== Latest ========================
 
-    override fun latestUpdatesRequest(page: Int): Request = popularMangaRequest(page)
-
-    override fun latestUpdatesParse(response: Response): MangasPage {
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
         val novels = loadAllNovels()
         val sorted = novels.sortedByDescending { it.date }
         val mangas = sorted.map { novelDataToSManga(it) }
@@ -389,11 +389,7 @@ class Lnori :
 
     // ======================== Search ========================
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = GET(baseUrl, headers)
-
-    override fun searchMangaParse(response: Response): MangasPage = MangasPage(emptyList(), false)
-
-    override fun fetchSearchManga(page: Int, query: String, filters: FilterList): rx.Observable<MangasPage> = rx.Observable.fromCallable {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         var novels = loadAllNovels()
 
         if (query.isNotBlank()) {
@@ -464,68 +460,83 @@ class Lnori :
             }
         }
 
-        MangasPage(novels.map { novelDataToSManga(it) }, false)
+        return MangasPage(novels.map { novelDataToSManga(it) }, false)
     }
 
     // ======================== Details ========================
 
-    override fun mangaDetailsRequest(manga: SManga): Request {
-        val url = if (manga.url.startsWith("http")) manga.url else baseUrl + manga.url
+    private fun buildMangaDetailsRequest(manga: SManga): Request {
+        val url = baseUrl + mangaPathTemplate.resolve(manga.url)
         return GET(url, headers)
     }
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        // Details and the chapter/volume list both live on the same novel page - fetch it once.
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val requestUrl = response.request.url
         val document = Jsoup.parse(response.body.string())
 
-        return SManga.create().apply {
-            // Title: try multiple selectors
-            title = document.selectFirst(
-                "h1.s-title, h1.series-title, h1[class*=title], h1[class*=series], h1",
-            )?.text()?.trim() ?: ""
+        val updatedManga = if (fetchDetails) parseMangaDetails(document) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(document, requestUrl) else chapters
 
-            author = document.selectFirst("p.author, .author, [itemprop='author'], [class*=author]")
-                ?.text()?.trim()
-                ?.removePrefix("Author:")?.trim()
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
 
-            val imgEl = document.selectFirst(
-                "figure.cover-wrap img, figure img, picture img, " +
-                    ".cover img, img[class*=cover], img[alt*=cover i], " +
-                    ".series-cover img, header img",
-            )
-            thumbnail_url = imgEl?.let { img ->
-                img.attr("srcset").split(",").firstOrNull()?.trim()?.split(" ")?.firstOrNull()?.takeIf { it.isNotEmpty() }
-                    ?: img.attr("data-src").ifEmpty { null }
-                    ?: img.attr("src").ifEmpty { null }
-            }?.let { resolveImageUrl(it) }
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
-            description = document.selectFirst(
-                "p.description, .series-description, .synopsis, [itemprop='description'], " +
-                    ".desc, .summary, [class*=description], [class*=synopsis]",
-            )?.text()?.trim() ?: run {
-                // Fallback: find paragraph with >80 chars that's likely the description
-                document.select("p").firstOrNull { it.text().length > 80 }?.text()?.trim()
-            }
+    private fun parseMangaDetails(document: Document): SManga = SManga.create().apply {
+        // Title: try multiple selectors
+        title = document.selectFirst(
+            "h1.s-title, h1.series-title, h1[class*=title], h1[class*=series], h1",
+        )?.text()?.trim() ?: ""
 
-            // Genres/Tags
-            genre = document.select(
-                "nav.tags-box a.tag, .tags a, .genre-tag, a[class*=tag], " +
-                    "[class*=genre] a, [class*=tag] a",
-            )
-                .map { it.text().trim() }
-                .filter { it.isNotEmpty() }
-                .joinToString(", ")
-                .ifEmpty { null }
+        author = document.selectFirst("p.author, .author, [itemprop='author'], [class*=author]")
+            ?.text()?.trim()
+            ?.removePrefix("Author:")?.trim()
 
-            // Status
-            val statusText = document.selectFirst(".status, [data-status], [class*=status]")
-                ?.text()?.lowercase()
-            status = when {
-                statusText == null -> SManga.UNKNOWN
-                statusText.contains("complet") -> SManga.COMPLETED
-                statusText.contains("ongoing") || statusText.contains("publishing") -> SManga.ONGOING
-                statusText.contains("hiatus") -> SManga.ON_HIATUS
-                else -> SManga.UNKNOWN
-            }
+        val imgEl = document.selectFirst(
+            "figure.cover-wrap img, figure img, picture img, " +
+                ".cover img, img[class*=cover], img[alt*=cover i], " +
+                ".series-cover img, header img",
+        )
+        thumbnail_url = imgEl?.let { img ->
+            img.attr("srcset").split(",").firstOrNull()?.trim()?.split(" ")?.firstOrNull()?.takeIf { it.isNotEmpty() }
+                ?: img.attr("data-src").ifEmpty { null }
+                ?: img.attr("src").ifEmpty { null }
+        }?.let { resolveImageUrl(it) }
+
+        description = document.selectFirst(
+            "p.description, .series-description, .synopsis, [itemprop='description'], " +
+                ".desc, .summary, [class*=description], [class*=synopsis]",
+        )?.text()?.trim() ?: run {
+            // Fallback: find paragraph with >80 chars that's likely the description
+            document.select("p").firstOrNull { it.text().length > 80 }?.text()?.trim()
+        }
+
+        // Genres/Tags
+        genre = document.select(
+            "nav.tags-box a.tag, .tags a, .genre-tag, a[class*=tag], " +
+                "[class*=genre] a, [class*=tag] a",
+        )
+            .map { it.text().trim() }
+            .filter { it.isNotEmpty() }
+            .joinToString(", ")
+            .ifEmpty { null }
+
+        // Status
+        val statusText = document.selectFirst(".status, [data-status], [class*=status]")
+            ?.text()?.lowercase()
+        status = when {
+            statusText == null -> SManga.UNKNOWN
+            statusText.contains("complet") -> SManga.COMPLETED
+            statusText.contains("ongoing") || statusText.contains("publishing") -> SManga.ONGOING
+            statusText.contains("hiatus") -> SManga.ON_HIATUS
+            else -> SManga.UNKNOWN
         }
     }
 
@@ -665,21 +676,14 @@ class Lnori :
 
     // ======================== Chapters (Volumes) ========================
 
-    override fun chapterListRequest(manga: SManga): Request {
-        val url = if (manga.url.startsWith("http")) manga.url else baseUrl + manga.url
-        return GET(url, headers)
-    }
-
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val html = response.body.string()
-        val document = Jsoup.parse(html)
+    private fun parseChapterList(document: Document, requestUrl: HttpUrl): List<SChapter> {
         val chapters = mutableListOf<SChapter>()
 
         // URL format: /series/{novelId}/{slug}  e.g. /series/3336/mushoku-tensei-...
-        val pathSegments = response.request.url.pathSegments.filter { it.isNotEmpty() }
+        val pathSegments = requestUrl.pathSegments.filter { it.isNotEmpty() }
         val novelId = pathSegments.getOrNull(1) ?: pathSegments.firstOrNull() ?: ""
         val novelSlug = pathSegments.lastOrNull() ?: novelId
-        val basePath = response.request.url.encodedPath.trimEnd('/')
+        val basePath = requestUrl.encodedPath.trimEnd('/')
 
         // STRATEGY 1: Volume/chapter cards � broad selector
         val cards = document.select(
@@ -787,12 +791,11 @@ class Lnori :
 
     // ======================== Pages ========================
 
-    override fun pageListRequest(chapter: SChapter): Request {
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
         val url = if (chapter.url.startsWith("http")) chapter.url else baseUrl + chapter.url
-        return GET(url, headers)
+        val response = client.newCall(GET(url, headers)).execute()
+        return listOf(Page(0, response.request.url.toString()))
     }
-
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
 
     // ======================== Novel Content ========================
 
@@ -814,11 +817,9 @@ class Lnori :
         }
     }
 
-    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
-
     // ======================== Filters ========================
 
-    override fun getFilterList(): FilterList {
+    override fun getFilterList(data: JsonElement?): FilterList {
         val header = Filter.Header("Search is performed locally from homepage data")
         val separator = Filter.Separator()
 
