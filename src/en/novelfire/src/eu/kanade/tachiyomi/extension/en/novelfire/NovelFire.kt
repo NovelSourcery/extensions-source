@@ -17,6 +17,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.lib.chapterutils.checkCloudflare
 import keiyoushi.lib.chapterutils.paginatedChapterList
@@ -223,7 +224,7 @@ abstract class NovelFire :
 
     private fun fetchNovelList(request: Request): MangasPage {
         val response = client.newCall(request).execute()
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
         checkCloudflare(doc)
         return parseNovelList(doc)
     }
@@ -367,7 +368,7 @@ abstract class NovelFire :
         val path = url.encodedPath.toNovelPath()
         val response = client.newCall(GET(absoluteUrl(path), headers)).execute()
         if (!response.isSuccessful) return null
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
         checkCloudflare(doc)
         return mangaDetailsParse(doc).apply { this.url = mangaPath.slug(path) }
     }
@@ -437,7 +438,7 @@ abstract class NovelFire :
         // Manga details and the chapter list both live on the same novel page - fetch it once
         // regardless of which flag(s) are set, rather than issuing the request twice.
         val response = client.newCall(GET(absoluteUrl(mangaPath.resolve(manga.url)), headers)).execute()
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
         checkCloudflare(doc)
 
         val updatedManga = if (fetchDetails) mangaDetailsParse(doc) else manga
@@ -616,7 +617,7 @@ abstract class NovelFire :
     // ======================== Chapter Content ========================
 
     private fun parseChapterContent(response: Response): String {
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
         checkCloudflare(doc)
 
         // Remove bloat elements

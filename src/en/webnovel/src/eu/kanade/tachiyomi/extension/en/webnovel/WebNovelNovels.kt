@@ -25,7 +25,6 @@ import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Response
-import org.jsoup.Jsoup
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
@@ -51,7 +50,7 @@ abstract class WebNovelNovels :
     override suspend fun getPopularManga(page: Int): MangasPage = parsePopularOrLatest(client.newCall(GET("$baseUrl/stories/novel?orderBy=1&pageIndex=$page", headers)).execute())
 
     private fun parsePopularOrLatest(response: Response): MangasPage {
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
         val finalUrl = response.request.url.toString()
         val isMobile = finalUrl.contains("m.webnovel.com")
 
@@ -194,7 +193,7 @@ abstract class WebNovelNovels :
     }
 
     private fun parseSearchResponse(response: Response): MangasPage {
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
         val finalUrl = response.request.url.toString()
         val isMobile = finalUrl.contains("m.webnovel.com")
         val isSearch = finalUrl.contains("/search")
@@ -261,7 +260,7 @@ abstract class WebNovelNovels :
 
     // Details
     private fun parseMangaDetails(response: Response): SManga {
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
         return SManga.create().apply {
             title = document.selectFirst(".g_thumb > img")?.attr("alt") ?: "No Title"
             thumbnail_url = "https:" + document.selectFirst(".g_thumb > img")?.attr("src")
@@ -428,7 +427,7 @@ abstract class WebNovelNovels :
     // Novel content
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
 
         // Remove bloat elements (same as TS plugin)
         document.select(".para-comment").remove()

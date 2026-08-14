@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -126,7 +127,7 @@ abstract class MzNovels :
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseSearchResponse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
 
     private fun parseSearchResponse(response: Response): MangasPage {
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
 
         // Detect page number from pagination to avoid repeated final pages
         val currentPage = doc.selectFirst("div.pagination > span.active")?.text()?.toIntOrNull() ?: 1
@@ -141,7 +142,7 @@ abstract class MzNovels :
     }
 
     private fun parseNovelList(response: Response, pageNo: Int): MangasPage {
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
         checkCaptcha(doc)
 
         val novels = doc.select("ul.search-results-list > li.search-result-item:not(.ad-result-item)").mapNotNull { element ->
@@ -251,7 +252,7 @@ abstract class MzNovels :
     // ======================== Chapters ========================
 
     private fun fetchAllChapters(firstResponse: Response): List<SChapter> {
-        val doc = Jsoup.parse(firstResponse.body.string())
+        val doc = firstResponse.asJsoup()
         checkCaptcha(doc)
 
         val chapters = mutableListOf<SChapter>()
@@ -268,7 +269,7 @@ abstract class MzNovels :
             if (pageNo > 1) {
                 val pageUrl = "${firstResponse.request.url}?chapters_page=$pageNo"
                 val pageResponse = client.newCall(GET(pageUrl, headers)).execute()
-                currentDoc = Jsoup.parse(pageResponse.body.string())
+                currentDoc = pageResponse.asJsoup()
             }
 
             currentDoc.select("ul.chapter-list > li.chapter-item").forEach { element ->
@@ -301,7 +302,7 @@ abstract class MzNovels :
         val tempManga = SManga.create().apply { this.url = slug }
         val response = client.newCall(buildMangaDetailsRequest(tempManga)).execute()
         if (!response.isSuccessful) return null
-        return parseMangaDetails(Jsoup.parse(response.body.string())).apply { this.url = slug }
+        return parseMangaDetails(response.asJsoup()).apply { this.url = slug }
     }
 
     // ======================== Chapter Content ========================

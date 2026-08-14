@@ -16,6 +16,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -425,7 +426,7 @@ abstract class NovelUpdates :
         val response = client.newCall(GET(url.toString(), headers)).execute()
         if (!response.isSuccessful) return null
         val requestPath = response.request.url.encodedPath
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
         return parseMangaDetails(doc, requestPath).apply { this.url = mangaPathTemplate.slug(requestPath) }
     }
 
@@ -440,7 +441,7 @@ abstract class NovelUpdates :
         // Details and the chapter list both live on the same novel page - fetch it once.
         val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
         val requestPath = response.request.url.encodedPath
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc, requestPath) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(doc, requestPath) else chapters

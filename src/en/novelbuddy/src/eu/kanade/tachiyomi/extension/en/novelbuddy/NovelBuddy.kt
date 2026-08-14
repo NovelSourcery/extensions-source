@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.formattedText
@@ -149,7 +150,7 @@ abstract class NovelBuddy :
     }
 
     private fun parseMangaDetails(response: Response): SManga {
-        val script = Jsoup.parse(response.body.string()).selectFirst("#__NEXT_DATA__")?.html()
+        val script = response.asJsoup().selectFirst("#__NEXT_DATA__")?.html()
             ?: return SManga.create().apply { title = "Untitled" }
         val initialManga = script.initialManga()
             ?: return SManga.create().apply { title = "Untitled" }
@@ -191,7 +192,7 @@ abstract class NovelBuddy :
         ?.joinToString().orEmpty()
 
     private fun parseChapterList(response: Response): List<SChapter> {
-        val script = Jsoup.parse(response.body.string()).selectFirst("#__NEXT_DATA__")?.html()
+        val script = response.asJsoup().selectFirst("#__NEXT_DATA__")?.html()
             ?: return emptyList()
         val initialManga = script.initialManga() ?: return emptyList()
 

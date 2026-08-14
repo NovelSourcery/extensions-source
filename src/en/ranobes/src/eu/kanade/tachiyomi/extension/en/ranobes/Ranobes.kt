@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -67,7 +68,7 @@ abstract class Ranobes :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val response = client.newCall(buildPopularMangaRequest(page)).execute()
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
 
         val novels = document.select("article.rank-story").mapNotNull { article ->
             val link = article.selectFirst("h2.title a") ?: return@mapNotNull null
@@ -97,7 +98,7 @@ abstract class Ranobes :
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val response = client.newCall(buildLatestUpdatesRequest(page)).execute()
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
 
         val novels = document.select("div.block.story_line.story_line-img").mapNotNull { block ->
             val link = block.selectFirst("a") ?: return@mapNotNull null
@@ -182,7 +183,7 @@ abstract class Ranobes :
             return parseGenrePage(response)
         }
 
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
 
         val novels = document.select("article.block.story.shortstory").mapNotNull { article ->
             val link = article.selectFirst("h2.title a") ?: return@mapNotNull null
@@ -218,7 +219,7 @@ abstract class Ranobes :
     }
 
     private fun parseGenrePage(response: Response): MangasPage {
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
 
         val novels = document.select("article.block.story.shortstory, article.rank-story").mapNotNull { article ->
             val link = article.selectFirst("h2.title a") ?: return@mapNotNull null
@@ -265,7 +266,7 @@ abstract class Ranobes :
     }
 
     private fun parseMangaDetails(response: Response): SManga {
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
 
         return SManga.create().apply {
             // Title
@@ -359,7 +360,7 @@ abstract class Ranobes :
             currentPage++
             val nextUrl = "$baseChapterUrl/page/$currentPage/"
             val nextResponse = client.newCall(GET(nextUrl, headers)).execute()
-            document = Jsoup.parse(nextResponse.body.string())
+            document = nextResponse.asJsoup()
         }
 
         return allChapters.reversed()
@@ -485,7 +486,7 @@ abstract class Ranobes :
     override suspend fun fetchPageText(page: Page): String {
         val request = GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
         val response = client.newCall(request).execute()
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
 
         return buildString {
             val chapterTitle = document.selectFirst("h1.h4.title")?.ownText()

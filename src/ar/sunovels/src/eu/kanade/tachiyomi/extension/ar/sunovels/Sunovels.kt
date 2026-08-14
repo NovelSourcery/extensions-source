@@ -8,6 +8,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -330,7 +331,7 @@ abstract class Sunovels :
 
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET("$baseUrl${page.url}", headers)).execute()
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
         val content = doc.selectFirst(
             ".chapter-content, .content, .entry-content, .post-content, article, .text",
         ) ?: return ""

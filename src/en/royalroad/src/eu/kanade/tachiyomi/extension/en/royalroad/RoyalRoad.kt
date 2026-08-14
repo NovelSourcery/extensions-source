@@ -13,6 +13,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -489,7 +490,7 @@ abstract class RoyalRoad :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val response = client.newCall(GET(url, headers)).execute()
         if (!response.isSuccessful) return null
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
         return parseMangaDetails(doc).apply { this.url = mangaPath.slug(url.encodedPath) }
     }
 

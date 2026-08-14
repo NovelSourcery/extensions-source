@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -479,7 +480,7 @@ abstract class Lnori :
         // Details and the chapter/volume list both live on the same novel page - fetch it once.
         val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
         val requestUrl = response.request.url
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(document) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(document, requestUrl) else chapters
@@ -493,7 +494,7 @@ abstract class Lnori :
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
         val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
         if (!response.isSuccessful) return null
-        return parseMangaDetails(Jsoup.parse(response.body.string())).apply { this.url = manga.url }
+        return parseMangaDetails(response.asJsoup()).apply { this.url = manga.url }
     }
 
     private fun parseMangaDetails(document: Document): SManga = SManga.create().apply {

@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -201,7 +202,7 @@ abstract class FUCKNOVELPIA :
         val path = url.encodedPath
         val response = client.newCall(GET(baseUrl + path, headers)).execute()
         if (!response.isSuccessful) return null
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
         return parseMangaDetails(document).apply { this.url = mangaPath.slug(path) }
     }
 
@@ -217,7 +218,7 @@ abstract class FUCKNOVELPIA :
     override suspend fun fetchPageText(page: Page): String {
         val request = GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
         val response = client.newCall(request).execute()
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
 
         // Try multiple content selectors (adjust based on actual site structure)
         val contentContainer = document.selectFirst(

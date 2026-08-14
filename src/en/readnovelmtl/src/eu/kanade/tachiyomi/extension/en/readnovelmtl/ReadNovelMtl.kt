@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -23,7 +24,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
 import okhttp3.Request
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
@@ -58,7 +58,7 @@ abstract class ReadNovelMtl :
     protected open fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/ranking/all-time${if (page > 1) "?page=$page" else ""}", headers)
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val document = client.newCall(buildPopularMangaRequest(page)).execute().let { Jsoup.parse(it.body.string()) }
+        val document = client.newCall(buildPopularMangaRequest(page)).execute().asJsoup()
         return parseNovelList(document)
     }
     // ======================== Latest ========================
@@ -66,7 +66,7 @@ abstract class ReadNovelMtl :
     protected open fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/novel${if (page > 1) "?page=$page" else ""}", headers)
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val document = client.newCall(buildLatestUpdatesRequest(page)).execute().let { Jsoup.parse(it.body.string()) }
+        val document = client.newCall(buildLatestUpdatesRequest(page)).execute().asJsoup()
         return parseNovelList(document)
     }
     // ======================== Search ========================
@@ -127,7 +127,7 @@ abstract class ReadNovelMtl :
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val document = client.newCall(buildSearchMangaRequest(page, query, filters)).execute().let { Jsoup.parse(it.body.string()) }
+        val document = client.newCall(buildSearchMangaRequest(page, query, filters)).execute().asJsoup()
         return parseNovelList(document)
     }
     // ======================== Details + Chapters ========================
@@ -141,7 +141,7 @@ abstract class ReadNovelMtl :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(document, response.request.url.encodedPath) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(document) else chapters
@@ -221,7 +221,7 @@ abstract class ReadNovelMtl :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val response = client.newCall(GET(url, headers)).execute()
         if (!response.isSuccessful) return null
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
         return parseMangaDetails(document, url.encodedPath)
     }
 
@@ -236,7 +236,7 @@ abstract class ReadNovelMtl :
     override suspend fun fetchPageText(page: Page): String {
         val request = GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
         val response = client.newCall(request).execute()
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
 
         val contentSection = document.selectFirst("#content")
 
@@ -360,7 +360,7 @@ abstract class ReadNovelMtl :
 
         try {
             val response = client.newCall(GET("$baseUrl/category", headers)).execute()
-            val document = Jsoup.parse(response.body.string())
+            val document = response.asJsoup()
 
             val categories = mutableListOf<Pair<String, String>>()
             categories.add(Pair("All Categories", ""))

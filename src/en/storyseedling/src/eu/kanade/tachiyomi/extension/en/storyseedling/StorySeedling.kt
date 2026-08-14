@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -78,7 +79,7 @@ abstract class StorySeedling :
 
         // Fetch browse page to extract dynamic post value
         val browseResponse = client.newCall(GET("$baseUrl/browse", headers)).execute()
-        val doc = Jsoup.parse(browseResponse.body.string())
+        val doc = browseResponse.asJsoup()
 
         // LN Reader: Extract from div[ax-load][x-data] with format browse('xxxxx')
         val xData = doc.selectFirst("div[ax-load][x-data*=browse]")?.attr("x-data") ?: ""
@@ -398,7 +399,7 @@ abstract class StorySeedling :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val response = client.newCall(GET(url, headers)).execute()
         if (!response.isSuccessful) return null
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
         checkTurnstile(doc)
         return parseMangaDetails(doc).apply { this.url = mangaPath.slug(url.encodedPath) }
     }
@@ -419,7 +420,7 @@ abstract class StorySeedling :
      */
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
 
         // Check for Turnstile - StorySeedling uses loadChapter() with Turnstile
         // The pattern is: x-data="loadChapter('sitekey', 'chapterId')"

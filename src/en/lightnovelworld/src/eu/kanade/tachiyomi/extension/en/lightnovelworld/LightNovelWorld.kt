@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.lib.chapterutils.paginatedChapterList
 import keiyoushi.lib.chapterutils.shouldReturnExisting
@@ -26,7 +27,6 @@ import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import uy.kohesive.injekt.Injekt
@@ -144,7 +144,7 @@ abstract class LightNovelWorld :
     }
 
     private fun parseAdvancedSearch(response: Response): MangasPage {
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
 
         val novels = doc.select(".recommendation-card").mapNotNull { card ->
             val link = card.selectFirst("a.card-cover-link")
@@ -173,7 +173,7 @@ abstract class LightNovelWorld :
     // ======================== Novel Details ========================
 
     private fun parseMangaDetails(response: Response): SManga {
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
 
         return SManga.create().apply {
             title = doc.selectFirst(".novel-title")?.text()
@@ -262,7 +262,7 @@ abstract class LightNovelWorld :
 
     private suspend fun fetchLightNovelWorldChapterList(manga: SManga, existingChapters: List<SChapter>): List<SChapter> {
         val response = client.newCall(buildChapterListRequest(manga)).execute()
-        val page1Doc = Jsoup.parse(response.body.string())
+        val page1Doc = response.asJsoup()
         val basePath = response.request.url.encodedPath
 
         val totalPages = page1Doc.select("#pageSelect option").size.coerceAtLeast(1)
@@ -286,7 +286,7 @@ abstract class LightNovelWorld :
                     page1Doc
                 } else {
                     val pageResponse = client.newCall(GET("$baseUrl$basePath?page=$page", headers)).execute()
-                    Jsoup.parse(pageResponse.body.string())
+                    pageResponse.asJsoup()
                 }
                 Pair(parseChapterPage(doc), page < totalPages)
             },
@@ -348,7 +348,7 @@ abstract class LightNovelWorld :
 
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
 
         val content = doc.selectFirst("#chapterText")
             ?: doc.selectFirst(".chapter-content")

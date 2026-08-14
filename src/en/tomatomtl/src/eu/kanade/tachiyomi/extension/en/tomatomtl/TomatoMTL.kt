@@ -18,6 +18,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
 import kotlinx.coroutines.async
@@ -1255,7 +1256,7 @@ abstract class TomatoMTL :
     }
 
     private fun parseChapterListHtml(response: Response): List<SChapter> {
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
         val chapters = mutableListOf<SChapter>()
         val chapterNames = mutableListOf<String>()
 

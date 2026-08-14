@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
 import kotlinx.serialization.SerialName
@@ -87,7 +88,7 @@ abstract class GalaxyNovels :
     override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelList(client.newCall(buildLatestUpdatesRequest(page)).execute())
 
     private fun parseNovelList(response: Response): MangasPage {
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
 
         val novels = doc.select("article.wor-novel-card").mapNotNull { card ->
             val link = card.selectFirst("a.wor-novel-card__cover") ?: return@mapNotNull null
@@ -148,7 +149,7 @@ abstract class GalaxyNovels :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val response = client.newCall(buildSearchMangaRequest(page, query, filters)).execute()
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
 
         val novels = doc.select("article.wor-library-card, article.wor-novel-card").mapNotNull { card ->
             val titleLink = card.selectFirst("h2.wor-library-card__title a, h3 a")
@@ -183,7 +184,7 @@ abstract class GalaxyNovels :
         val path = url.encodedPath
         val response = client.newCall(GET(url, headers)).execute()
         if (!response.isSuccessful) return null
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
         return parseMangaDetails(doc).apply { this.url = path }
     }
 
@@ -231,7 +232,7 @@ abstract class GalaxyNovels :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val doc = client.newCall(GET(baseUrl + manga.url, headers)).execute().let { Jsoup.parse(it.body.string()) }
+        val doc = client.newCall(GET(baseUrl + manga.url, headers)).execute().asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) fetchChapterList(manga, doc) else chapters
@@ -338,7 +339,7 @@ abstract class GalaxyNovels :
             .build()
 
         val response = client.newCall(request).execute()
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
 
         val content = doc.selectFirst(
             ".wor-chapter-content, .entry-content, .chapter-content, .post-content, article .content",

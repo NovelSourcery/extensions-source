@@ -13,6 +13,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -96,7 +97,7 @@ abstract class NovelLib :
     }
 
     private fun browseParse(response: Response): MangasPage {
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
 
         // Browse pages carry the filter form — refresh the genre cache for free
         cacheGenresFrom(doc)
@@ -191,7 +192,7 @@ abstract class NovelLib :
     private fun parseChaptersForManga(manga: SManga): List<SChapter> {
         val slug = mangaPathTemplate.resolve(manga.url).substringAfter("/novel/").substringBefore("/").substringBefore("?")
         val response = client.newCall(GET("$baseUrl/novel/details-content/$slug", headers)).execute()
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
 
         val chapterNumberRegex = Regex("""Ch\.?\s*(\d+(?:\.\d+)?)""", RegexOption.IGNORE_CASE)
 
@@ -217,7 +218,7 @@ abstract class NovelLib :
         val tempManga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
         val response = client.newCall(buildMangaDetailsRequest(tempManga)).execute()
         if (!response.isSuccessful) return null
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
         return parseMangaDetails(doc).apply { this.url = tempManga.url }
     }
 
@@ -227,7 +228,7 @@ abstract class NovelLib :
 
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
 
         val content = doc.selectFirst("article.reading-container div.content")
             ?: doc.selectFirst("div.content")
@@ -248,7 +249,7 @@ abstract class NovelLib :
             Thread {
                 try {
                     val response = client.newCall(browseRequest(1, "", "popularity", "Descending", "", "")).execute()
-                    cacheGenresFrom(Jsoup.parse(response.body.string()))
+                    cacheGenresFrom(response.asJsoup())
                 } catch (_: Exception) {}
             }.start()
         }

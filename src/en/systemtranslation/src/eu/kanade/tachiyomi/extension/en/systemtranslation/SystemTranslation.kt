@@ -4,9 +4,9 @@ import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.SManga
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import okhttp3.Headers
-import org.jsoup.Jsoup
 
 @Source
 abstract class SystemTranslation : LightNovelWPNovel() {
@@ -17,7 +17,7 @@ abstract class SystemTranslation : LightNovelWPNovel() {
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val url = if (page == 1) baseUrl else "$baseUrl/page/$page/"
         val response = client.newCall(GET(url, headers)).execute()
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
 
         // Parse latest novels from homepage using div.listupd article.bs structure
         val novels = doc.select(".listupd article.bs, div.listupd div.excstf article.bs").mapNotNull { element ->

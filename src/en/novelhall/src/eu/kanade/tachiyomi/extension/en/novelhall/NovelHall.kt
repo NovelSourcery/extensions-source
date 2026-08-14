@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -42,7 +43,7 @@ abstract class NovelHall :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val response = client.newCall(buildPopularMangaRequest(page)).execute()
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
         return parseNovelList(document, response.request.url.toString())
     }
 
@@ -96,7 +97,7 @@ abstract class NovelHall :
     // lastupdate.html is a single static page with no pagination.
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val response = client.newCall(buildLatestUpdatesRequest(page)).execute()
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
         return MangasPage(parseNovelList(document).mangas, false)
     }
 
@@ -141,11 +142,11 @@ abstract class NovelHall :
         if (requestUrl.contains("/genre/") || requestUrl.contains("/type/") ||
             requestUrl.contains("/lastupdate") || requestUrl.contains("all2022")
         ) {
-            val document = Jsoup.parse(response.body.string())
+            val document = response.asJsoup()
             return parseNovelList(document, requestUrl)
         }
 
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
 
         val novels = document.select("table tr").mapNotNull { row ->
             val link = row.selectFirst("td:nth-child(2) a") ?: return@mapNotNull null
@@ -181,7 +182,7 @@ abstract class NovelHall :
     ): SMangaUpdate {
         // Details and the chapter list both live on the same novel page - fetch it once.
         val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(document, response) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(document) else chapters
@@ -253,7 +254,7 @@ abstract class NovelHall :
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
         val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
         if (!response.isSuccessful) return null
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
         return parseMangaDetails(document, response)
     }
 
@@ -266,7 +267,7 @@ abstract class NovelHall :
     override suspend fun fetchPageText(page: Page): String {
         val request = GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
         val response = client.newCall(request).execute()
-        val document = Jsoup.parse(response.body.string())
+        val document = response.asJsoup()
 
         // Parse chapter content from #htmlContent div
         val contentSection = document.selectFirst("#htmlContent")

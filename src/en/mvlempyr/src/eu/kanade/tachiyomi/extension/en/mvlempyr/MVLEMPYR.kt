@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -365,7 +366,7 @@ abstract class MVLEMPYR :
         val tempManga = SManga.create().apply { this.url = slug }
         val response = client.newCall(buildMangaDetailsRequest(tempManga)).execute()
         if (!response.isSuccessful) return null
-        return parseMangaDetails(Jsoup.parse(response.body.string())).apply { this.url = slug }
+        return parseMangaDetails(response.asJsoup()).apply { this.url = slug }
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
@@ -375,7 +376,7 @@ abstract class MVLEMPYR :
         // span has a dynamic id, so target it by class.
         val url = if (page.url.startsWith("http")) page.url else "$baseUrl${page.url}"
         val response = client.newCall(GET(url, headers)).execute()
-        val doc = Jsoup.parse(response.body.string())
+        val doc = response.asJsoup()
         val content = doc.selectFirst("#chapter .ct-span")
             ?: doc.selectFirst("#chapter .oxy-stock-content-styles")
             ?: doc.selectFirst("#chapter")
