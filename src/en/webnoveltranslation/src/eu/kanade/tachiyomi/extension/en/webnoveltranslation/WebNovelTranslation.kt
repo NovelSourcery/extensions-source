@@ -10,9 +10,14 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
 import keiyoushi.utils.setAltTitles
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonArray
@@ -30,19 +35,12 @@ import java.util.Locale
  * WNTL (formerly "WebNovel Translation", webnoveltranslation.com) moved to wntl.net and is now
  * a JSON API site. Ported from the LNReader WNTL TypeScript plugin.
  */
-class WebNovelTranslation :
-    HttpSource(),
+@Source
+abstract class WebNovelTranslation :
+    KeiSource(),
     NovelSource {
 
-    // Keep the original id so libraries migrate across the rename + wntl.net move (see CONTRIBUTING).
-    override val id: Long = 6412985718349558014
-
-    override val name = "WNTL"
-    override val baseUrl = "https://wntl.net"
-    override val lang = "en"
-    override val isNovelSource = true
     override val supportsLatest = false
-    override val client = network.cloudflareClient
 
     private val json: Json by injectLazy()
 
@@ -54,27 +52,22 @@ class WebNovelTranslation :
 
     // Popular / Latest
 
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/api/novels?page=1", headers)
+    private fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/api/novels?page=1", headers)
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        val novels = response.parseNovelsArray()
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val novels = client.newCall(buildPopularMangaRequest(page)).execute().parseNovelsArray()
         cacheGenres(novels)
         val mangas = novels.map { it.toSManga() }
         return MangasPage(mangas, hasNextPage = false)
     }
 
-    override fun latestUpdatesRequest(page: Int): Request = popularMangaRequest(page)
-    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = getPopularManga(page)
 
     // Search
 
     // The API returns the full catalogue in one call, so search/filter runs client-side.
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = popularMangaRequest(page)
-
-    override fun searchMangaParse(response: Response): MangasPage = throw UnsupportedOperationException()
-
-    override fun fetchSearchManga(page: Int, query: String, filters: FilterList): rx.Observable<MangasPage> = rx.Observable.fromCallable {
-        val novels = client.newCall(popularMangaRequest(page)).execute().parseNovelsArray()
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val novels = client.newCall(buildPopularMangaRequest(page)).execute().parseNovelsArray()
         cacheGenres(novels)
 
         val selectedGenres = filters.filterIsInstance<GenreFilter>()
@@ -94,34 +87,44 @@ class WebNovelTranslation :
             matchesQuery && matchesGenre
         }
 
-        MangasPage(filtered.map { it.toSManga() }, false)
+        return MangasPage(filtered.map { it.toSManga() }, false)
     }
 
-    // Details
+    // Details + Chapters
 
-    override fun mangaDetailsRequest(manga: SManga): Request = popularMangaRequest(1)
-
-    override fun mangaDetailsParse(response: Response): SManga = throw UnsupportedOperationException()
-
-    override fun fetchMangaDetails(manga: SManga): rx.Observable<SManga> {
-        return rx.Observable.fromCallable {
-            val id = manga.novelId()
-            val novel = client.newCall(popularMangaRequest(1)).execute().parseNovelsArray()
-                .firstOrNull { it.id == id }
-                ?: return@fromCallable manga
-            novel.toSManga().apply {
-                if (novel.altTitles.isNotEmpty()) setAltTitles(novel.altTitles)
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate = coroutineScope {
+        // Details (full catalogue) and chapters live on different endpoints - fire both
+        // concurrently when both are needed.
+        val detailsDeferred = if (fetchDetails) {
+            async {
+                val id = manga.novelId()
+                val novel = client.newCall(buildPopularMangaRequest(1)).execute().parseNovelsArray()
+                    .firstOrNull { it.id == id }
+                    ?: return@async manga
+                novel.toSManga().apply {
+                    if (novel.altTitles.isNotEmpty()) setAltTitles(novel.altTitles)
+                }
             }
+        } else {
+            null
         }
+        val chaptersDeferred = if (fetchChapters) async { loadChapterList(manga) } else null
+
+        SMangaUpdate(
+            manga = detailsDeferred?.await() ?: manga,
+            chapters = chaptersDeferred?.await() ?: chapters,
+        )
     }
 
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/series/${manga.novelId()}"
 
-    // Chapters
-
-    override fun chapterListRequest(manga: SManga): Request = GET("$baseUrl/api/chapters/${manga.novelId()}", headers)
-
-    override fun chapterListParse(response: Response): List<SChapter> {
+    private fun loadChapterList(manga: SManga): List<SChapter> {
+        val response = client.newCall(GET("$baseUrl/api/chapters/${manga.novelId()}", headers)).execute()
         val novelId = response.request.url.pathSegments.last()
         val chapters = json.parseToJsonElement(response.body.string())
             .jsonObject["chapters"]?.jsonArray
@@ -146,9 +149,7 @@ class WebNovelTranslation :
 
     // Pages / Content
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
-
-    override fun imageUrlParse(response: Response): String = ""
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
         val path = page.url.trimStart('/')
@@ -163,7 +164,7 @@ class WebNovelTranslation :
 
     // Filters
 
-    override fun getFilterList(): FilterList {
+    override fun getFilterList(data: JsonElement?): FilterList {
         val genres = cachedGenres()
         return if (genres.isEmpty()) {
             FilterList(Filter.Header("Open the browse list once to load genres"))
