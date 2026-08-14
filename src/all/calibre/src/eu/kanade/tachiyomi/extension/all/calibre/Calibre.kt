@@ -12,7 +12,10 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import kotlinx.coroutines.delay
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -23,33 +26,26 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import okhttp3.Headers
 import okhttp3.Request
-import okhttp3.Response
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.net.URLEncoder
 import java.util.Base64
 
-class Calibre :
-    HttpSource(),
+/**
+ * baseUrl is user-configured (a personal Calibre content server): the DSL's `source { baseUrl {
+ * custom(...) } }` declaration generates the actual `baseUrl` override and its preference entry
+ * (backed by [keiyoushi.source.CustomUrlPreferences]) - this class must not override baseUrl
+ * itself or declare its own URL preference.
+ */
+@Source
+abstract class Calibre :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
-    override val name = "Calibre"
-    override val lang = "all"
     override val supportsLatest = true
-    override val isNovelSource = true
 
     private val preferences = Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
-
-    override val baseUrl: String
-        get() {
-            val raw = preferences.getString(PREF_URL, "").orEmpty().trim().trimEnd('/')
-            return when {
-                raw.isEmpty() -> ""
-                raw.startsWith("http://") || raw.startsWith("https://") -> raw
-                else -> "http://$raw"
-            }
-        }
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -58,20 +54,36 @@ class Calibre :
         "i", "b", "em", "strong", "blockquote", "ul", "ol", "li",
     )
 
-    override fun headersBuilder(): Headers.Builder {
-        val builder = Headers.Builder().add("Referer", "$baseUrl/")
+    /** [SManga.url] stored as bare book id via [mangaPathTemplate]. */
+    private val mangaPathTemplate = SlugPath("/ajax/book/")
+
+    override fun Headers.Builder.configureHeaders(): Headers.Builder {
         val user = preferences.getString(PREF_USER, "").orEmpty()
         if (user.isNotBlank()) {
             val pass = preferences.getString(PREF_PASS, "").orEmpty()
             val token = Base64.getEncoder().encodeToString("$user:$pass".toByteArray())
-            builder.add("Authorization", "Basic $token")
+            add("Authorization", "Basic $token")
         }
-        return builder
+        return this
     }
 
-    override fun popularMangaRequest(page: Int): Request = browseRequest(page, "title", "asc")
+    private fun buildPopularMangaRequest(page: Int): Request = browseRequest(page, "title", "asc")
 
-    override fun latestUpdatesRequest(page: Int): Request = browseRequest(page, "timestamp", "desc")
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val response = client.newCall(buildPopularMangaRequest(page)).execute()
+        val result = json.decodeFromString<SearchResponse>(response.body.string())
+        val novels = booksMetadata(result.bookIds)
+        return MangasPage(novels, result.bookIds.size >= LIMIT)
+    }
+
+    private fun buildLatestUpdatesRequest(page: Int): Request = browseRequest(page, "timestamp", "desc")
+
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val response = client.newCall(buildLatestUpdatesRequest(page)).execute()
+        val result = json.decodeFromString<SearchResponse>(response.body.string())
+        val novels = booksMetadata(result.bookIds)
+        return MangasPage(novels, result.bookIds.size >= LIMIT)
+    }
 
     private fun browseRequest(page: Int, sort: String, order: String): Request {
         val offset = (page - 1) * LIMIT
@@ -81,15 +93,7 @@ class Calibre :
         )
     }
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        val result = json.decodeFromString<SearchResponse>(response.body.string())
-        val novels = booksMetadata(result.bookIds)
-        return MangasPage(novels, result.bookIds.size >= LIMIT)
-    }
-
-    override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
-
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val offset = (page - 1) * LIMIT
         var sort = "title"
         var order = "asc"
@@ -109,15 +113,18 @@ class Calibre :
         }
 
         val calibreQuery = URLEncoder.encode(terms.joinToString(" and "), "UTF-8")
-        return GET(
-            "$baseUrl/ajax/search?query=$calibreQuery&num=$LIMIT&offset=$offset&sort=$sort&sort_order=$order",
-            headers,
-        )
+        val response = client.newCall(
+            GET(
+                "$baseUrl/ajax/search?query=$calibreQuery&num=$LIMIT&offset=$offset&sort=$sort&sort_order=$order",
+                headers,
+            ),
+        ).execute()
+        val result = json.decodeFromString<SearchResponse>(response.body.string())
+        val novels = booksMetadata(result.bookIds)
+        return MangasPage(novels, result.bookIds.size >= LIMIT)
     }
 
-    override fun searchMangaParse(response: Response) = popularMangaParse(response)
-
-    override fun getFilterList() = FilterList(
+    override fun getFilterList(data: JsonElement?) = FilterList(
         SortFilter(),
         OrderFilter(),
         DateAddedFilter(),
@@ -146,31 +153,45 @@ class Calibre :
             val book = books[id.toString()] ?: return@mapNotNull null
             SManga.create().apply {
                 title = book.title
-                url = "/ajax/book/$id"
+                url = mangaPathTemplate.slug("/ajax/book/$id")
                 thumbnail_url = "$baseUrl/get/cover/$id"
             }
         }
     }
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val id = bookId(mangaPathTemplate.resolve(manga.url))
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
         val book = json.decodeFromString<BookMetadata>(response.body.string())
-        val id = bookId(response.request.url.encodedPath)
-        return SManga.create().apply {
-            title = book.title
-            thumbnail_url = "$baseUrl/get/cover/$id"
-            author = book.authors.joinToString()
-            genre = book.tags.joinToString()
-            description = book.comments?.let { stripHtml(it) }
-            status = SManga.UNKNOWN
+
+        val updatedManga = if (fetchDetails) {
+            SManga.create().apply {
+                title = book.title
+                thumbnail_url = "$baseUrl/get/cover/$id"
+                author = book.authors.joinToString()
+                genre = book.tags.joinToString()
+                description = book.comments?.let { stripHtml(it) }
+                status = SManga.UNKNOWN
+            }
+        } else {
+            manga
         }
+
+        val updatedChapters = if (fetchChapters) fetchChapterList(id, book) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    override suspend fun getChapterList(manga: SManga): List<SChapter> {
-        val id = bookId(manga.url)
-        val bookJson = client.newCall(GET("$baseUrl/ajax/book/$id", headers)).execute().body.string()
-        val book = json.decodeFromString<BookMetadata>(bookJson)
+    private suspend fun fetchChapterList(id: String, book: BookMetadata): List<SChapter> {
         val format = (book.formats.firstOrNull() ?: "epub").lowercase()
 
         val manifest = fetchManifest(id, format) ?: return emptyList()
@@ -208,9 +229,10 @@ class Calibre :
         return null
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> = throw UnsupportedOperationException()
-
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        return listOf(Page(0, response.request.url.encodedPath))
+    }
 
     override suspend fun fetchPageText(page: Page): String {
         var url = page.url
@@ -236,8 +258,6 @@ class Calibre :
         val manifest = fetchManifest(id, format) ?: return null
         return "/book-file/$id/$format/${manifest.bookHash.size}/${manifest.bookHash.mtime}/$name"
     }
-
-    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
 
     private fun findBody(node: TreeNode): TreeNode? {
         if (node.n == "body") return node
@@ -306,14 +326,6 @@ class Calibre :
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         EditTextPreference(screen.context).apply {
-            key = PREF_URL
-            title = "Server URL"
-            summary = "e.g. http://192.168.1.10:8080/"
-            dialogTitle = "Calibre content server URL"
-            setDefaultValue("")
-        }.also(screen::addPreference)
-
-        EditTextPreference(screen.context).apply {
             key = PREF_USER
             title = "Username"
             summary = "Optional, only if the server requires login"
@@ -380,7 +392,6 @@ class Calibre :
 
     companion object {
         private const val LIMIT = 30
-        private const val PREF_URL = "calibre_url"
         private const val PREF_USER = "calibre_username"
         private const val PREF_PASS = "calibre_password"
         private val BOOK_ID_REGEX = Regex("""/book/(\d+)""")
