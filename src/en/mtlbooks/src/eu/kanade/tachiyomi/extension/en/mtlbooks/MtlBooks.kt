@@ -16,6 +16,7 @@ import keiyoushi.lib.chapterutils.incrementalStartPage
 import keiyoushi.lib.chapterutils.mergeChapters
 import keiyoushi.lib.chapterutils.shouldReturnExisting
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.jsonInstance
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -37,6 +38,7 @@ abstract class MtlBooks :
 
     private val apiUrl = "https://alpha.mtlbooks.com/api/v1"
     private val imageProxy = "https://wsrv.nl"
+    private val mangaPath = SlugPath("/novel/")
 
     private val json: Json = jsonInstance
 
@@ -52,7 +54,7 @@ abstract class MtlBooks :
 
         val novels = apiResponse.result.data.map { novel ->
             SManga.create().apply {
-                url = "/novel/${novel.slug}"
+                url = novel.slug
                 title = novel.name
                 thumbnail_url = buildImageUrl(novel.thumbnail)
                 author = novel.users?.name
@@ -188,7 +190,7 @@ abstract class MtlBooks :
     }
 
     // Webview should open the site page, not the JSON API endpoint
-    override fun getMangaUrl(manga: SManga): String = baseUrl + manga.url
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
     // chapter.url is the site path; strip the "/chapter/" segment of legacy entries
     override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapter.url.replace("/chapter/", "/")
@@ -198,7 +200,7 @@ abstract class MtlBooks :
         val novel = apiResponse.result
 
         return SManga.create().apply {
-            url = "/novel/${novel.slug}"
+            url = novel.slug
             title = novel.name
             thumbnail_url = buildImageUrl(novel.thumbnail)
             author = novel.users?.name
