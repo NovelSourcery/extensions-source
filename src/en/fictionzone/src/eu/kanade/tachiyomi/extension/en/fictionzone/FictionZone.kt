@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.novelextension.en.fictionzone
+package eu.kanade.tachiyomi.novelextension.en.fictionzone
 
 import android.app.Application
 import android.content.SharedPreferences
@@ -15,11 +15,16 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
 import keiyoushi.utils.setAltTitles
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
@@ -35,6 +40,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
@@ -46,28 +52,19 @@ import uy.kohesive.injekt.injectLazy
 import java.text.SimpleDateFormat
 import java.util.Locale
 
-class FictionZone :
-    HttpSource(),
+@Source
+abstract class FictionZone :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
-    override val name = "Fiction Zone"
-
-    override val baseUrl = "https://fictionzone.net"
-
-    override val isNovelSource = true
-
     private val apiUrl = "$baseUrl/api/__api_party/fictionzone"
-
-    override val lang = "en"
 
     override val supportsLatest = true
 
     // Every request (browse/details/chapters/content, including all omniportal proxy calls)
     // hits this single api-party endpoint, which 429s hard under mass-import's sequential load.
-    override val client = network.client.newBuilder()
-        .addInterceptor(::retryOnTooManyRequests)
-        .build()
+    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(::retryOnTooManyRequests)
 
     // Max retries when the site answers 429; each retry waits the Retry-After interval.
     private val maxRetriesOn429 = 3
@@ -173,10 +170,10 @@ class FictionZone :
         return POST(apiUrl, this.headers, requestBody)
     }
 
-    override fun popularMangaRequest(page: Int): Request = apiRequest("/platform/browse?page=$page&page_size=20&sort_by=bookmark_count&sort_order=desc&include_genres=true")
+    private fun buildPopularMangaRequest(page: Int): Request = apiRequest("/platform/browse?page=$page&page_size=20&sort_by=bookmark_count&sort_order=desc&include_genres=true")
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        val jsonString = response.body.string()
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val jsonString = client.newCall(buildPopularMangaRequest(page)).execute().body.string()
         val jsonObject = json.parseToJsonElement(jsonString).jsonObject
         val data = jsonObject["data"]?.jsonObject ?: return MangasPage(emptyList(), false)
         return parseBrowseData(data)
@@ -237,11 +234,16 @@ class FictionZone :
         return MangasPage(mangas, hasNext)
     }
 
-    override fun latestUpdatesRequest(page: Int): Request = apiRequest("/platform/browse?page=$page&page_size=20&sort_by=created_at&sort_order=desc&include_genres=true")
+    private fun buildLatestUpdatesRequest(page: Int): Request = apiRequest("/platform/browse?page=$page&page_size=20&sort_by=created_at&sort_order=desc&include_genres=true")
 
-    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val jsonString = client.newCall(buildLatestUpdatesRequest(page)).execute().body.string()
+        val jsonObject = json.parseToJsonElement(jsonString).jsonObject
+        val data = jsonObject["data"]?.jsonObject ?: return MangasPage(emptyList(), false)
+        return parseBrowseData(data)
+    }
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         // AI semantic search — text query only, other filters don't apply
         val aiSearch = filters.find { it is AiSearchFilter } as? AiSearchFilter
         if (aiSearch?.state == true && query.isNotBlank()) {
@@ -319,7 +321,8 @@ class FictionZone :
         return apiRequest("/platform/browse?${params.joinToString("&")}")
     }
 
-    override fun searchMangaParse(response: Response): MangasPage {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val response = client.newCall(buildSearchMangaRequest(page, query, filters)).execute()
         val jsonString = response.body.string()
         val jsonObject = json.parseToJsonElement(jsonString).jsonObject
         val data = jsonObject["data"]?.jsonObject ?: return MangasPage(emptyList(), false)
@@ -351,7 +354,7 @@ class FictionZone :
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + manga.url
 
-    override fun mangaDetailsRequest(manga: SManga): Request {
+    private fun buildMangaDetailsRequest(manga: SManga): Request {
         if (manga.url.startsWith("/omniportal/")) {
             val parts = manga.url.removePrefix("/omniportal/").split("/")
             val sourceId = parts[0]
@@ -363,7 +366,7 @@ class FictionZone :
         return apiRequest("/platform/novel-details?slug=$slug")
     }
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    private fun parseMangaDetails(response: Response): SManga {
         val jsonString = response.body.string()
         val jsonObject = json.parseToJsonElement(jsonString).jsonObject
 
@@ -427,88 +430,100 @@ class FictionZone :
         }
     }
 
-    override fun fetchChapterList(manga: SManga): rx.Observable<List<SChapter>> {
-        return rx.Observable.fromCallable {
-            val isOmniportal = manga.url.startsWith("/omniportal/")
+    private fun loadChapterList(manga: SManga): List<SChapter> {
+        val isOmniportal = manga.url.startsWith("/omniportal/")
 
-            val (request, novelId, sourceId, sourceKey) = if (isOmniportal) {
-                val parts = manga.url.removePrefix("/omniportal/").split("/")
-                val srcId = parts[0]
-                val srcKey = parts[1]
-                val req = apiRequest("/omniportal/novels/chapters?source_id=$srcId&source_key=$srcKey&translate=en&engine=google-trans")
-                Quadruple(req, "", srcId, srcKey)
-            } else {
-                val detailsRequest = mangaDetailsRequest(manga)
-                val detailsResponse = client.newCall(detailsRequest).execute()
-                val detailsJson = json.parseToJsonElement(detailsResponse.body.string()).jsonObject
-                val id = detailsJson["data"]!!.jsonObject["id"]!!.jsonPrimitive.content
-                val req = apiRequest("/platform/chapter-lists?novel_id=$id")
-                Quadruple(req, id, "", "")
-            }
-
-            val response = client.newCall(request).execute()
-            val jsonString = response.body.string()
-            val jsonObject = json.parseToJsonElement(jsonString).jsonObject
-            val data = jsonObject["data"]?.jsonObject ?: return@fromCallable emptyList<SChapter>()
-            val chapters = data["chapters"]?.jsonArray?.toMutableList() ?: return@fromCallable emptyList<SChapter>()
-
-            // Omniportal chapter lists are paginated
-            if (isOmniportal) {
-                val totalPages = data["pagination"]?.jsonObject?.get("total_pages")?.jsonPrimitive?.int ?: 1
-                for (p in 2..totalPages) {
-                    try {
-                        val pageReq = apiRequest(
-                            "/omniportal/novels/chapters?source_id=$sourceId&source_key=$sourceKey&translate=en&engine=google-trans&page=$p",
-                        )
-                        val pageRes = client.newCall(pageReq).execute()
-                        val pageData = json.parseToJsonElement(pageRes.body.string()).jsonObject["data"]?.jsonObject
-                        pageData?.get("chapters")?.jsonArray?.let { chapters.addAll(it) }
-                    } catch (_: Exception) {
-                        break
-                    }
-                }
-            }
-
-            chapters.map { element ->
-                val obj = element.jsonObject
-                SChapter.create().apply {
-                    name = obj["title"]!!.jsonPrimitive.content
-                    val chapterId = obj["chapter_id"]!!.jsonPrimitive.content
-
-                    // Site chapter paths, so webview works; fetchPageText maps
-                    // them back onto the API endpoints
-                    url = if (isOmniportal) {
-                        val respSourceId = data["source_id"]?.jsonPrimitive?.contentOrNull ?: sourceId
-                        val respSourceKey = data["source_key"]?.jsonPrimitive?.contentOrNull ?: sourceKey
-                        "/omniportal/$respSourceId/$respSourceKey/$chapterId"
-                    } else {
-                        val slug = manga.url.removePrefix("/novel/").trim('/')
-                        "/novel/$slug/$chapterId?novel_id=$novelId"
-                    }
-
-                    date_upload = try {
-                        val dateStr = obj["published_date"]?.jsonPrimitive?.contentOrNull
-                        if (dateStr != null) dateFormat.parse(dateStr)?.time ?: 0L else 0L
-                    } catch (e: Exception) {
-                        0L
-                    }
-
-                    chapter_number = obj["chapter_number"]?.jsonPrimitive?.double?.toFloat() ?: -1f
-                }
-            }.reversed()
+        val (request, novelId, sourceId, sourceKey) = if (isOmniportal) {
+            val parts = manga.url.removePrefix("/omniportal/").split("/")
+            val srcId = parts[0]
+            val srcKey = parts[1]
+            val req = apiRequest("/omniportal/novels/chapters?source_id=$srcId&source_key=$srcKey&translate=en&engine=google-trans")
+            Quadruple(req, "", srcId, srcKey)
+        } else {
+            val detailsRequest = buildMangaDetailsRequest(manga)
+            val detailsResponse = client.newCall(detailsRequest).execute()
+            val detailsJson = json.parseToJsonElement(detailsResponse.body.string()).jsonObject
+            val id = detailsJson["data"]!!.jsonObject["id"]!!.jsonPrimitive.content
+            val req = apiRequest("/platform/chapter-lists?novel_id=$id")
+            Quadruple(req, id, "", "")
         }
+
+        val response = client.newCall(request).execute()
+        val jsonString = response.body.string()
+        val jsonObject = json.parseToJsonElement(jsonString).jsonObject
+        val data = jsonObject["data"]?.jsonObject ?: return emptyList()
+        val chapters = data["chapters"]?.jsonArray?.toMutableList() ?: return emptyList()
+
+        // Omniportal chapter lists are paginated
+        if (isOmniportal) {
+            val totalPages = data["pagination"]?.jsonObject?.get("total_pages")?.jsonPrimitive?.int ?: 1
+            for (p in 2..totalPages) {
+                try {
+                    val pageReq = apiRequest(
+                        "/omniportal/novels/chapters?source_id=$sourceId&source_key=$sourceKey&translate=en&engine=google-trans&page=$p",
+                    )
+                    val pageRes = client.newCall(pageReq).execute()
+                    val pageData = json.parseToJsonElement(pageRes.body.string()).jsonObject["data"]?.jsonObject
+                    pageData?.get("chapters")?.jsonArray?.let { chapters.addAll(it) }
+                } catch (_: Exception) {
+                    break
+                }
+            }
+        }
+
+        return chapters.map { element ->
+            val obj = element.jsonObject
+            SChapter.create().apply {
+                name = obj["title"]!!.jsonPrimitive.content
+                val chapterId = obj["chapter_id"]!!.jsonPrimitive.content
+
+                // Site chapter paths, so webview works; fetchPageText maps
+                // them back onto the API endpoints
+                url = if (isOmniportal) {
+                    val respSourceId = data["source_id"]?.jsonPrimitive?.contentOrNull ?: sourceId
+                    val respSourceKey = data["source_key"]?.jsonPrimitive?.contentOrNull ?: sourceKey
+                    "/omniportal/$respSourceId/$respSourceKey/$chapterId"
+                } else {
+                    val slug = manga.url.removePrefix("/novel/").trim('/')
+                    "/novel/$slug/$chapterId?novel_id=$novelId"
+                }
+
+                date_upload = try {
+                    val dateStr = obj["published_date"]?.jsonPrimitive?.contentOrNull
+                    if (dateStr != null) dateFormat.parse(dateStr)?.time ?: 0L else 0L
+                } catch (e: Exception) {
+                    0L
+                }
+
+                chapter_number = obj["chapter_number"]?.jsonPrimitive?.double?.toFloat() ?: -1f
+            }
+        }.reversed()
     }
 
-    override fun chapterListRequest(manga: SManga): Request = throw UnsupportedOperationException()
-    override fun chapterListParse(response: Response): List<SChapter> = throw UnsupportedOperationException()
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate = coroutineScope {
+        // Details and chapters live on different endpoints - fire both concurrently when both
+        // are needed.
+        val detailsDeferred = if (fetchDetails) {
+            async { parseMangaDetails(client.newCall(buildMangaDetailsRequest(manga)).execute()) }
+        } else {
+            null
+        }
+        val chaptersDeferred = if (fetchChapters) async { loadChapterList(manga) } else null
+
+        SMangaUpdate(
+            manga = detailsDeferred?.await() ?: manga,
+            chapters = chaptersDeferred?.await() ?: chapters,
+        )
+    }
 
     private data class Quadruple<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
 
-    override fun pageListRequest(chapter: SChapter): Request = throw UnsupportedOperationException("Not used")
-
-    override fun pageListParse(response: Response): List<Page> = throw UnsupportedOperationException("Not used")
-
-    override fun fetchPageList(chapter: SChapter): rx.Observable<List<Page>> = rx.Observable.just(listOf(Page(0, chapter.url)))
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     // chapter.url is the site path; strip the helper novel_id query for webview
     override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapter.url.substringBefore('?')
@@ -697,7 +712,7 @@ class FictionZone :
         doc.select("p, div, li").forEach { it.after(paragraphToken) }
 
         return doc.text()
-            .replace(' ', ' ')
+            .replace(' ', ' ')
             .replace(Regex("\\s*$paragraphToken\\s*"), "\n\n")
             .replace(Regex("\\s*$breakToken\\s*"), "\n")
             .replace(Regex("\n{3,}"), "\n\n")
@@ -717,9 +732,7 @@ class FictionZone :
         }
     }
 
-    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
-
-    override fun getFilterList(): FilterList {
+    override fun getFilterList(data: JsonElement?): FilterList {
         val filters = mutableListOf<Filter<*>>()
 
         filters.add(AiSearchFilter())
