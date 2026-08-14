@@ -7,25 +7,23 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.Request
-import okhttp3.Response
 import org.jsoup.nodes.Document
 
-class SeaNovel :
-    HttpSource(),
+@Source
+abstract class SeaNovel :
+    KeiSource(),
     NovelSource {
 
-    override val name = "SeaNovel"
-    override val baseUrl = "https://seanovel.org"
-    override val lang = "ar"
     override val supportsLatest = true
-    override val isNovelSource = true
-    override val client = network.client
 
     private val junkPattern = Regex(
         "^الفصل\\s+[\\d٠-٩]+\\s*[:：].+" +
@@ -50,79 +48,94 @@ class SeaNovel :
         coerceInputValues = true
     }
 
-    override fun popularMangaRequest(page: Int): Request {
+    /** [SManga.url] stored as a bare slug via [mangaPathTemplate]. */
+    private val mangaPathTemplate = SlugPath("/novels/")
+
+    private fun buildPopularMangaRequest(page: Int): Request {
         val limit = 50
         val offset = (page - 1) * limit
         return GET("$baseUrl/api/novels?sort=views&page=1&limit=$limit&offset=$offset", headers)
     }
 
-    override fun popularMangaParse(response: Response): MangasPage {
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val response = client.newCall(buildPopularMangaRequest(page)).execute()
         val body = response.body.string()
         val novels = json.decodeFromString<List<NovelDto>>(body)
         return MangasPage(novels.map { it.toSManga() }, novels.size >= 50)
     }
 
-    override fun latestUpdatesRequest(page: Int): Request {
+    private fun buildLatestUpdatesRequest(page: Int): Request {
         val limit = 50
         val offset = (page - 1) * limit
         return GET("$baseUrl/api/novels?sort=latest&page=1&limit=$limit&offset=$offset", headers)
     }
 
-    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val response = client.newCall(buildLatestUpdatesRequest(page)).execute()
+        val body = response.body.string()
+        val novels = json.decodeFromString<List<NovelDto>>(body)
+        return MangasPage(novels.map { it.toSManga() }, novels.size >= 50)
+    }
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    private fun buildSearchMangaRequest(page: Int, query: String): Request {
         val encodedQuery = java.net.URLEncoder.encode(query.trim(), "UTF-8")
         return GET("$baseUrl/api/search-index?q=$encodedQuery&__page=$page", headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val response = client.newCall(buildSearchMangaRequest(page, query)).execute()
         val url = response.request.url
-        val query = url.queryParameter("q") ?: ""
-        val page = url.queryParameter("__page")?.toIntOrNull() ?: 1
+        val queryParam = url.queryParameter("q") ?: ""
+        val pageParam = url.queryParameter("__page")?.toIntOrNull() ?: 1
         val body = response.body.string()
         val allNovels = json.decodeFromString<List<NovelDto>>(body)
-        val filtered = if (query.isNotBlank()) {
+        val filtered = if (queryParam.isNotBlank()) {
             allNovels.filter { novel ->
-                novel.titleAr.contains(query, ignoreCase = true) ||
-                    novel.titleOriginal.contains(query, ignoreCase = true)
+                novel.titleAr.contains(queryParam, ignoreCase = true) ||
+                    novel.titleOriginal.contains(queryParam, ignoreCase = true)
             }
         } else {
             allNovels
         }
         val limit = 50
-        val offset = (page - 1) * limit
+        val offset = (pageParam - 1) * limit
         val paginated = filtered.drop(offset).take(limit)
         return MangasPage(paginated.map { it.toSManga() }, offset + limit < filtered.size)
     }
 
-    override fun mangaDetailsRequest(manga: SManga): Request {
-        val slug = manga.url.substringAfterLast("/")
+    private fun buildMangaDetailsRequest(manga: SManga): Request {
+        val slug = mangaPathTemplate.resolve(manga.url).substringAfterLast("/")
         return GET("$baseUrl/api/novel/$slug", headers)
     }
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        val body = response.body.string()
-        val novel = json.decodeFromString<NovelDto>(body)
-        return novel.toSManga()
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val slug = mangaPathTemplate.resolve(manga.url).substringAfterLast("/")
+
+        val updatedManga = if (fetchDetails) {
+            val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+            val body = response.body.string()
+            json.decodeFromString<NovelDto>(body).toSManga()
+        } else {
+            manga
+        }
+
+        val updatedChapters = if (fetchChapters) fetchChapterList(slug) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    override fun chapterListRequest(manga: SManga): Request {
-        val slug = manga.url.substringAfterLast("/")
-        return GET("$baseUrl/api/novel/$slug/chapters?offset=0&limit=100&sort=asc", headers)
-    }
-
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val body = response.body.string()
-        val chapterResponse = json.decodeFromString<ChapterResponse>(body)
-        val slug = response.request.url.toString().substringAfter("/novel/").substringBefore("/chapters")
-        return chapterResponse.chapters.map { it.toSChapter(slug) }
-    }
-
-    override suspend fun getChapterList(manga: SManga): List<SChapter> {
-        val slug = manga.url.substringAfterLast("/")
+    private fun fetchChapterList(slug: String): List<SChapter> {
         val allChapters = mutableListOf<SChapter>()
         var offset = 0
         val limit = 100
+        var hasMore: Boolean
         do {
             val request = GET("$baseUrl/api/novel/$slug/chapters?offset=$offset&limit=$limit&sort=asc", headers)
             val response = client.newCall(request).execute()
@@ -130,13 +143,14 @@ class SeaNovel :
             if (chapterResponse.chapters.isEmpty()) break
             allChapters.addAll(chapterResponse.chapters.map { it.toSChapter(slug) })
             offset += limit
-        } while (chapterResponse.hasMore)
+            hasMore = chapterResponse.hasMore
+        } while (hasMore)
         return allChapters
     }
 
-    override fun pageListParse(response: Response): List<Page> {
-        val url = response.request.url.encodedPath
-        return listOf(Page(0, url))
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        return listOf(Page(0, response.request.url.encodedPath))
     }
 
     override suspend fun fetchPageText(page: Page): String {
@@ -170,7 +184,8 @@ class SeaNovel :
 
     private fun extractParagraphsFromRsc(html: String): List<String>? {
         val marker = "\"initialParagraphs\":"
-        val markerIdx = html.indexOf(marker) ?: return null
+        val markerIdx = html.indexOf(marker)
+        if (markerIdx < 0) return null
         var idx = markerIdx + marker.length
         while (idx < html.length && html[idx] == ' ') idx++
         if (idx >= html.length || html[idx] != '[') return null
@@ -212,10 +227,8 @@ class SeaNovel :
         text.isNotBlank() && text.length > 3 && !junkPattern.containsMatchIn(text)
     }
 
-    override fun imageUrlParse(response: Response): String = ""
-
     private fun NovelDto.toSManga(): SManga = SManga.create().apply {
-        url = "/novels/$slug"
+        url = mangaPathTemplate.slug("/novels/$slug")
         title = titleAr.ifEmpty { titleOriginal }
         author = this@toSManga.author
         description = this@toSManga.description
