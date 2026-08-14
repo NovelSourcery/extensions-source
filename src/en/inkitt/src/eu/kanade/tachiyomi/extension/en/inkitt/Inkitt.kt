@@ -12,9 +12,13 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
@@ -28,22 +32,22 @@ import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
-class Inkitt :
-    HttpSource(),
+@Source
+abstract class Inkitt :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
-    override val name = "Inkitt"
-    override val baseUrl = "https://www.inkitt.com"
-    override val lang = "en"
     override val supportsLatest = true
-
-    override val client = network.cloudflareClient
 
     private val json = Json { ignoreUnknownKeys = true }
 
     private val preferences: SharedPreferences =
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+
+    /** [SManga.url] is stored as the bare id under `/stories/`; a stored value starting with
+     * "/" is a pre-existing full-path entry and is resolved unchanged. */
+    private val mangaPath = SlugPath("/stories/")
 
     // Tag cache stored as JSON in preferences
     private fun getCachedTags(): Map<String, List<Pair<Int, String>>> {
@@ -114,7 +118,7 @@ class Inkitt :
 
     // region Popular
 
-    override fun popularMangaRequest(page: Int): Request {
+    private fun buildPopularMangaRequest(page: Int): Request {
         val url = "$baseUrl/api/2/search/advanced_stories".toHttpUrl().newBuilder()
             .addQueryParameter("story_type", "original")
             .addQueryParameter("page", page.toString())
@@ -122,7 +126,9 @@ class Inkitt :
         return GET(url, headers)
     }
 
-    override fun popularMangaParse(response: Response): MangasPage {
+    override suspend fun getPopularManga(page: Int): MangasPage = parsePopularMangaResponse(client.newCall(buildPopularMangaRequest(page)).execute())
+
+    private fun parsePopularMangaResponse(response: Response): MangasPage {
         val body = response.body.string()
         val parsed = json.parseToJsonElement(body).jsonObject
         val stories = parsed["stories"]?.jsonArray ?: JsonArray(emptyList())
@@ -134,7 +140,7 @@ class Inkitt :
 
     // region Latest
 
-    override fun latestUpdatesRequest(page: Int): Request {
+    private fun buildLatestUpdatesRequest(page: Int): Request {
         val url = "$baseUrl/api/2/search/advanced_stories".toHttpUrl().newBuilder()
             .addQueryParameter("story_type", "original")
             .addQueryParameter("last_updated_interval", "7")
@@ -143,13 +149,13 @@ class Inkitt :
         return GET(url, headers)
     }
 
-    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parsePopularMangaResponse(client.newCall(buildLatestUpdatesRequest(page)).execute())
 
     // endregion
 
     // region Search
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val urlBuilder = "$baseUrl/api/2/search/advanced_stories".toHttpUrl().newBuilder()
             .addQueryParameter("page", page.toString())
 
@@ -223,15 +229,31 @@ class Inkitt :
         return GET(urlBuilder.build(), headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parsePopularMangaResponse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
 
     // endregion
 
-    // region Details
+    // region Details + Chapters
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPath.resolve(manga.url), headers)
+
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        // Details and the chapter list both live on the same story page - fetch it once.
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
         val doc = response.asJsoup()
 
+        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    private fun parseMangaDetails(doc: Document): SManga {
         // Extract pills from globalData.storyPills JavaScript variable
         val pills = mutableListOf<String>()
         doc.select("script").forEach { script ->
@@ -298,9 +320,7 @@ class Inkitt :
 
     // region Chapters
 
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val doc = response.asJsoup()
-
+    private fun parseChapterList(doc: Document): List<SChapter> {
         // Try HTML chapter dropdown first (may exist on some pages)
         val chapterElements = doc.select("a.chapter-link, a[class*=chapter-link]")
         if (chapterElements.isNotEmpty()) {
@@ -337,11 +357,16 @@ class Inkitt :
         return emptyList()
     }
 
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
     // endregion
 
     // region Pages
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.newCall(GET(if (chapter.url.startsWith("http")) chapter.url else baseUrl + chapter.url, headers)).execute()
+        return listOf(Page(0, response.request.url.toString()))
+    }
 
     override suspend fun fetchPageText(page: Page): String {
         val doc = client.newCall(GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)).execute().asJsoup()
@@ -352,8 +377,6 @@ class Inkitt :
 
     // endregion
 
-    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
-
     // region Helpers
 
     private fun parseStoryToSManga(story: JsonObject): SManga = SManga.create().apply {
@@ -363,7 +386,7 @@ class Inkitt :
         thumbnail_url = cover?.get("url")?.jsonPrimitive?.content
             ?: cover?.get("iphone")?.jsonPrimitive?.content
             ?: story["cover"]?.jsonObject?.get("url")?.jsonPrimitive?.content
-        url = "/stories/$id"
+        url = mangaPath.slug("/stories/$id")
     }
 
     private fun Response.asJsoup(): Document = Jsoup.parse(body.string(), request.url.toString())
@@ -372,7 +395,7 @@ class Inkitt :
 
     // region Filters
 
-    override fun getFilterList(): FilterList {
+    override fun getFilterList(data: JsonElement?): FilterList {
         val allTags = buildTagList()
         val filters = mutableListOf<Filter<*>>(
             TitleFilter(),
