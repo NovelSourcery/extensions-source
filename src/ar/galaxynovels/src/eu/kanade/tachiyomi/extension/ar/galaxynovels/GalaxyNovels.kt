@@ -8,10 +8,13 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
@@ -22,24 +25,16 @@ import uy.kohesive.injekt.injectLazy
 import java.text.SimpleDateFormat
 import java.util.Locale
 
-class GalaxyNovels :
-    HttpSource(),
+@Source
+abstract class GalaxyNovels :
+    KeiSource(),
     NovelSource {
 
-    override val name = "Galaxy Novels"
-    override val baseUrl = "https://galaxynovels.com"
-    override val lang = "ar"
     override val supportsLatest = true
 
     private val json: Json by injectLazy()
 
-    override val isNovelSource = true
-
-    override val client: OkHttpClient = network.cloudflareClient.newBuilder()
-        .addInterceptor(WorReaderCookieInterceptor(baseUrl))
-        .build()
-
-    override fun imageUrlParse(response: Response): String = ""
+    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(WorReaderCookieInterceptor(baseUrl))
 
     private fun String?.toAbsoluteUrl(): String? = when {
         this.isNullOrEmpty() -> null
@@ -70,7 +65,7 @@ class GalaxyNovels :
 
     // ======================== Popular/Latest ========================
 
-    override fun popularMangaRequest(page: Int): Request {
+    private fun buildPopularMangaRequest(page: Int): Request {
         val url = "$baseUrl/novels/".toHttpUrl().newBuilder()
             .addQueryParameter("sort", "popular")
             .addQueryParameter("period", "all")
@@ -79,16 +74,16 @@ class GalaxyNovels :
         return GET(url, headers)
     }
 
-    override fun popularMangaParse(response: Response): MangasPage = parseNovelList(response)
+    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelList(client.newCall(buildPopularMangaRequest(page)).execute())
 
-    override fun latestUpdatesRequest(page: Int): Request {
+    private fun buildLatestUpdatesRequest(page: Int): Request {
         val url = "$baseUrl/recent/".toHttpUrl().newBuilder()
             .addQueryParameter("page", page.toString())
             .build()
         return GET(url, headers)
     }
 
-    override fun latestUpdatesParse(response: Response): MangasPage = parseNovelList(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelList(client.newCall(buildLatestUpdatesRequest(page)).execute())
 
     private fun parseNovelList(response: Response): MangasPage {
         val doc = Jsoup.parse(response.body.string())
@@ -114,7 +109,7 @@ class GalaxyNovels :
 
     // ======================== Search ========================
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (query.isNotEmpty()) {
             val url = "$baseUrl/library/".toHttpUrl().newBuilder()
                 .addQueryParameter("q", query)
@@ -150,7 +145,8 @@ class GalaxyNovels :
         return GET(url.build(), headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val response = client.newCall(buildSearchMangaRequest(page, query, filters)).execute()
         val doc = Jsoup.parse(response.body.string())
 
         val novels = doc.select("article.wor-library-card, article.wor-novel-card").mapNotNull { card ->
@@ -180,73 +176,69 @@ class GalaxyNovels :
         return MangasPage(novels, hasNextPage)
     }
 
-    // ======================== Novel Details ========================
+    // ======================== Novel Details + Chapters ========================
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        val doc = Jsoup.parse(response.body.string())
+    private fun parseMangaDetails(doc: org.jsoup.nodes.Document): SManga = SManga.create().apply {
+        title = doc.selectFirst("h1")?.text()?.trim() ?: "No Title"
 
-        return SManga.create().apply {
-            title = doc.selectFirst("h1")?.text()?.trim() ?: "No Title"
+        val img = doc.selectFirst("img.wor-cover-img")
+        thumbnail_url = img?.attr("data-src")?.toAbsoluteUrl()
+            ?: img?.attr("src")?.toAbsoluteUrl()
 
-            val img = doc.selectFirst("img.wor-cover-img")
-            thumbnail_url = img?.attr("data-src")?.toAbsoluteUrl()
-                ?: img?.attr("src")?.toAbsoluteUrl()
+        author = doc.selectFirst(".wor-single-hero__meta-text span")?.text()?.trim()
 
-            author = doc.selectFirst(".wor-single-hero__meta-text span")?.text()?.trim()
+        val genres = doc.select(".wor-tag-pill").map { it.text().trim() }
+        genre = genres.joinToString(", ")
 
-            val genres = doc.select(".wor-tag-pill").map { it.text().trim() }
-            genre = genres.joinToString(", ")
+        val statusText = doc.selectFirst(".wor-cover-status")?.text()?.lowercase()
+        status = when {
+            statusText?.contains("مستمرة") == true -> SManga.ONGOING
+            statusText?.contains("مكتملة") == true -> SManga.COMPLETED
+            statusText?.contains("متوقفة") == true -> SManga.ON_HIATUS
+            else -> SManga.UNKNOWN
+        }
 
-            val statusText = doc.selectFirst(".wor-cover-status")?.text()?.lowercase()
-            status = when {
-                statusText?.contains("مستمرة") == true -> SManga.ONGOING
-                statusText?.contains("مكتملة") == true -> SManga.COMPLETED
-                statusText?.contains("متوقفة") == true -> SManga.ON_HIATUS
-                else -> SManga.UNKNOWN
-            }
+        description = doc.selectFirst(".wor-single-summary__text")?.let { element ->
+            element.select("script, style").remove()
+            element.text().trim()
+        }
 
-            description = doc.selectFirst(".wor-single-summary__text")?.let { element ->
-                element.select("script, style").remove()
-                element.text().trim()
-            }
+        val chapterCountText = doc.select(".wor-single-stats__item")
+            .firstOrNull { it.text().contains("عدد الفصول") }
+            ?.selectFirst("strong")?.text()?.trim()
+        val chapterCount = chapterCountText?.replace(Regex("[^0-9]"), "")?.toIntOrNull() ?: 0
 
-            val chapterCountText = doc.select(".wor-single-stats__item")
-                .firstOrNull { it.text().contains("عدد الفصول") }
-                ?.selectFirst("strong")?.text()?.trim()
-            val chapterCount = chapterCountText?.replace(Regex("[^0-9]"), "")?.toIntOrNull() ?: 0
-
-            if (chapterCount > 0) {
-                description = buildString {
-                    append(description.orEmpty())
-                    append("\n\nعدد الفصول: $chapterCount")
-                }
+        if (chapterCount > 0) {
+            description = buildString {
+                append(description.orEmpty())
+                append("\n\nعدد الفصول: $chapterCount")
             }
         }
     }
 
-    // ======================== Chapters ========================
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val doc = client.newCall(GET(baseUrl + manga.url, headers)).execute().let { Jsoup.parse(it.body.string()) }
 
-    override fun chapterListRequest(manga: SManga): Request {
-        val response = client.newCall(GET(baseUrl + manga.url, headers)).execute()
-        val doc = Jsoup.parse(response.body.string())
+        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
+        val updatedChapters = if (fetchChapters) fetchChapterList(manga, doc) else chapters
 
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    private fun fetchChapterList(manga: SManga, doc: org.jsoup.nodes.Document): List<SChapter> {
         val novelId = doc.selectFirst("[data-novel-id]")?.attr("data-novel-id")
             ?: doc.selectFirst("[data-wor-current-novel]")?.attr("data-novel-id")
 
-        val chaptersUrl = if (novelId != null) {
-            "$baseUrl/wp-content/uploads/wor-reader-cache/chapters/novel-$novelId.json"
+        val response = if (novelId != null) {
+            client.newCall(GET("$baseUrl/wp-content/uploads/wor-reader-cache/chapters/novel-$novelId.json", headers)).execute()
         } else {
-            null
+            client.newCall(GET(baseUrl + manga.url, headers)).execute()
         }
-
-        return if (chaptersUrl != null) {
-            GET(chaptersUrl, headers)
-        } else {
-            GET(baseUrl + manga.url, headers)
-        }
-    }
-
-    override fun chapterListParse(response: Response): List<SChapter> {
         val body = response.body.string()
 
         return try {
@@ -309,7 +301,10 @@ class GalaxyNovels :
 
     // ======================== Chapter Content ========================
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        return listOf(Page(0, response.request.url.encodedPath))
+    }
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) {
@@ -353,7 +348,7 @@ class GalaxyNovels :
 
     // ======================== Filters ========================
 
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         Filter.Header("الفلاتر متاحة فقط مع البحث بالتصنيفات"),
         SortFilter(),
         StatusFilter(),
