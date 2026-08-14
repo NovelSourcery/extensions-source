@@ -7,7 +7,9 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
 import keiyoushi.utils.tryParse
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -15,32 +17,30 @@ import kotlinx.serialization.json.Json
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 import java.text.SimpleDateFormat
 import java.util.Locale
 
-class Markazriwayat :
-    HttpSource(),
+@Source
+abstract class Markazriwayat :
+    KeiSource(),
     NovelSource {
 
-    override val name = "Markazriwayat"
-    override val baseUrl = "https://markazriwayat.com"
-    override val lang = "ar"
     override val supportsLatest = true
-    override val isNovelSource = true
-    override val client = network.client
 
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
     }
 
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/wp-json/theam/v1/library?page=$page&per_page=$PER_PAGE&sort=popular", headers)
+    private fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/wp-json/theam/v1/library?page=$page&per_page=$PER_PAGE&sort=popular", headers)
 
-    override fun popularMangaParse(response: Response): MangasPage = parseLibraryResponse(response)
+    override suspend fun getPopularManga(page: Int): MangasPage = parseLibraryResponse(client.newCall(buildPopularMangaRequest(page)).execute())
 
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/wp-json/theam/v1/library?page=$page&per_page=$PER_PAGE&sort=new", headers)
+    private fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/wp-json/theam/v1/library?page=$page&per_page=$PER_PAGE&sort=new", headers)
 
-    override fun latestUpdatesParse(response: Response): MangasPage = parseLibraryResponse(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseLibraryResponse(client.newCall(buildLatestUpdatesRequest(page)).execute())
 
     private fun parseLibraryResponse(response: Response): MangasPage {
         val body = json.decodeFromString<LibraryResponse>(response.body.string())
@@ -61,12 +61,13 @@ class Markazriwayat :
         return MangasPage(novels, hasNextPage = body.page < body.totalPages)
     }
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val term = java.net.URLEncoder.encode(query, "UTF-8")
         return GET("$baseUrl/wp-json/theam/v1/novel-search?term=$term&page=$page&per_page=$PER_PAGE", headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val response = client.newCall(buildSearchMangaRequest(page, query, filters)).execute()
         val body = json.decodeFromString<SearchResponse>(response.body.string())
         val novels = body.items.mapNotNull { item ->
             val link = item.link.ifBlank { return@mapNotNull null }
@@ -80,42 +81,51 @@ class Markazriwayat :
         return MangasPage(novels, hasNextPage = body.hasMore)
     }
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        val doc = response.asJsoup()
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val doc = client.newCall(buildMangaDetailsRequest(manga)).execute().asJsoup()
         checkCaptcha(doc)
-        return SManga.create().apply {
-            title = doc.selectFirst("h1.manga-title")?.text()?.trim().orEmpty()
-            thumbnail_url = doc.selectFirst(".manga-cover-wrap > img")?.absCover()
-            val authors = doc.select(".manga-author")
-            author = if (authors.size >= 2) {
-                authors[1].text().trim()
-            } else {
-                authors.firstOrNull()?.text()?.trim() ?: ""
+
+        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
+        val updatedChapters = if (fetchChapters) fetchChapterList(doc) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
+        title = doc.selectFirst("h1.manga-title")?.text()?.trim().orEmpty()
+        thumbnail_url = doc.selectFirst(".manga-cover-wrap > img")?.absCover()
+        val authors = doc.select(".manga-author")
+        author = if (authors.size >= 2) {
+            authors[1].text().trim()
+        } else {
+            authors.firstOrNull()?.text()?.trim() ?: ""
+        }
+        if (authors.size >= 2) {
+            description = buildString {
+                append("مترجم الرواية : ${authors[0].text().trim()}\n")
+                append("مؤلف الرواية : ${authors[1].text().trim()}")
             }
-            if (authors.size >= 2) {
-                description = buildString {
-                    append("مترجم الرواية : ${authors[0].text().trim()}\n")
-                    append("مؤلف الرواية : ${authors[1].text().trim()}")
-                }
-            } else {
-                description = authors.joinToString("\n") { it.text().trim() }
-            }
-            genre = (doc.select(".pill-list .pill").map { it.text().trim() }).joinToString()
-            val statusText = doc.selectFirst(".status-pill")?.text().orEmpty().lowercase()
-            status = when {
-                "مكتملة" in statusText || "complete" in statusText -> SManga.COMPLETED
-                "مستمرة" in statusText || "ongoing" in statusText -> SManga.ONGOING
-                "متوقفة" in statusText || "stop" in statusText -> SManga.ON_HIATUS
-                else -> SManga.UNKNOWN
-            }
+        } else {
+            description = authors.joinToString("\n") { it.text().trim() }
+        }
+        genre = (doc.select(".pill-list .pill").map { it.text().trim() }).joinToString()
+        val statusText = doc.selectFirst(".status-pill")?.text().orEmpty().lowercase()
+        status = when {
+            "مكتملة" in statusText || "complete" in statusText -> SManga.COMPLETED
+            "مستمرة" in statusText || "ongoing" in statusText -> SManga.ONGOING
+            "متوقفة" in statusText || "stop" in statusText -> SManga.ON_HIATUS
+            else -> SManga.UNKNOWN
         }
     }
 
-    override suspend fun getChapterList(manga: SManga): List<SChapter> {
-        val doc = client.newCall(GET(baseUrl + manga.url, headers)).execute().asJsoup()
-        checkCaptcha(doc)
+    private fun fetchChapterList(doc: Document): List<SChapter> {
         val mangaId = doc.selectFirst("#manga-chapters-list")?.attr("data-manga-id")?.takeIf { it.isNotBlank() }
         if (mangaId != null) {
             val apiChapters = fetchChaptersViaApi(mangaId)
@@ -154,7 +164,7 @@ class Markazriwayat :
         return chapters.sortedByDescending { it.chapter_number }
     }
 
-    private fun parseChaptersFromHtml(doc: org.jsoup.nodes.Document): List<SChapter> = doc.select(".ch-row").mapNotNull { row ->
+    private fun parseChaptersFromHtml(doc: Document): List<SChapter> = doc.select(".ch-row").mapNotNull { row ->
         val link = row.selectFirst("a")?.attr("href")?.ifBlank { null } ?: return@mapNotNull null
         SChapter.create().apply {
             name = row.selectFirst(".ch-title")?.text()?.trim() ?: link
@@ -164,9 +174,10 @@ class Markazriwayat :
         }
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> = parseChaptersFromHtml(response.asJsoup()).sortedByDescending { it.chapter_number }
-
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        return listOf(Page(0, response.request.url.encodedPath))
+    }
 
     override suspend fun fetchPageText(page: Page): String {
         val doc = client.newCall(GET(baseUrl + page.url, headers)).execute().asJsoup()
@@ -185,11 +196,9 @@ class Markazriwayat :
         return content.html().trim()
     }
 
-    override fun imageUrlParse(response: Response): String = ""
-
     private fun Response.asJsoup() = Jsoup.parse(body.string(), request.url.toString())
 
-    private fun checkCaptcha(doc: org.jsoup.nodes.Document) {
+    private fun checkCaptcha(doc: Document) {
         val title = doc.title().trim()
         if (title == "Bot Verification" || title == "Just a moment...") {
             throw Exception("Captcha detected, please open in WebView")
@@ -202,7 +211,7 @@ class Markazriwayat :
         else -> "/$this"
     }
 
-    private fun org.jsoup.nodes.Element.absCover(): String? {
+    private fun Element.absCover(): String? {
         val raw = attr("data-src").ifBlank { null }
             ?: attr("data-lazy-src").ifBlank { null }
             ?: attr("src").ifBlank { null }
