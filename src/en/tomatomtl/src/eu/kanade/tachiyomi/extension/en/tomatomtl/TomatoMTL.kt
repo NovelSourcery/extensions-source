@@ -17,12 +17,17 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.booleanOrNull
@@ -56,16 +61,13 @@ data class SourceItem(
     val regexp: String = "",
 )
 
-class TomatoMTL :
-    HttpSource(),
+@Source
+abstract class TomatoMTL :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
-    override val name = "TomatoMTL"
-    override val baseUrl = "https://tomatomtl.com"
-    override val lang = "en"
     override val supportsLatest = true
-    override val isNovelSource = true
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -86,31 +88,29 @@ class TomatoMTL :
     private var lastGardenPageKey: String? = null
     private var lastGardenPageLinks: Set<String> = emptySet()
 
-    // Override client to append machine translation cookies without bypassing the default WebView CookieJar
-    override val client: OkHttpClient = network.cloudflareClient.newBuilder()
-        .addNetworkInterceptor { chain ->
-            val request = chain.request()
-            val originalCookies = request.header("Cookie") ?: ""
-            val translationMode = getTranslationMode()
+    // Append machine translation cookies without bypassing the default WebView CookieJar
+    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addNetworkInterceptor { chain ->
+        val request = chain.request()
+        val originalCookies = request.header("Cookie") ?: ""
+        val translationMode = getTranslationMode()
 
-            // Build the injected string - ensures we don't break existing user cookies like PHPSESSID from Webview
-            val newCookieHeader = buildString {
-                append(originalCookies)
-                if (isNotEmpty() && !endsWith("; ")) append("; ")
-                append("machine_translation=$translationMode; translator_button=en")
-            }
-
-            chain.proceed(
-                request.newBuilder()
-                    .header("Cookie", newCookieHeader)
-                    .build(),
-            )
+        // Build the injected string - ensures we don't break existing user cookies like PHPSESSID from Webview
+        val newCookieHeader = buildString {
+            append(originalCookies)
+            if (isNotEmpty() && !endsWith("; ")) append("; ")
+            append("machine_translation=$translationMode; translator_button=en")
         }
-        .build()
+
+        chain.proceed(
+            request.newBuilder()
+                .header("Cookie", newCookieHeader)
+                .build(),
+        )
+    }
 
     // ======================== Popular ========================
 
-    override fun popularMangaRequest(page: Int): Request {
+    private fun buildPopularMangaRequest(page: Int): Request {
         // Garden popular novels API - using garden-stats.php
         return GET(
             "$baseUrl/api/garden-stats.php?action=popular&period=all&page=$page&page_size=20",
@@ -118,7 +118,7 @@ class TomatoMTL :
         )
     }
 
-    override fun popularMangaParse(response: Response): MangasPage = parseStatsResponse(response.body.string())
+    override suspend fun getPopularManga(page: Int): MangasPage = parseStatsResponse(client.newCall(buildPopularMangaRequest(page)).execute().body.string())
 
     private fun parseStatsResponse(body: String): MangasPage {
         val jsonResult = json.parseToJsonElement(body).jsonObject
@@ -246,16 +246,16 @@ class TomatoMTL :
 
     // ======================== Latest ========================
 
-    override fun latestUpdatesRequest(page: Int): Request = GET(
+    private fun buildLatestUpdatesRequest(page: Int): Request = GET(
         "$baseUrl/api/garden-stats.php?action=recent&period=all&page=$page&page_size=20",
         headers,
     )
 
-    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseStatsResponse(client.newCall(buildLatestUpdatesRequest(page)).execute().body.string())
 
     // ======================== Search ========================
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val offset = (page - 1) * 20
 
         val sourceFilter = filters.find { it is SourceFilter } as? SourceFilter
@@ -346,7 +346,9 @@ class TomatoMTL :
         return POST("$baseUrl/api/search-proxy.php", headers, requestBody)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseSearchMangaResponse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
+
+    private fun parseSearchMangaResponse(response: Response): MangasPage {
         val responseBody = response.body.string()
         val requestUrl = response.request.url.toString()
 
@@ -790,23 +792,42 @@ class TomatoMTL :
 
     // ======================== Details ========================
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET("$baseUrl${manga.url}", headers)
+    private fun buildMangaDetailsRequest(manga: SManga): Request = GET("$baseUrl${manga.url}", headers)
 
     /**
-     * Override fetchMangaDetails to handle garden novels differently.
-     * Garden novel pages require login, so we fetch details from garden-stats API instead.
+     * Garden novels: details come from the garden-stats API instead of HTML (garden novel pages
+     * require login). Regular novels: details+chapters live on the same page - fetch it once.
      */
-    override fun fetchMangaDetails(manga: SManga): rx.Observable<SManga> = if (manga.url.contains("/garden/")) {
-        // For garden novels, fetch details from garden-stats API
-        fetchGardenMangaDetails(manga)
-    } else {
-        // For regular novels, use default HTML parsing
-        super.fetchMangaDetails(manga)
-    }
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate = coroutineScope {
+        val isGarden = manga.url.contains("/garden/")
 
-    private fun fetchGardenMangaDetails(manga: SManga): rx.Observable<SManga> = rx.Observable.fromCallable {
-        fetchGardenMangaDetailsInternal(manga)
-    }.map { ensureGardenTitle(it) }
+        if (isGarden) {
+            val detailsDeferred = if (fetchDetails) async { ensureGardenTitle(fetchGardenMangaDetailsInternal(manga)) } else null
+            val chaptersDeferred = if (fetchChapters) async { fetchGardenChapterListInternal(manga) } else null
+            return@coroutineScope SMangaUpdate(
+                manga = detailsDeferred?.await() ?: manga,
+                chapters = chaptersDeferred?.await() ?: chapters,
+            )
+        }
+
+        // Regular novels: details page and catalog API are separate fetches - run concurrently.
+        val detailsDeferred = if (fetchDetails) {
+            async { parseMangaDetailsHtml(client.newCall(buildMangaDetailsRequest(manga)).execute()) }
+        } else {
+            null
+        }
+        val chaptersDeferred = if (fetchChapters) async { fetchRegularChapterListInternal(manga) } else null
+
+        SMangaUpdate(
+            manga = detailsDeferred?.await() ?: manga,
+            chapters = chaptersDeferred?.await() ?: chapters,
+        )
+    }
 
     private fun ensureGardenTitle(manga: SManga): SManga {
         val hasTitle = runCatching { manga.title }.getOrNull()?.isNotBlank() == true
@@ -970,7 +991,7 @@ class TomatoMTL :
         }
     }
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    private fun parseMangaDetailsHtml(response: Response): SManga {
         val html = response.body.string()
         val document = Jsoup.parse(html)
 
@@ -1103,10 +1124,8 @@ class TomatoMTL :
 
     // ======================== Chapters ========================
 
-    override fun chapterListRequest(manga: SManga): Request = GET("$baseUrl${manga.url}", headers)
-
-    private fun fetchGardenChapterList(manga: SManga): rx.Observable<List<SChapter>> {
-        return rx.Observable.fromCallable {
+    private fun fetchGardenChapterListInternal(manga: SManga): List<SChapter> {
+        return run fromCallable@{
             try {
                 val pathParts = manga.url.removePrefix("/garden/").split("/")
                 if (pathParts.size < 2) return@fromCallable emptyList<SChapter>()
@@ -1225,7 +1244,7 @@ class TomatoMTL :
         }
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> {
+    private fun parseChapterListHtml(response: Response): List<SChapter> {
         val document = Jsoup.parse(response.body.string())
         val chapters = mutableListOf<SChapter>()
         val chapterNames = mutableListOf<String>()
@@ -1287,23 +1306,14 @@ class TomatoMTL :
     }
 
     /**
-     * Override fetchChapterList to use the catalog API for non-garden novels
-     */
-    override fun fetchChapterList(manga: SManga): rx.Observable<List<SChapter>> = if (manga.url.contains("/garden/")) {
-        fetchGardenChapterList(manga)
-    } else {
-        fetchRegularChapterList(manga)
-    }
-
-    /**
      * Fetch chapter list for non-garden novels using the catalog API
      */
-    private fun fetchRegularChapterList(manga: SManga): rx.Observable<List<SChapter>> {
-        return rx.Observable.fromCallable {
+    private fun fetchRegularChapterListInternal(manga: SManga): List<SChapter> {
+        return run fromCallable@{
             try {
                 val bookId = manga.url.removePrefix("/book/").split("/").firstOrNull()
                 if (bookId.isNullOrBlank()) {
-                    return@fromCallable this.chapterListParse(
+                    return@fromCallable parseChapterListHtml(
                         client.newCall(GET("$baseUrl${manga.url}", headers)).execute(),
                     )
                 }
@@ -1367,7 +1377,7 @@ class TomatoMTL :
                 }
 
                 if (chapters.isEmpty()) {
-                    return@fromCallable this.chapterListParse(
+                    return@fromCallable parseChapterListHtml(
                         client.newCall(GET("$baseUrl${manga.url}", headers)).execute(),
                     )
                 }
@@ -1414,13 +1424,9 @@ class TomatoMTL :
 
     // ======================== Pages ========================
 
-    override fun pageListRequest(chapter: SChapter): Request = GET("$baseUrl${chapter.url}", headers)
-
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
-
-    override fun fetchPageList(chapter: SChapter): rx.Observable<List<Page>> {
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
         val url = if (chapter.url.startsWith("http")) chapter.url else "$baseUrl${chapter.url}"
-        return rx.Observable.just(listOf(Page(0, url)))
+        return listOf(Page(0, url))
     }
 
     // ======================== Page Text (Novel) ========================
@@ -1940,8 +1946,6 @@ class TomatoMTL :
         }
     }
 
-    override fun imageUrlParse(response: Response): String = ""
-
     // ======================== Preferences ========================
 
     private val titleIdRegex = Regex("""\s*\(\s*\d+\s*-\s*\d+\s*\)\s*$""")
@@ -2000,7 +2004,7 @@ class TomatoMTL :
 
     // ======================== Filters ========================
 
-    override fun getFilterList(): FilterList {
+    override fun getFilterList(data: JsonElement?): FilterList {
         val filters = mutableListOf<Filter<*>>()
 
         filters.add(Filter.Header("Search Filters (for keyword search)"))
