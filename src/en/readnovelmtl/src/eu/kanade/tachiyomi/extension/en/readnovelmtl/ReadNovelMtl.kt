@@ -238,44 +238,42 @@ abstract class ReadNovelMtl :
         val response = client.newCall(request).execute()
         val document = Jsoup.parse(response.body.string())
 
-        val content = StringBuilder()
-
         val contentSection = document.selectFirst("#content")
 
-        contentSection?.let { section ->
-            section.children().forEach { element ->
-                when (element.tagName()) {
-                    "p" -> {
-                        val text = element.text()
-                        if (!text.isNullOrEmpty()) {
-                            content.append("<p>$text</p>\n")
+        return buildString {
+            contentSection?.let { section ->
+                section.children().forEach { element ->
+                    when (element.tagName()) {
+                        "p" -> {
+                            val text = element.text()
+                            if (!text.isNullOrEmpty()) {
+                                append("<p>$text</p>\n")
+                            }
                         }
-                    }
 
-                    "h1", "h2", "h3" -> {
-                        content.append("<h3>${element.text()}</h3>\n")
-                    }
+                        "h1", "h2", "h3" -> {
+                            append("<h3>${element.text()}</h3>\n")
+                        }
 
-                    "img" -> {
-                        val src = element.absUrl("src")
-                        if (src.isNotEmpty()) {
-                            content.append("<img src=\"$src\">\n")
+                        "img" -> {
+                            val src = element.absUrl("src")
+                            if (src.isNotEmpty()) {
+                                append("<img src=\"$src\">\n")
+                            }
                         }
                     }
                 }
-            }
 
-            if (content.isEmpty()) {
-                val directText = section.text()
-                if (directText.isNotEmpty()) {
-                    directText.split("\n").filter { it.isNotBlank() }.forEach { line ->
-                        content.append("<p>${line.trim()}</p>\n")
+                if (isEmpty()) {
+                    val directText = section.text()
+                    if (directText.isNotEmpty()) {
+                        directText.split("\n").filter { it.isNotBlank() }.forEach { line ->
+                            append("<p>${line.trim()}</p>\n")
+                        }
                     }
                 }
             }
         }
-
-        return content.toString()
     }
     // ======================== Filters ========================
 

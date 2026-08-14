@@ -55,120 +55,120 @@ abstract class AsianNovel :
     // ======================== Search ========================
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val url = StringBuilder()
+        val url = buildString {
+            if (page > 1) {
+                append("$baseUrl/page/$page/?")
+            } else {
+                append("$baseUrl/?")
+            }
 
-        if (page > 1) {
-            url.append("$baseUrl/page/$page/?")
-        } else {
-            url.append("$baseUrl/?")
-        }
+            append("s=${java.net.URLEncoder.encode(query, "UTF-8")}")
+            append("&post_type=fcn_story") // Search only stories
 
-        url.append("s=${java.net.URLEncoder.encode(query, "UTF-8")}")
-        url.append("&post_type=fcn_story") // Search only stories
+            var sortBy = "modified"
+            var sortOrder = "desc"
+            val genres = mutableListOf<Int>()
+            val excludeGenres = mutableListOf<Int>()
+            val tags = mutableListOf<Int>()
+            val excludeTags = mutableListOf<Int>()
 
-        var sortBy = "modified"
-        var sortOrder = "desc"
-        val genres = mutableListOf<Int>()
-        val excludeGenres = mutableListOf<Int>()
-        val tags = mutableListOf<Int>()
-        val excludeTags = mutableListOf<Int>()
-
-        filters.forEach { filter ->
-            when (filter) {
-                is SortFilter -> {
-                    sortBy = sortOptions[filter.state].second
-                }
-
-                is OrderFilter -> {
-                    sortOrder = orderOptions[filter.state].second
-                }
-
-                is AgeRatingFilter -> {
-                    if (filter.state > 0) {
-                        url.append("&age_rating=${ageRatingOptions[filter.state].second}")
+            filters.forEach { filter ->
+                when (filter) {
+                    is SortFilter -> {
+                        sortBy = sortOptions[filter.state].second
                     }
-                }
 
-                is StatusFilter -> {
-                    if (filter.state > 0) {
-                        url.append("&story_status=${statusOptions[filter.state].second}")
+                    is OrderFilter -> {
+                        sortOrder = orderOptions[filter.state].second
                     }
-                }
 
-                is MinWordsFilter -> {
-                    if (filter.state > 0) {
-                        url.append("&miw=${minWordOptions[filter.state].second}")
-                    }
-                }
-
-                is MaxWordsFilter -> {
-                    if (filter.state > 0) {
-                        url.append("&maw=${maxWordOptions[filter.state].second}")
-                    }
-                }
-
-                is GenreFilter -> {
-                    filter.state.forEachIndexed { index, triState ->
-                        when (triState.state) {
-                            Filter.TriState.STATE_INCLUDE -> genres.add(genreList[index].second)
-                            Filter.TriState.STATE_EXCLUDE -> excludeGenres.add(genreList[index].second)
+                    is AgeRatingFilter -> {
+                        if (filter.state > 0) {
+                            append("&age_rating=${ageRatingOptions[filter.state].second}")
                         }
                     }
-                }
 
-                is TagFilter -> {
-                    filter.state.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { tagName ->
-                        tagList.find { it.first.equals(tagName, ignoreCase = true) }?.let { tag ->
-                            tags.add(tag.second)
+                    is StatusFilter -> {
+                        if (filter.state > 0) {
+                            append("&story_status=${statusOptions[filter.state].second}")
                         }
                     }
-                }
 
-                is ExcludeTagFilter -> {
-                    filter.state.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { tagName ->
-                        tagList.find { it.first.equals(tagName, ignoreCase = true) }?.let { tag ->
-                            excludeTags.add(tag.second)
+                    is MinWordsFilter -> {
+                        if (filter.state > 0) {
+                            append("&miw=${minWordOptions[filter.state].second}")
                         }
                     }
-                }
 
-                is AuthorFilter -> {
-                    if (filter.state.isNotBlank()) {
-                        url.append("&author_name=${java.net.URLEncoder.encode(filter.state, "UTF-8")}")
+                    is MaxWordsFilter -> {
+                        if (filter.state > 0) {
+                            append("&maw=${maxWordOptions[filter.state].second}")
+                        }
                     }
-                }
 
-                else -> {}
+                    is GenreFilter -> {
+                        filter.state.forEachIndexed { index, triState ->
+                            when (triState.state) {
+                                Filter.TriState.STATE_INCLUDE -> genres.add(genreList[index].second)
+                                Filter.TriState.STATE_EXCLUDE -> excludeGenres.add(genreList[index].second)
+                            }
+                        }
+                    }
+
+                    is TagFilter -> {
+                        filter.state.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { tagName ->
+                            tagList.find { it.first.equals(tagName, ignoreCase = true) }?.let { tag ->
+                                tags.add(tag.second)
+                            }
+                        }
+                    }
+
+                    is ExcludeTagFilter -> {
+                        filter.state.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { tagName ->
+                            tagList.find { it.first.equals(tagName, ignoreCase = true) }?.let { tag ->
+                                excludeTags.add(tag.second)
+                            }
+                        }
+                    }
+
+                    is AuthorFilter -> {
+                        if (filter.state.isNotBlank()) {
+                            append("&author_name=${java.net.URLEncoder.encode(filter.state, "UTF-8")}")
+                        }
+                    }
+
+                    else -> {}
+                }
+            }
+
+            append("&orderby=$sortBy&order=$sortOrder")
+
+            if (genres.isNotEmpty()) {
+                append("&genres=${genres.joinToString(",")}")
+            } else {
+                append("&genres=")
+            }
+
+            if (tags.isNotEmpty()) {
+                append("&tags=${tags.joinToString(",")}")
+            } else {
+                append("&tags=")
+            }
+
+            if (excludeGenres.isNotEmpty()) {
+                append("&ex_genres=${excludeGenres.joinToString(",")}")
+            } else {
+                append("&ex_genres=")
+            }
+
+            if (excludeTags.isNotEmpty()) {
+                append("&ex_tags=${excludeTags.joinToString(",")}")
+            } else {
+                append("&ex_tags=")
             }
         }
 
-        url.append("&orderby=$sortBy&order=$sortOrder")
-
-        if (genres.isNotEmpty()) {
-            url.append("&genres=${genres.joinToString(",")}")
-        } else {
-            url.append("&genres=")
-        }
-
-        if (tags.isNotEmpty()) {
-            url.append("&tags=${tags.joinToString(",")}")
-        } else {
-            url.append("&tags=")
-        }
-
-        if (excludeGenres.isNotEmpty()) {
-            url.append("&ex_genres=${excludeGenres.joinToString(",")}")
-        } else {
-            url.append("&ex_genres=")
-        }
-
-        if (excludeTags.isNotEmpty()) {
-            url.append("&ex_tags=${excludeTags.joinToString(",")}")
-        } else {
-            url.append("&ex_tags=")
-        }
-
-        val response = client.newCall(GET(url.toString(), headers)).execute()
+        val response = client.newCall(GET(url, headers)).execute()
         return parseSearchResults(Jsoup.parse(response.body.string()))
     }
 
@@ -276,44 +276,42 @@ abstract class AsianNovel :
         val response = client.newCall(request).execute()
         val document = Jsoup.parse(response.body.string())
 
-        val content = StringBuilder()
-
         val contentSection = document.selectFirst("#chapter-content, .chapter__content")
 
-        contentSection?.let { section ->
-            val wrapper = section.selectFirst(".resize-font, .chapter-formatting") ?: section
+        return buildString {
+            contentSection?.let { section ->
+                val wrapper = section.selectFirst(".resize-font, .chapter-formatting") ?: section
 
-            wrapper.children().forEach { element ->
-                if (element.hasClass("adsbygoogle") || element.attr("id").contains("ad", ignoreCase = true) ||
-                    element.tagName() == "script" ||
-                    element.tagName() == "ins"
-                ) {
-                    return@forEach
-                }
+                wrapper.children().forEach { element ->
+                    if (element.hasClass("adsbygoogle") || element.attr("id").contains("ad", ignoreCase = true) ||
+                        element.tagName() == "script" ||
+                        element.tagName() == "ins"
+                    ) {
+                        return@forEach
+                    }
 
-                when (element.tagName()) {
-                    "p" -> {
-                        val text = element.text()
-                        if (!text.isNullOrEmpty()) {
-                            content.append("<p>$text</p>\n")
+                    when (element.tagName()) {
+                        "p" -> {
+                            val text = element.text()
+                            if (!text.isNullOrEmpty()) {
+                                append("<p>$text</p>\n")
+                            }
                         }
-                    }
 
-                    "h1", "h2", "h3" -> {
-                        content.append("<h3>${element.text()}</h3>\n")
-                    }
+                        "h1", "h2", "h3" -> {
+                            append("<h3>${element.text()}</h3>\n")
+                        }
 
-                    "img" -> {
-                        val src = element.absUrl("src")
-                        if (src.isNotEmpty()) {
-                            content.append("<img src=\"$src\">\n")
+                        "img" -> {
+                            val src = element.absUrl("src")
+                            if (src.isNotEmpty()) {
+                                append("<img src=\"$src\">\n")
+                            }
                         }
                     }
                 }
             }
         }
-
-        return content.toString()
     }
 
     // ======================== Filters ========================

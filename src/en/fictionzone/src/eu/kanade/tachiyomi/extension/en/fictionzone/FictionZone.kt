@@ -602,14 +602,9 @@ abstract class FictionZone :
             // Fallback: extract all <p> tags from the body (rare)
             val paragraphs = doc.select("p")
             if (paragraphs.isNotEmpty()) {
-                val sb = StringBuilder()
-                for (p in paragraphs) {
-                    if (p.parent()?.hasClass("ad-slot") == true || p.parent()?.hasClass("advertisement") == true) {
-                        continue
-                    }
-                    sb.append(p.outerHtml())
-                }
-                return sb.toString()
+                return paragraphs
+                    .filterNot { p -> p.parent()?.hasClass("ad-slot") == true || p.parent()?.hasClass("advertisement") == true }
+                    .joinToString("") { it.outerHtml() }
             }
             throw Exception("Could not find any chapter content on the page")
         }

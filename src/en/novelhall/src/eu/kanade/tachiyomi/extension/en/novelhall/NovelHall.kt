@@ -268,56 +268,54 @@ abstract class NovelHall :
         val response = client.newCall(request).execute()
         val document = Jsoup.parse(response.body.string())
 
-        val content = StringBuilder()
-
         // Parse chapter content from #htmlContent div
         val contentSection = document.selectFirst("#htmlContent")
 
-        contentSection?.let { section ->
-            // Process all children
-            section.children().forEach { element ->
-                when (element.tagName()) {
-                    "p" -> {
-                        val text = element.text()
-                        if (!text.isNullOrEmpty()) {
-                            content.append("<p>$text</p>\n")
+        return buildString {
+            contentSection?.let { section ->
+                // Process all children
+                section.children().forEach { element ->
+                    when (element.tagName()) {
+                        "p" -> {
+                            val text = element.text()
+                            if (!text.isNullOrEmpty()) {
+                                append("<p>$text</p>\n")
+                            }
                         }
-                    }
 
-                    "br" -> {
-                        // Ignore line breaks, they're handled by paragraph structure
-                    }
+                        "br" -> {
+                            // Ignore line breaks, they're handled by paragraph structure
+                        }
 
-                    "h1", "h2", "h3", "h4" -> {
-                        content.append("<h3>${element.text()}</h3>\n")
-                    }
+                        "h1", "h2", "h3", "h4" -> {
+                            append("<h3>${element.text()}</h3>\n")
+                        }
 
-                    "img" -> {
-                        val src = element.absUrl("src")
-                        if (src.isNotEmpty()) {
-                            content.append("<img src=\"$src\">\n")
+                        "img" -> {
+                            val src = element.absUrl("src")
+                            if (src.isNotEmpty()) {
+                                append("<img src=\"$src\">\n")
+                            }
                         }
                     }
                 }
-            }
 
-            // If no structured content, get raw HTML and convert to paragraphs
-            if (content.isEmpty()) {
-                val html = section.html()
-                // Split by <br> tags and wrap each segment in paragraphs
-                html.split(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE))
-                    .map { it.trim() }
-                    .filter { it.isNotBlank() && !it.startsWith("<script") }
-                    .forEach { segment ->
-                        val cleanText = Jsoup.parse(segment).text()
-                        if (cleanText.isNotBlank()) {
-                            content.append("<p>$cleanText</p>\n")
+                // If no structured content, get raw HTML and convert to paragraphs
+                if (isEmpty()) {
+                    val html = section.html()
+                    // Split by <br> tags and wrap each segment in paragraphs
+                    html.split(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE))
+                        .map { it.trim() }
+                        .filter { it.isNotBlank() && !it.startsWith("<script") }
+                        .forEach { segment ->
+                            val cleanText = Jsoup.parse(segment).text()
+                            if (cleanText.isNotBlank()) {
+                                append("<p>$cleanText</p>\n")
+                            }
                         }
-                    }
+                }
             }
         }
-
-        return content.toString()
     }
 
     override fun getFilterList(data: JsonElement?): FilterList = FilterList(

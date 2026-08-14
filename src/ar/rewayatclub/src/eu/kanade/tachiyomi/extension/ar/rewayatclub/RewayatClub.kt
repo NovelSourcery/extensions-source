@@ -222,82 +222,82 @@ abstract class RewayatClub :
     private fun extractNuxtContent(scriptHtml: String): String {
         val match = Regex("""[A-Za-z_$][A-Za-z0-9_$]*\.content=""").find(scriptHtml) ?: return ""
         val valueStart = match.range.first + match.value.length
-        val sb = StringBuilder()
-        var i = valueStart
         val len = scriptHtml.length
 
-        while (i < len) {
-            val c = scriptHtml[i]
-            when {
-                c == '\\' && i + 1 < len -> {
-                    when (scriptHtml[i + 1]) {
-                        'u' -> {
-                            if (i + 5 < len) {
-                                val hex = scriptHtml.substring(i + 2, i + 6)
-                                val cp = hex.toIntOrNull(16)
-                                if (cp != null) {
-                                    sb.appendCodePoint(cp)
-                                    i += 6
-                                    continue
+        val raw = buildString {
+            var i = valueStart
+
+            while (i < len) {
+                val c = scriptHtml[i]
+                when {
+                    c == '\\' && i + 1 < len -> {
+                        when (scriptHtml[i + 1]) {
+                            'u' -> {
+                                if (i + 5 < len) {
+                                    val hex = scriptHtml.substring(i + 2, i + 6)
+                                    val cp = hex.toIntOrNull(16)
+                                    if (cp != null) {
+                                        appendCodePoint(cp)
+                                        i += 6
+                                        continue
+                                    }
                                 }
+                                append('\\')
+                                i++
                             }
-                            sb.append('\\')
-                            i++
-                        }
-                        'n' -> {
-                            sb.append('\n')
-                            i += 2
-                        }
-                        'r' -> {
-                            sb.append('\r')
-                            i += 2
-                        }
-                        't' -> {
-                            sb.append('\t')
-                            i += 2
-                        }
-                        '\\' -> {
-                            sb.append('\\')
-                            i += 2
-                        }
-                        '"' -> {
-                            sb.append('"')
-                            i += 2
-                        }
-                        '\'' -> {
-                            sb.append('\'')
-                            i += 2
-                        }
-                        '/' -> {
-                            sb.append('/')
-                            i += 2
-                        }
-                        '0' -> {
-                            sb.append('\u0000')
-                            i += 2
-                        }
-                        else -> {
-                            sb.append(c)
-                            i++
+                            'n' -> {
+                                append('\n')
+                                i += 2
+                            }
+                            'r' -> {
+                                append('\r')
+                                i += 2
+                            }
+                            't' -> {
+                                append('\t')
+                                i += 2
+                            }
+                            '\\' -> {
+                                append('\\')
+                                i += 2
+                            }
+                            '"' -> {
+                                append('"')
+                                i += 2
+                            }
+                            '\'' -> {
+                                append('\'')
+                                i += 2
+                            }
+                            '/' -> {
+                                append('/')
+                                i += 2
+                            }
+                            '0' -> {
+                                append('\u0000')
+                                i += 2
+                            }
+                            else -> {
+                                append(c)
+                                i++
+                            }
                         }
                     }
-                }
-                c == '"' -> {
-                    val next = if (i + 1 < len) scriptHtml[i + 1] else ';'
-                    if (next == ';' || next == ')' || next == '\n' || next == '\r' || next == '}') {
-                        break
+                    c == '"' -> {
+                        val next = if (i + 1 < len) scriptHtml[i + 1] else ';'
+                        if (next == ';' || next == ')' || next == '\n' || next == '\r' || next == '}') {
+                            break
+                        }
+                        append(c)
+                        i++
                     }
-                    sb.append(c)
-                    i++
-                }
-                else -> {
-                    sb.append(c)
-                    i++
+                    else -> {
+                        append(c)
+                        i++
+                    }
                 }
             }
-        }
-
-        val raw = sb.toString().trim()
+        }.trim()
         if (raw.isEmpty()) return ""
 
         if (raw.startsWith("<")) {

@@ -208,38 +208,37 @@ abstract class ReadFromNet :
         // LN Reader: Remove empty spans and center elements
         textElement.select("span:empty, center").remove()
 
-        val chapterHtml = StringBuilder()
         var paragraph = StringBuilder()
 
-        // LN Reader: Process child nodes, accumulating text into paragraphs
-        // When hitting an Element node, flush the paragraph and add the element
-        textElement.childNodes().forEach { node ->
-            when {
-                node is TextNode -> {
-                    val content = node.text()
-                    if (content.isNotEmpty()) {
-                        paragraph.append(content).append(" ")
+        return buildString {
+            // LN Reader: Process child nodes, accumulating text into paragraphs
+            // When hitting an Element node, flush the paragraph and add the element
+            textElement.childNodes().forEach { node ->
+                when {
+                    node is TextNode -> {
+                        val content = node.text()
+                        if (content.isNotEmpty()) {
+                            paragraph.append(content).append(" ")
+                        }
                     }
-                }
 
-                node is Element -> {
-                    // Flush accumulated text as paragraph
-                    if (paragraph.isNotEmpty()) {
-                        chapterHtml.append("<p>").append(paragraph.toString().trim()).append("</p>")
-                        paragraph = StringBuilder()
-                    }
-                    if (node.tagName() != "br") {
-                        chapterHtml.append(node.outerHtml())
+                    node is Element -> {
+                        // Flush accumulated text as paragraph
+                        if (paragraph.isNotEmpty()) {
+                            append("<p>").append(paragraph.toString().trim()).append("</p>")
+                            paragraph = StringBuilder()
+                        }
+                        if (node.tagName() != "br") {
+                            append(node.outerHtml())
+                        }
                     }
                 }
             }
-        }
 
-        if (paragraph.isNotEmpty()) {
-            chapterHtml.append("<p>").append(paragraph.toString().trim()).append("</p>")
+            if (paragraph.isNotEmpty()) {
+                append("<p>").append(paragraph.toString().trim()).append("</p>")
+            }
         }
-
-        return chapterHtml.toString()
     }
 
     private fun Response.asJsoup(): Document = Jsoup.parse(body.string())

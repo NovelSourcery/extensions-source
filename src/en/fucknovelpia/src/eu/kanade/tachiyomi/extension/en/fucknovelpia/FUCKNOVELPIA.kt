@@ -54,40 +54,42 @@ abstract class FUCKNOVELPIA :
     // ======================== Search ========================
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val url = StringBuilder("$baseUrl/?page=$page")
-
-        if (query.isNotBlank()) {
-            url.append("&q=${java.net.URLEncoder.encode(query, "UTF-8")}")
-        }
-
         var request: Request? = null
 
-        filters.forEach { filter ->
-            when (filter) {
-                is TagFilter -> {
-                    val tags = filter.state.split(",")
-                        .map { it.trim().lowercase() }
-                        .filter { it.isNotEmpty() }
-                    tags.forEach { tag ->
-                        url.append("&tags[]=$tag")
-                    }
-                }
+        val url = buildString {
+            append("$baseUrl/?page=$page")
 
-                is InversePaginationFilter -> {
-                    if (filter.state && cachedTotalPages > 0) {
-                        // Calculate inverse page
-                        val inversePage = cachedTotalPages - page + 1
-                        if (inversePage > 0) {
-                            request = GET(url.toString().replace("page=$page", "page=$inversePage"), headers)
+            if (query.isNotBlank()) {
+                append("&q=${java.net.URLEncoder.encode(query, "UTF-8")}")
+            }
+
+            filters.forEach { filter ->
+                when (filter) {
+                    is TagFilter -> {
+                        val tags = filter.state.split(",")
+                            .map { it.trim().lowercase() }
+                            .filter { it.isNotEmpty() }
+                        tags.forEach { tag ->
+                            append("&tags[]=$tag")
                         }
                     }
-                }
 
-                else -> {}
+                    is InversePaginationFilter -> {
+                        if (filter.state && cachedTotalPages > 0) {
+                            // Calculate inverse page
+                            val inversePage = cachedTotalPages - page + 1
+                            if (inversePage > 0) {
+                                request = GET(toString().replace("page=$page", "page=$inversePage"), headers)
+                            }
+                        }
+                    }
+
+                    else -> {}
+                }
             }
         }
 
-        val document = Jsoup.parse(client.newCall(request ?: GET(url.toString(), headers)).execute().body.string())
+        val document = Jsoup.parse(client.newCall(request ?: GET(url, headers)).execute().body.string())
         parseTotalPages(document)
         val novels = document.select("div.card").mapNotNull { parseNovelCard(it) }
         return MangasPage(novels, hasNextPage(document))

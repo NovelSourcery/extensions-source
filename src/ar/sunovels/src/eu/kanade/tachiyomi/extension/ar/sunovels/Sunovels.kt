@@ -347,20 +347,18 @@ abstract class Sunovels :
     /**
      * Extract and concatenate all RSC flight data into a single string for easy searching.
      */
-    private fun extractRscBody(html: String): String {
-        val sb = StringBuilder()
+    private fun extractRscBody(html: String): String = buildString {
         val pattern = Regex("""self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)""")
         pattern.findAll(html).forEach { match ->
             val raw = match.groupValues[1]
-            sb.append(
+            append(
                 raw.replace("\\\"", "\"")
                     .replace("\\\\", "\\")
                     .replace("\\n", "\n")
                     .replace("\\t", "\t"),
             )
-            sb.append("\n")
+            append("\n")
         }
-        return sb.toString()
     }
 
     /**

@@ -327,21 +327,22 @@ abstract class NovelUpdates :
 
     private fun recordHighestTracked(mangaUrl: String, value: Float) {
         val raw = preferences.getString(PREF_HIGHEST_CACHE, "") ?: ""
-        val rebuilt = StringBuilder()
         var replaced = false
-        raw.split('\n').filter { it.isNotEmpty() }.forEach { line ->
-            val sep = line.indexOf('|')
-            if (sep > 0 && line.substring(0, sep) == mangaUrl) {
-                if (!replaced) {
-                    rebuilt.append(mangaUrl).append('|').append(value).append('\n')
-                    replaced = true
+        val rebuilt = buildString {
+            raw.split('\n').filter { it.isNotEmpty() }.forEach { line ->
+                val sep = line.indexOf('|')
+                if (sep > 0 && line.substring(0, sep) == mangaUrl) {
+                    if (!replaced) {
+                        append(mangaUrl).append('|').append(value).append('\n')
+                        replaced = true
+                    }
+                } else {
+                    append(line).append('\n')
                 }
-            } else {
-                rebuilt.append(line).append('\n')
             }
+            if (!replaced) append(mangaUrl).append('|').append(value).append('\n')
         }
-        if (!replaced) rebuilt.append(mangaUrl).append('|').append(value).append('\n')
-        preferences.edit().putString(PREF_HIGHEST_CACHE, rebuilt.toString()).apply()
+        preferences.edit().putString(PREF_HIGHEST_CACHE, rebuilt).apply()
     }
 
     private fun forgetHighestTracked(mangaUrl: String) {

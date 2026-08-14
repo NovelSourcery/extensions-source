@@ -476,21 +476,19 @@ abstract class WuxiaClick :
         val response = client.newCall(request).execute()
         val chapter = json.decodeFromString<ChapterContent>(response.body.string())
 
-        val content = StringBuilder()
-
-        content.append("<h2>${chapter.title}</h2>\n")
-
         val text = chapter.text
 
-        // Split by lines and wrap in paragraphs
-        text.split("\n").forEach { line ->
-            val trimmed = line.trim()
-            if (trimmed.isNotEmpty()) {
-                content.append("<p>$trimmed</p>\n")
+        return buildString {
+            append("<h2>${chapter.title}</h2>\n")
+
+            // Split by lines and wrap in paragraphs
+            text.split("\n").forEach { line ->
+                val trimmed = line.trim()
+                if (trimmed.isNotEmpty()) {
+                    append("<p>$trimmed</p>\n")
+                }
             }
         }
-
-        return content.toString()
     }
 
     // ======================== Filters ========================

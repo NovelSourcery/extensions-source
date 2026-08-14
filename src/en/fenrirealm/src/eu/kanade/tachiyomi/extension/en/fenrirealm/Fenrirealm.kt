@@ -52,11 +52,7 @@ private val INVISIBLE_CHARS = Regex("[\\u200B\\u200C\\u200D\\u2060\\uFEFF]")
 private fun htmlToPlainTextPreserveBreaks(html: String): String {
     val document = Jsoup.parseBodyFragment(html)
     val body = document.body()
-    val output = StringBuilder()
-
-    appendNodeText(body, output)
-
-    return output.toString()
+    return buildString { appendNodeText(body, this) }
         .replace(Regex("\\n{3,}"), "\n\n")
         .trim()
 }

@@ -487,35 +487,33 @@ abstract class Ranobes :
         val response = client.newCall(request).execute()
         val document = Jsoup.parse(response.body.string())
 
-        val content = StringBuilder()
+        return buildString {
+            val chapterTitle = document.selectFirst("h1.h4.title")?.ownText()
+            if (!chapterTitle.isNullOrEmpty()) {
+                append("<h2>$chapterTitle</h2>\n")
+            }
 
-        val chapterTitle = document.selectFirst("h1.h4.title")?.ownText()
-        if (!chapterTitle.isNullOrEmpty()) {
-            content.append("<h2>$chapterTitle</h2>\n")
-        }
-
-        val textDiv = document.selectFirst("div.text#arrticle")
-        textDiv?.children()?.forEach { element ->
-            when (element.tagName()) {
-                "p" -> {
-                    val text = element.text()
-                    if (!text.isNullOrEmpty()) {
-                        content.append("<p>$text</p>\n")
+            val textDiv = document.selectFirst("div.text#arrticle")
+            textDiv?.children()?.forEach { element ->
+                when (element.tagName()) {
+                    "p" -> {
+                        val text = element.text()
+                        if (!text.isNullOrEmpty()) {
+                            append("<p>$text</p>\n")
+                        }
                     }
-                }
 
-                "br" -> content.append("<br>\n")
+                    "br" -> append("<br>\n")
 
-                else -> {
-                    val text = element.text()
-                    if (!text.isNullOrEmpty()) {
-                        content.append("<p>$text</p>\n")
+                    else -> {
+                        val text = element.text()
+                        if (!text.isNullOrEmpty()) {
+                            append("<p>$text</p>\n")
+                        }
                     }
                 }
             }
         }
-
-        return content.toString()
     }
     // ======================== Filters ========================
 

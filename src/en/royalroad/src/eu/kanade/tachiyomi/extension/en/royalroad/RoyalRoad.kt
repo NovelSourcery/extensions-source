@@ -144,25 +144,23 @@ abstract class RoyalRoad :
             }
         }
 
-        val result = StringBuilder()
+        return buildString {
+            if (beforeNotes.isNotEmpty()) {
+                append("<div class='author-note-before'>")
+                append(beforeNotes.joinToString("\n"))
+                append("</div>")
+                append("<hr class='notes-separator'>")
+            }
 
-        if (beforeNotes.isNotEmpty()) {
-            result.append("<div class='author-note-before'>")
-            result.append(beforeNotes.joinToString("\n"))
-            result.append("</div>")
-            result.append("<hr class='notes-separator'>")
+            append(processChapterHtml(chapterElement, hiddenClass))
+
+            if (afterNotes.isNotEmpty()) {
+                append("<hr class='notes-separator'>")
+                append("<div class='author-note-after'>")
+                append(afterNotes.joinToString("\n"))
+                append("</div>")
+            }
         }
-
-        result.append(processChapterHtml(chapterElement, hiddenClass))
-
-        if (afterNotes.isNotEmpty()) {
-            result.append("<hr class='notes-separator'>")
-            result.append("<div class='author-note-after'>")
-            result.append(afterNotes.joinToString("\n"))
-            result.append("</div>")
-        }
-
-        return result.toString()
     }
 
     private fun processChapterHtml(element: Element, hiddenClass: String?): String {

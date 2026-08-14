@@ -356,11 +356,11 @@ abstract class MtlBooks :
         return if (rawContent.isNullOrBlank()) {
             "<p>No content available for this chapter.</p>"
         } else {
-            val content = StringBuilder()
-            rawContent.split("\n").filter { it.isNotBlank() }.forEach { line ->
-                content.append("<p>${line.trim()}</p>\n")
-            }
-            content.toString().ifEmpty { "<p>No content available.</p>" }
+            buildString {
+                rawContent.split("\n").filter { it.isNotBlank() }.forEach { line ->
+                    append("<p>${line.trim()}</p>\n")
+                }
+            }.ifEmpty { "<p>No content available.</p>" }
         }
     }
 

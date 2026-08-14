@@ -94,71 +94,73 @@ abstract class LnCrawler :
     // ======================== Search ========================
 
     private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val url = StringBuilder("$apiUrl/novels/search/?page=$page&page_size=24")
-
-        if (query.isNotBlank()) {
-            url.append("&query=${java.net.URLEncoder.encode(query, "UTF-8")}")
-        }
-
         var sortBy = "popularity"
         var sortOrder = "desc"
 
-        filters.forEach { filter ->
-            when (filter) {
-                is LanguageFilter -> {
-                    if (filter.state > 0) {
-                        url.append("&language=${filter.pairValues[filter.state].second}")
-                    }
-                }
+        val url = buildString {
+            append("$apiUrl/novels/search/?page=$page&page_size=24")
 
-                is SortFilter -> {
-                    sortBy = filter.pairValues[filter.state].second
-                }
-
-                is SortOrderFilter -> {
-                    sortOrder = filter.pairValues[filter.state].second
-                }
-
-                is MinRatingFilter -> {
-                    if (filter.state.isNotBlank()) {
-                        url.append("&min_rating=${filter.state}")
-                    }
-                }
-
-                is TagFilter -> {
-                    filter.state.split(",")
-                        .map { it.trim() }
-                        .filter { it.isNotEmpty() }
-                        .forEach { tag ->
-                            url.append("&tag=${java.net.URLEncoder.encode(tag, "UTF-8")}")
-                        }
-                }
-
-                is ExcludeTagFilter -> {
-                    filter.state.split(",")
-                        .map { it.trim() }
-                        .filter { it.isNotEmpty() }
-                        .forEach { tag ->
-                            url.append("&exclude_tag=${java.net.URLEncoder.encode(tag, "UTF-8")}")
-                        }
-                }
-
-                is AuthorFilter -> {
-                    filter.state.split(",")
-                        .map { it.trim() }
-                        .filter { it.isNotEmpty() }
-                        .forEach { author ->
-                            url.append("&author=${java.net.URLEncoder.encode(author, "UTF-8")}")
-                        }
-                }
-
-                else -> {}
+            if (query.isNotBlank()) {
+                append("&query=${java.net.URLEncoder.encode(query, "UTF-8")}")
             }
+
+            filters.forEach { filter ->
+                when (filter) {
+                    is LanguageFilter -> {
+                        if (filter.state > 0) {
+                            append("&language=${filter.pairValues[filter.state].second}")
+                        }
+                    }
+
+                    is SortFilter -> {
+                        sortBy = filter.pairValues[filter.state].second
+                    }
+
+                    is SortOrderFilter -> {
+                        sortOrder = filter.pairValues[filter.state].second
+                    }
+
+                    is MinRatingFilter -> {
+                        if (filter.state.isNotBlank()) {
+                            append("&min_rating=${filter.state}")
+                        }
+                    }
+
+                    is TagFilter -> {
+                        filter.state.split(",")
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                            .forEach { tag ->
+                                append("&tag=${java.net.URLEncoder.encode(tag, "UTF-8")}")
+                            }
+                    }
+
+                    is ExcludeTagFilter -> {
+                        filter.state.split(",")
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                            .forEach { tag ->
+                                append("&exclude_tag=${java.net.URLEncoder.encode(tag, "UTF-8")}")
+                            }
+                    }
+
+                    is AuthorFilter -> {
+                        filter.state.split(",")
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                            .forEach { author ->
+                                append("&author=${java.net.URLEncoder.encode(author, "UTF-8")}")
+                            }
+                    }
+
+                    else -> {}
+                }
+            }
+
+            append("&sort_by=$sortBy&sort_order=$sortOrder")
         }
 
-        url.append("&sort_by=$sortBy&sort_order=$sortOrder")
-
-        return GET(url.toString(), headers)
+        return GET(url, headers)
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parsePopularMangaResponse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
@@ -318,20 +320,37 @@ abstract class LnCrawler :
         val response = client.newCall(request).execute()
         val chapter = json.decodeFromString<ChapterContent>(response.body.string())
 
-        val content = StringBuilder()
-
         val document = Jsoup.parse(chapter.body)
 
-        document.body().children().forEach { element ->
-            when (element.tagName()) {
-                "h1", "h2", "h3" -> {
-                    content.append("<h2>${element.text()}</h2>\n")
-                }
+        return buildString {
+            document.body().children().forEach { element ->
+                when (element.tagName()) {
+                    "h1", "h2", "h3" -> {
+                        append("<h2>${element.text()}</h2>\n")
+                    }
 
-                "p" -> {
-                    val img = element.selectFirst("img")
-                    if (img != null) {
-                        val imgSrc = img.attr("src")
+                    "p" -> {
+                        val img = element.selectFirst("img")
+                        if (img != null) {
+                            val imgSrc = img.attr("src")
+                            val fullUrl = if (imgSrc.startsWith("images/") && chapter.imagesPath != null) {
+                                "${chapter.imagesPath}/${imgSrc.removePrefix("images/")}"
+                            } else if (imgSrc.startsWith("http")) {
+                                imgSrc
+                            } else {
+                                "$apiUrl/$imgSrc"
+                            }
+                            append("<img src=\"$fullUrl\">\n")
+                        } else {
+                            val text = element.text()
+                            if (!text.isNullOrEmpty()) {
+                                append("<p>$text</p>\n")
+                            }
+                        }
+                    }
+
+                    "img" -> {
+                        val imgSrc = element.attr("src")
                         val fullUrl = if (imgSrc.startsWith("images/") && chapter.imagesPath != null) {
                             "${chapter.imagesPath}/${imgSrc.removePrefix("images/")}"
                         } else if (imgSrc.startsWith("http")) {
@@ -339,37 +358,18 @@ abstract class LnCrawler :
                         } else {
                             "$apiUrl/$imgSrc"
                         }
-                        content.append("<img src=\"$fullUrl\">\n")
-                    } else {
+                        append("<img src=\"$fullUrl\">\n")
+                    }
+
+                    else -> {
                         val text = element.text()
                         if (!text.isNullOrEmpty()) {
-                            content.append("<p>$text</p>\n")
+                            append("<p>$text</p>\n")
                         }
-                    }
-                }
-
-                "img" -> {
-                    val imgSrc = element.attr("src")
-                    val fullUrl = if (imgSrc.startsWith("images/") && chapter.imagesPath != null) {
-                        "${chapter.imagesPath}/${imgSrc.removePrefix("images/")}"
-                    } else if (imgSrc.startsWith("http")) {
-                        imgSrc
-                    } else {
-                        "$apiUrl/$imgSrc"
-                    }
-                    content.append("<img src=\"$fullUrl\">\n")
-                }
-
-                else -> {
-                    val text = element.text()
-                    if (!text.isNullOrEmpty()) {
-                        content.append("<p>$text</p>\n")
                     }
                 }
             }
         }
-
-        return content.toString()
     }
 
     // ======================== Filters ========================
