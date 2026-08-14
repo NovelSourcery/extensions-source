@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.novelextension.en.mznovels
+package eu.kanade.tachiyomi.novelextension.en.mznovels
 
 import android.app.Application
 import android.content.SharedPreferences
@@ -10,9 +10,13 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.formattedText
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -26,25 +30,24 @@ import uy.kohesive.injekt.injectLazy
  * @see https://github.com/LNReader/lnreader-plugins mznovels.ts
  * Features: Ranking filters, author notes settings, AJAX browse
  */
-class MzNovels :
-    HttpSource(),
+@Source
+abstract class MzNovels :
+    KeiSource(),
     NovelSource {
 
-    override val name = "MZ Novels"
-    override val baseUrl = "https://mznovels.com"
-    override val lang = "en"
-    override val supportsLatest = true
-
-    override val client = network.cloudflareClient
     private val json: Json by injectLazy()
-
-    override val isNovelSource = true
 
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
 
-    override fun imageUrlParse(response: Response): String = ""
+    /**
+     * The site's novel detail URL shape, as `/novel/<slug>`. [SManga.url] is stored as the bare
+     * slug (see [SlugPath]); a stored value starting with "/" is a pre-existing full-path entry
+     * from before this source adopted slug storage, and is resolved unchanged regardless of
+     * this template.
+     */
+    private val mangaPathTemplate: SlugPath = SlugPath("/novel/")
 
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)).execute()
@@ -87,21 +90,19 @@ class MzNovels :
     }
     // ======================== Popular/Browse ========================
 
-    override fun popularMangaRequest(page: Int): Request {
-        val filters = getFilterList()
-        return searchMangaRequest(page, "", filters)
-    }
+    private fun buildPopularMangaRequest(page: Int): Request = buildSearchMangaRequest(page, "", getFilterList(null))
 
-    override fun popularMangaParse(response: Response): MangasPage = searchMangaParse(response)
+    override suspend fun getPopularManga(page: Int): MangasPage = parseSearchResponse(client.newCall(buildPopularMangaRequest(page)).execute())
 
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/latest-updates/?page=$page", headers)
+    private fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/latest-updates/?page=$page", headers)
 
-    override fun latestUpdatesParse(response: Response): MangasPage {
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val response = client.newCall(buildLatestUpdatesRequest(page)).execute()
         return parseNovelList(response, 1) // page is already in URL
     }
     // ======================== Search ========================
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (query.isNotEmpty()) {
             return GET("$baseUrl/search/?q=$query&page=$page", headers)
         }
@@ -121,7 +122,9 @@ class MzNovels :
         return GET("$baseUrl/rankings/$rankType?period=$rankPeriod&page=$page", headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseSearchResponse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
+
+    private fun parseSearchResponse(response: Response): MangasPage {
         val doc = Jsoup.parse(response.body.string())
 
         // Detect page number from pagination to avoid repeated final pages
@@ -152,7 +155,7 @@ class MzNovels :
 
             SManga.create().apply {
                 this.title = title
-                this.url = novelUrl.removePrefix(baseUrl)
+                this.url = mangaPathTemplate.slug(novelUrl.removePrefix(baseUrl))
                 thumbnail_url = when {
                     coverUrl.isEmpty() -> ""
                     coverUrl.startsWith("http") -> coverUrl
@@ -165,10 +168,26 @@ class MzNovels :
         val hasNextPage = doc.selectFirst(".pagination .next:not(.disabled)") != null
         return MangasPage(novels, hasNextPage)
     }
-    // ======================== Novel Details ========================
+    // ======================== Novel Details + Chapters ========================
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        val doc = Jsoup.parse(response.body.string())
+    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
+
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val html = response.body.string()
+
+        val updatedManga = if (fetchDetails) parseMangaDetails(Jsoup.parse(html)) else manga
+        val updatedChapters = if (fetchChapters) fetchAllChapters(response) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    private fun parseMangaDetails(doc: Document): SManga {
         checkCaptcha(doc)
 
         return SManga.create().apply {
@@ -230,8 +249,8 @@ class MzNovels :
     }
     // ======================== Chapters ========================
 
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val doc = Jsoup.parse(response.body.string())
+    private fun fetchAllChapters(firstResponse: Response): List<SChapter> {
+        val doc = Jsoup.parse(firstResponse.body.string())
         checkCaptcha(doc)
 
         val chapters = mutableListOf<SChapter>()
@@ -246,7 +265,7 @@ class MzNovels :
         var currentDoc = doc
         while (pageNo <= maxPage) {
             if (pageNo > 1) {
-                val pageUrl = "${response.request.url}?chapters_page=$pageNo"
+                val pageUrl = "${firstResponse.request.url}?chapters_page=$pageNo"
                 val pageResponse = client.newCall(GET(pageUrl, headers)).execute()
                 currentDoc = Jsoup.parse(pageResponse.body.string())
             }
@@ -273,9 +292,15 @@ class MzNovels :
             chapter.apply { chapter_number = (chapters.size - index).toFloat() }
         }
     }
+
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
     // ======================== Chapter Content ========================
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString(), null))
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        return listOf(Page(0, response.request.url.toString()))
+    }
 
     // ======================== Captcha Detection ========================
 
@@ -288,7 +313,7 @@ class MzNovels :
     }
     // ======================== Filters ========================
 
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         RankTypeFilter(),
         RankPeriodFilter(),
     )
