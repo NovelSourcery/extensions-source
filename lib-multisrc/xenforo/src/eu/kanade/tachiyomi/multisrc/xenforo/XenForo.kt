@@ -8,7 +8,10 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
+import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -18,18 +21,13 @@ import org.jsoup.nodes.Element
 import java.text.SimpleDateFormat
 import java.util.Locale
 
-abstract class XenForo(
-    override val name: String,
-    override val baseUrl: String,
-    override val lang: String = "en",
-) : HttpSource(),
+abstract class XenForo :
+    KeiSource(),
     NovelSource {
 
     override val supportsLatest = false
 
     protected open val reverseChapters: Boolean = false
-
-    override val client = network.cloudflareClient
 
     /**
      * List of forums to browse. Each entry is a pair of (title, forumId).
@@ -52,14 +50,23 @@ abstract class XenForo(
     private var searchId: String = "1"
     private var totalSearchPages: Int = 1
 
+    /**
+     * The site's thread URL shape, as `/threads/<slug>`. [SManga.url] is stored as the bare
+     * slug (see [SlugPath]); a stored value starting with "/" is a pre-existing full-path entry
+     * from before this source adopted slug storage, and is resolved unchanged regardless of
+     * this template.
+     */
+    protected open val mangaPathTemplate: SlugPath = SlugPath("/threads/")
+
     // region Popular (browse forum listings)
 
-    override fun popularMangaRequest(page: Int): Request {
+    protected open fun buildPopularMangaRequest(page: Int): Request {
         val forum = forums.first()
         return GET("$baseUrl/forums/.${forum.second}/page-$page/", headers)
     }
 
-    override fun popularMangaParse(response: Response): MangasPage {
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val response = client.newCall(buildPopularMangaRequest(page)).execute()
         val doc = response.asJsoup()
         val mangas = parseForumListing(doc)
         val pageCountElem = doc.selectFirst(".pageNav-main .pageNav-page:last-of-type a")
@@ -80,7 +87,7 @@ abstract class XenForo(
 
             SManga.create().apply {
                 title = extractTitle(el.selectFirst(".structItem-title")!!)
-                url = "/threads/$threadUrl"
+                url = mangaPathTemplate.slug("/threads/$threadUrl")
                 thumbnail_url = el.selectFirst(".structItem-cell--icon img")?.let { extractImage(it) } ?: ""
                 author = el.selectFirst("a.username")?.text()
             }
@@ -91,14 +98,14 @@ abstract class XenForo(
 
     // region Latest (not supported, returns empty)
 
-    override fun latestUpdatesRequest(page: Int) = popularMangaRequest(page)
-    override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
+    protected open fun buildLatestUpdatesRequest(page: Int): Request = buildPopularMangaRequest(page)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = getPopularManga(page)
 
     // endregion
 
     // region Search
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    protected open fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (page == 1) {
             searchId = "1"
         }
@@ -141,7 +148,8 @@ abstract class XenForo(
         return GET(url, headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val response = client.newCall(buildSearchMangaRequest(page, query, filters)).execute()
         val doc = response.asJsoup()
 
         // Extract search ID from the canonical URL
@@ -156,7 +164,7 @@ abstract class XenForo(
             val linkEl = el.selectFirst(".contentRow-title a")!!
             SManga.create().apply {
                 title = extractTitle(linkEl)
-                url = "/threads/${handleNovelUrl(linkEl.attr("href"))}"
+                url = mangaPathTemplate.slug("/threads/${handleNovelUrl(linkEl.attr("href"))}")
                 thumbnail_url = el.selectFirst(".contentRow-figure img")?.let { extractImage(it) } ?: ""
                 author = el.selectFirst("a.username")?.text()
             }
@@ -168,13 +176,26 @@ abstract class XenForo(
 
     // endregion
 
-    // region Manga details
+    // region Manga details + Chapters
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET("$baseUrl${manga.url}/threadmarks?per_page=200", headers)
+    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url) + "/threadmarks?per_page=200", headers)
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
         val doc = response.asJsoup()
 
+        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
+        val updatedChapters = if (fetchChapters) fetchAllChapters(doc, response.request.url.toString()) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    protected open fun parseMangaDetails(doc: Document): SManga {
         val statusText = doc.select(".threadmarkListingHeader-stats dl.pairs")
             .firstOrNull { el ->
                 val dt = el.selectFirst("dt")?.text() ?: ""
@@ -233,23 +254,19 @@ abstract class XenForo(
 
     // region Chapters
 
-    override fun chapterListRequest(manga: SManga): Request = GET("$baseUrl${manga.url}/threadmarks?per_page=200", headers)
-
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val doc = response.asJsoup()
-
+    private fun fetchAllChapters(firstDoc: Document, firstUrl: String): List<SChapter> {
         // Determine total number of pages
-        val threadmarkCountEl = doc.select(".threadmarkListingHeader-stats dl.pairs")
+        val threadmarkCountEl = firstDoc.select(".threadmarkListingHeader-stats dl.pairs")
             .firstOrNull { it.selectFirst("dt")?.text() == "Threadmarks" }
         val totalCount = threadmarkCountEl?.selectFirst("dd")?.text()
             ?.replace(",", "")?.toIntOrNull() ?: 0
         val totalPages = if (totalCount > 0) ((totalCount - 1) / 200) + 1 else 1
 
         val chapters = mutableListOf<SChapter>()
-        chapters.addAll(parseChapters(doc, 1))
+        chapters.addAll(parseChapters(firstDoc, 1))
 
         // Fetch remaining pages
-        val baseThreadUrl = response.request.url.toString().substringBefore("/threadmarks")
+        val baseThreadUrl = firstUrl.substringBefore("/threadmarks")
         for (page in 2..totalPages) {
             val pageDoc = client.newCall(
                 GET("$baseThreadUrl/threadmarks?per_page=200&page=$page", headers),
@@ -287,10 +304,12 @@ abstract class XenForo(
 
     // endregion
 
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
     // region Pages (novel content)
 
-    override fun pageListParse(response: Response): List<Page> {
-        val url = response.request.url.toString()
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val url = baseUrl + chapter.url
         return listOf(Page(0, url))
     }
 
@@ -356,11 +375,9 @@ abstract class XenForo(
 
     // endregion
 
-    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
-
     // region Filters
 
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         CategoryFilter(forums.map { it.first }),
         OrderByFilter(orderByModes.map { it.first }),
     )
