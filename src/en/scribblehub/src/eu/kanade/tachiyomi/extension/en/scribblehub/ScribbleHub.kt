@@ -13,55 +13,60 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
+import kotlinx.serialization.json.JsonElement
 import okhttp3.FormBody
+import okhttp3.Headers
 import okhttp3.Request
-import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.util.Calendar
 
-class ScribbleHub :
-    HttpSource(),
+@Source
+abstract class ScribbleHub :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
-    override val name = "Scribble Hub"
-    override val baseUrl = "https://www.scribblehub.com"
-    override val lang = "en"
     override val supportsLatest = true
-
-    override val client = network.client
 
     // Site's Cloudflare rule allowlists on this client hint alone; without it, the cf_clearance
     // cookie from the WebView challenge solve isn't sufficient on its own for some requests.
-    override fun headersBuilder() = super.headersBuilder()
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = this
         .add("sec-ch-ua", "\"Chromium\"")
 
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
 
-    // Popular novels
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/series-finder/?sf=1&sort=ratings&order=desc&pg=$page", headers)
+    /** [SManga.url] is stored as the bare slug under "/series/" (e.g. "1135722/novel-name");
+     * a stored value starting with "/" is a pre-existing full-path entry and is resolved
+     * unchanged. */
+    private val mangaPath = SlugPath("/series/")
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        val doc = Jsoup.parse(response.body.string())
+    // Popular novels
+    protected open fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/series-finder/?sf=1&sort=ratings&order=desc&pg=$page", headers)
+
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val doc = Jsoup.parse(client.newCall(buildPopularMangaRequest(page)).execute().body.string())
         return parseNovelsFromSearch(doc)
     }
 
     // Latest updates
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/latest-series/?pg=$page", headers)
+    protected open fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/latest-series/?pg=$page", headers)
 
-    override fun latestUpdatesParse(response: Response): MangasPage {
-        val doc = Jsoup.parse(response.body.string())
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val doc = Jsoup.parse(client.newCall(buildLatestUpdatesRequest(page)).execute().body.string())
         return parseNovelsFromSearch(doc)
     }
 
     // Search
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = if (query.isNotEmpty()) {
+    protected open fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request = if (query.isNotEmpty()) {
         // Text search - ScribbleHub uses 'pgi' for text search pagination
         GET("$baseUrl/?s=${query.replace(" ", "+")}&post_type=fictionposts&pgi=$page", headers)
     } else {
@@ -70,8 +75,8 @@ class ScribbleHub :
         GET(url, headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage {
-        val doc = Jsoup.parse(response.body.string())
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val doc = Jsoup.parse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute().body.string())
         return parseNovelsFromSearch(doc)
     }
 
@@ -83,7 +88,7 @@ class ScribbleHub :
             SManga.create().apply {
                 title = titleElement.text()
                 thumbnail_url = element.select(".search_img img").attr("src")
-                url = novelUrl.removePrefix(baseUrl)
+                url = mangaPath.slug(novelUrl.removePrefix(baseUrl))
             }
         }
 
@@ -116,49 +121,56 @@ class ScribbleHub :
         return MangasPage(novels, hasNextPage)
     }
 
-    // Manga details
-    override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+    // Manga details + Chapters
+    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPath.resolve(manga.url), headers)
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        // Details and the chapter list (via novel id) both come from the same novel page.
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
         val doc = Jsoup.parse(response.body.string())
 
-        return SManga.create().apply {
-            title = doc.select(".fic_title").text().ifEmpty { "Untitled" }
+        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
+        val updatedChapters = if (fetchChapters) fetchChapterList(doc, response.request.url.encodedPath) else chapters
 
-            // Get high-res cover - try data-src first for lazy loading
-            val coverElement = doc.select(".fic_image img").first()
-            thumbnail_url = coverElement?.let { img ->
-                img.attr("data-src").ifEmpty { img.attr("src") }
-            } ?: ""
-
-            author = doc.select(".auth_name_fic").text().trim()
-            // Collect genres and tags (tags are in .wi_fic_showtags a.stag)
-            val genresFromPage = doc.select(".fic_genre").map { it.text().trim() }.filter { it.isNotEmpty() }
-            val tagsFromPage = doc.select(".wi_fic_showtags a.stag, .wi_fic_showtags_inner a.stag").map { it.text().trim() }.filter { it.isNotEmpty() }
-            val allGenres = (genresFromPage + tagsFromPage).distinct()
-            genre = allGenres.joinToString(", ")
-
-            // Extract status from stats
-            val statsText = doc.select(".rnd_stats").text().lowercase()
-            status = when {
-                statsText.contains("ongoing") -> SManga.ONGOING
-                statsText.contains("completed") -> SManga.COMPLETED
-                statsText.contains("hiatus") -> SManga.ON_HIATUS
-                else -> SManga.UNKNOWN
-            }
-
-            description = doc.select(".wi_fic_desc").text().trim()
-        }
+        return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    // Chapter list
-    override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+    private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
+        title = doc.select(".fic_title").text().ifEmpty { "Untitled" }
 
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val doc = Jsoup.parse(response.body.string())
+        // Get high-res cover - try data-src first for lazy loading
+        val coverElement = doc.select(".fic_image img").first()
+        thumbnail_url = coverElement?.let { img ->
+            img.attr("data-src").ifEmpty { img.attr("src") }
+        } ?: ""
 
+        author = doc.select(".auth_name_fic").text().trim()
+        // Collect genres and tags (tags are in .wi_fic_showtags a.stag)
+        val genresFromPage = doc.select(".fic_genre").map { it.text().trim() }.filter { it.isNotEmpty() }
+        val tagsFromPage = doc.select(".wi_fic_showtags a.stag, .wi_fic_showtags_inner a.stag").map { it.text().trim() }.filter { it.isNotEmpty() }
+        val allGenres = (genresFromPage + tagsFromPage).distinct()
+        genre = allGenres.joinToString(", ")
+
+        // Extract status from stats
+        val statsText = doc.select(".rnd_stats").text().lowercase()
+        status = when {
+            statsText.contains("ongoing") -> SManga.ONGOING
+            statsText.contains("completed") -> SManga.COMPLETED
+            statsText.contains("hiatus") -> SManga.ON_HIATUS
+            else -> SManga.UNKNOWN
+        }
+
+        description = doc.select(".wi_fic_desc").text().trim()
+    }
+
+    private fun fetchChapterList(doc: Document, urlPath: String): List<SChapter> {
         // Extract novel ID from the page - try multiple methods
-        val novelId = extractNovelId(doc, response.request.url.encodedPath)
+        val novelId = extractNovelId(doc, urlPath)
         if (novelId.isEmpty()) return emptyList()
 
         // Fetch full chapter list via AJAX (pagenum=-1 means all chapters)
@@ -237,11 +249,11 @@ class ScribbleHub :
         }
     }
 
-    // Page list
-    override fun pageListRequest(chapter: SChapter): Request = GET(baseUrl + chapter.url, headers)
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
-    override fun pageListParse(response: Response): List<Page> {
-        // Return single page with chapter URL
+    // Page list
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
         return listOf(Page(0, response.request.url.toString(), null))
     }
 
@@ -272,10 +284,8 @@ class ScribbleHub :
         // Add preferences if needed
     }
 
-    override fun imageUrlParse(response: Response) = ""
-
     // Filters
-    override fun getFilterList() = FilterList(
+    override fun getFilterList(data: JsonElement?) = FilterList(
         Filter.Header("NOTE: Filters are ignored if using text search!"),
         Filter.Separator(),
         SortFilter(),
