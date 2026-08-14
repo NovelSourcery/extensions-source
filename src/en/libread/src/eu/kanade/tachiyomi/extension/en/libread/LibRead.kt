@@ -53,7 +53,7 @@ abstract class LibRead : ReadNovelFull() {
         title = ""
         val link = element.selectFirst("h3.tit a, a.tit, a.con")
         if (link != null) {
-            title = link.attr("title").ifEmpty { link.text().trim() }
+            title = link.attr("title").ifEmpty { link.text() }
             setSlugUrl(link.attr("abs:href"))
         }
         thumbnail_url = element.selectFirst("img")?.let { img ->
@@ -185,7 +185,7 @@ abstract class LibRead : ReadNovelFull() {
 
         // LibRead specific customization if needed (fallback to base class parsing)
         if (manga.title.isNullOrBlank()) {
-            manga.title = document.selectFirst("div.m-imgtxt h1.tit, div.m-book1 h1.tit")?.text()?.trim() ?: ""
+            manga.title = document.selectFirst("div.m-imgtxt h1.tit, div.m-book1 h1.tit")?.text() ?: ""
         }
         if (manga.thumbnail_url.isNullOrBlank()) {
             document.selectFirst("div.m-imgtxt img, div.m-book1 img")?.let { img ->
@@ -194,7 +194,7 @@ abstract class LibRead : ReadNovelFull() {
             }
         }
         if (manga.description.isNullOrBlank()) {
-            manga.description = document.selectFirst("div.m-desc div.txt div.inner, div.desc-text")?.text()?.trim()
+            manga.description = document.selectFirst("div.m-desc div.txt div.inner, div.desc-text")?.text()
         }
 
         return manga

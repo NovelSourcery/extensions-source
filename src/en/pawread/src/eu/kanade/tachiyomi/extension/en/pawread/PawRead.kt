@@ -115,7 +115,7 @@ abstract class PawRead :
     private fun parseNovels(doc: Document): List<SManga> {
         return doc.select(".list-comic a.txtA, .list-comic a.title, .itemBox a.txtA, .itemBox a.title").mapNotNull { element ->
             try {
-                val title = element.text().trim()
+                val title = element.text()
                 if (title.isBlank()) return@mapNotNull null
 
                 val url = element.attr("href")
@@ -165,7 +165,7 @@ abstract class PawRead :
 
         // Title: try img title, then h1, then <title> tag minus " - PawRead"
         title = img?.attr("title")?.trim()?.ifBlank { null }
-            ?: doc.selectFirst("h1")?.text()?.trim()?.ifBlank { null }
+            ?: doc.selectFirst("h1")?.text()?.ifBlank { null }
             ?: doc.selectFirst("title")?.text()
                 ?.replace(Regex("\\s*-\\s*PawRead.*$", RegexOption.IGNORE_CASE), "")
                 ?.trim()
@@ -176,14 +176,14 @@ abstract class PawRead :
             status = parseStatus(infoItems[0].text())
         }
         if (infoItems.size >= 2) {
-            author = infoItems[1].text().trim()
+            author = infoItems[1].text()
         }
 
         // Genres from btn-default links
-        genre = doc.select("a.btn-default").joinToString(", ") { it.text().trim() }
+        genre = doc.select("a.btn-default").joinToString { it.text() }
 
         // Summary from #full-des
-        description = doc.selectFirst("#full-des")?.text()?.trim()
+        description = doc.selectFirst("#full-des")?.text()
     }
 
     private fun parseStatus(text: String): Int = when {
@@ -212,10 +212,10 @@ abstract class PawRead :
                 val chapterPath = "$novelPath/$chapterId.html"
 
                 val spans = element.select("span")
-                val chapterName = spans.firstOrNull()?.text()?.trim() ?: "Chapter $chapterId"
+                val chapterName = spans.firstOrNull()?.text() ?: "Chapter $chapterId"
 
                 // Date from second span (format: YYYY.MM.DD)
-                val dateStr = spans.getOrNull(1)?.text()?.trim() ?: ""
+                val dateStr = spans.getOrNull(1)?.text() ?: ""
                 val dateUpload = try {
                     if (dateStr.contains(".")) {
                         DATE_FORMAT.parse(dateStr)?.time ?: 0L

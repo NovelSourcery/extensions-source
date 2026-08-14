@@ -235,7 +235,7 @@ abstract class GoldenRest :
         description = summary ?: ""
         author = this@toSManga.authors.firstOrNull()?.name
         artist = this@toSManga.artists.firstOrNull()?.name
-        genre = this@toSManga.categories.joinToString(", ") { it.name }
+        genre = this@toSManga.categories.joinToString { it.name }
         status = when (this@toSManga.storyStatus) {
             1 -> SManga.COMPLETED
             2 -> SManga.ONGOING

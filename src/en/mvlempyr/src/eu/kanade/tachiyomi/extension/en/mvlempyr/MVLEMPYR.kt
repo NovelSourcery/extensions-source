@@ -283,7 +283,7 @@ abstract class MVLEMPYR :
 
         val associatedNamesText = doc.select("div.additionalinfo.tm10 > div.textwrapper")
             .find { it.selectFirst("span")?.text()?.contains("Associated Names", ignoreCase = true) == true }
-            ?.selectFirst("span:last-child, a")?.text()?.trim()
+            ?.selectFirst("span:last-child, a")?.text()
 
         description = doc.selectFirst("div.synopsis.w-richtext")?.formattedText()?.trim() ?: ""
         if (!associatedNamesText.isNullOrBlank()) {
@@ -297,7 +297,7 @@ abstract class MVLEMPYR :
         author = doc.select("div.additionalinfo.tm10 > div.textwrapper")
             .find { it.selectFirst("span")?.text()?.contains("Author") == true }
             ?.selectFirst("a, span:last-child")?.text() ?: ""
-        genre = doc.select(".genre-tags").map { it.text() }.joinToString(", ")
+        genre = doc.select(".genre-tags").map { it.text() }.joinToString()
         status = when {
             doc.selectFirst(".novelstatustextlarge")?.text()?.contains("Ongoing", ignoreCase = true) == true -> SManga.ONGOING
             doc.selectFirst(".novelstatustextlarge")?.text()?.contains("Completed", ignoreCase = true) == true -> SManga.COMPLETED

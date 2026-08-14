@@ -363,7 +363,7 @@ abstract class XenForo :
 
     private fun extractTitle(element: Element): String {
         element.select(".unreadLink, .labelLink, .label, .label-append").remove()
-        return element.text().trim()
+        return element.text()
     }
 
     private fun handleNovelUrl(url: String): String = url.replace(Regex("\\?.*$"), "")

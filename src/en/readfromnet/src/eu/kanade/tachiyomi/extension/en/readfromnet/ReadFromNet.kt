@@ -71,7 +71,7 @@ abstract class ReadFromNet :
         return doc.select(selector).mapNotNull { element ->
             try {
                 val titleElement = element.selectFirst("h2.title a") ?: return@mapNotNull null
-                val title = titleElement.text().trim()
+                val title = titleElement.text()
                 // LN Reader: .replace('https://readfrom.net/', '').replace(/^\//, '')
                 var url = titleElement.attr("href")
 
@@ -131,22 +131,22 @@ abstract class ReadFromNet :
         descElement?.select(".coll-ellipsis, a")?.remove()
         // Include hidden content (from .coll-hidden span)
         val hiddenContent = descElement?.selectFirst("span.coll-hidden")?.text() ?: ""
-        var desc = (descElement?.text()?.trim() ?: "") + " " + hiddenContent
+        var desc = (descElement?.text() ?: "") + " " + hiddenContent
 
         // LN Reader: Add series info if present (center > b:has(a) with /series.html link)
         val seriesElement = doc.select("center > b:has(a)").firstOrNull { el ->
             el.selectFirst("a")?.attr("href")?.startsWith("/series.html") == true
         }
         if (seriesElement != null) {
-            desc = "${seriesElement.text().trim()}\n\n$desc"
+            desc = "${seriesElement.text()}\n\n$desc"
         }
         description = desc.trim()
 
-        author = doc.select("h4 > a").firstOrNull()?.text()?.trim()
+        author = doc.select("h4 > a").firstOrNull()?.text()
         genre = doc.select("h2 > a")
             .toList()
             .filter { it.attr("title").startsWith("Genre - ") }
-            .joinToString(", ") { it.text().trim() }
+            .joinToString { it.text() }
 
         // LN Reader: checks for status text
         status = when {
@@ -178,7 +178,7 @@ abstract class ReadFromNet :
                 chapterUrl = "/$chapterUrl"
             }
 
-            val chapterName = element.text().trim()
+            val chapterName = element.text()
 
             chapters.add(
                 SChapter.create().apply {
@@ -216,7 +216,7 @@ abstract class ReadFromNet :
         textElement.childNodes().forEach { node ->
             when {
                 node is TextNode -> {
-                    val content = node.text().trim()
+                    val content = node.text()
                     if (content.isNotEmpty()) {
                         paragraph.append(content).append(" ")
                     }

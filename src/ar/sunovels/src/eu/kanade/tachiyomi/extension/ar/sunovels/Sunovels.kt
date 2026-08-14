@@ -61,7 +61,7 @@ abstract class Sunovels :
         if (novels.isEmpty()) {
             doc.select("li.list-item").forEach { item ->
                 val link = item.selectFirst("a[href*=/novel/]") ?: return@forEach
-                val title = item.selectFirst("h4")?.text()?.trim() ?: return@forEach
+                val title = item.selectFirst("h4")?.text() ?: return@forEach
                 val slug = link.attr("href").removePrefix("/novel/")
                 if (novels.any { it.url == mangaPath.slug(link.attr("href")) }) return@forEach
                 val realImg = findImageForSlug(body, slug)
@@ -113,7 +113,7 @@ abstract class Sunovels :
         if (novels.isEmpty()) {
             doc.select("li.list-item").forEach { item ->
                 val link = item.selectFirst("a[href*=/novel/]") ?: return@forEach
-                val title = item.selectFirst("h4")?.text()?.trim() ?: return@forEach
+                val title = item.selectFirst("h4")?.text() ?: return@forEach
                 val slug = link.attr("href").removePrefix("/novel/")
                 if (novels.any { it.url == mangaPath.slug(link.attr("href")) }) return@forEach
                 val realImg = findImageForSlug(body, slug)
@@ -167,8 +167,8 @@ abstract class Sunovels :
         return SManga.create().apply {
             val novelH1 = doc.selectFirst(".info h1, .novel-header h1, .main-head h1")
             val novelH3 = doc.selectFirst(".info h3, .novel-header h3, .main-head h3")
-            title = novelH3?.text()?.trim()?.ifEmpty { null }
-                ?: novelH1?.text()?.trim()?.ifEmpty { null }
+            title = novelH3?.text()?.ifEmpty { null }
+                ?: novelH1?.text()?.ifEmpty { null }
                 ?: doc.selectFirst("meta[property=og:title]")
                     ?.attr("content")
                     ?.removePrefix("رواية ")
@@ -192,10 +192,10 @@ abstract class Sunovels :
                 if (it.startsWith("/")) "$baseUrl$it" else it
             }
             genre = doc.select(".tag, .tags a.tag")
-                .mapNotNull { it.text().trim().takeIf { t -> t.isNotEmpty() } }
+                .mapNotNull { it.text().takeIf { t -> t.isNotEmpty() } }
                 .distinct()
-                .joinToString(", ")
-            description = doc.selectFirst(".description p, .description")?.text()?.trim()
+                .joinToString()
+            description = doc.selectFirst(".description p, .description")?.text()
                 ?: doc.selectFirst("meta[property=og:description]")
                     ?.attr("content")?.trim()
                 ?: ""
@@ -261,8 +261,8 @@ abstract class Sunovels :
             val chapterNum = Regex("/novel/$slug/(\\d+)").find(href)
                 ?.groupValues?.get(1)?.toFloatOrNull() ?: return@forEach
             if (chapters.any { it.chapter_number == chapterNum }) return@forEach
-            val title = link.selectFirst("span, strong")?.text()?.trim()
-                ?: link.text().trim()
+            val title = link.selectFirst("span, strong")?.text()
+                ?: link.text()
             chapters.add(
                 SChapter.create().apply {
                     url = "/novel/$slug/${chapterNum.toInt()}"

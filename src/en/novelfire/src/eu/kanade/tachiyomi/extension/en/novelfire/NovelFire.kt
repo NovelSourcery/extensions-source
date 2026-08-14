@@ -374,9 +374,9 @@ abstract class NovelFire :
 
     private fun mangaDetailsParse(doc: Document): SManga = SManga.create().apply {
         // Multiple fallbacks for title
-        title = doc.selectFirst(".novel-title")?.text()?.trim()?.takeIf { it.isNotBlank() }
+        title = doc.selectFirst(".novel-title")?.text()?.takeIf { it.isNotBlank() }
             ?: doc.selectFirst(".cover > img")?.attr("alt")?.takeIf { it.isNotBlank() }
-            ?: doc.selectFirst("h1")?.text()?.trim()?.takeIf { it.isNotBlank() }
+            ?: doc.selectFirst("h1")?.text()?.takeIf { it.isNotBlank() }
             ?: "No Title Found"
 
         // Get cover image
@@ -392,10 +392,10 @@ abstract class NovelFire :
 
         // Get genres
         genre = doc.select(".categories .property-item")
-            .joinToString(", ") { it.text().trim() }
+            .joinToString { it.text() }
 
         // Get summary
-        val summary = doc.selectFirst(".summary .content")?.text()?.trim()
+        val summary = doc.selectFirst(".summary .content")?.text()
         description = summary?.replace("Show More", "") ?: "No Summary Found"
 
         // Get author
@@ -450,7 +450,7 @@ abstract class NovelFire :
 
         val totalChapters = doc.selectFirst("#gotochapno")?.attr("max")?.toIntOrNull()
             ?: Regex("""A total of (\d+) chapters""").find(doc.text())?.groupValues?.get(1)?.toIntOrNull()
-            ?: doc.selectFirst(".header-stats .icon-book-open")?.parent()?.text()?.trim()
+            ?: doc.selectFirst(".header-stats .icon-book-open")?.parent()?.text()
                 ?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
             ?: 0
 

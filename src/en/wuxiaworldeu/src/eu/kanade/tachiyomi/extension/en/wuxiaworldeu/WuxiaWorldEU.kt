@@ -72,7 +72,7 @@ abstract class WuxiaWorldEU :
                     description = item["description"]?.jsonPrimitive?.contentOrNull
                     genre = item["categories"]?.jsonArray
                         ?.mapNotNull { it.jsonObject["name"]?.jsonPrimitive?.contentOrNull }
-                        ?.joinToString(", ")
+                        ?.joinToString()
                 }
             } catch (e: Exception) {
                 null
@@ -103,7 +103,7 @@ abstract class WuxiaWorldEU :
         author = data["author"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull
         genre = data["categories"]?.jsonArray
             ?.mapNotNull { it.jsonObject["name"]?.jsonPrimitive?.contentOrNull }
-            ?.joinToString(", ")
+            ?.joinToString()
         description = data["description"]?.jsonPrimitive?.contentOrNull
         status = when (data["status"]?.jsonPrimitive?.contentOrNull) {
             "OG" -> SManga.ONGOING

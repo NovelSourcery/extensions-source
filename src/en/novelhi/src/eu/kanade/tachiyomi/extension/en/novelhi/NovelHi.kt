@@ -78,8 +78,8 @@ abstract class NovelHi :
                 url = item.simpleName
                 thumbnail_url = item.picUrl.takeIf { it.isNotBlank() }
                 author = item.authorName
-                genre = item.genres.joinToString(", ") { it.genreName }
-                description = Jsoup.parse(item.bookDesc.replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")).text().trim()
+                genre = item.genres.joinToString { it.genreName }
+                description = Jsoup.parse(item.bookDesc.replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")).text()
                 status = if (item.bookStatus == "1") SManga.COMPLETED else SManga.ONGOING
             }
         }
@@ -116,11 +116,11 @@ abstract class NovelHi :
     }
 
     private fun parseMangaDetails(doc: org.jsoup.nodes.Document): SManga = SManga.create().apply {
-        title = doc.selectFirst("b.layui-icon")?.text()?.trim().orEmpty()
-            .ifBlank { doc.selectFirst(".tit h1")?.text()?.trim().orEmpty() }
+        title = doc.selectFirst("b.layui-icon")?.text().orEmpty()
+            .ifBlank { doc.selectFirst(".tit h1")?.text().orEmpty() }
         thumbnail_url = doc.selectFirst(".cover, .decorate-img")?.attr("abs:src")
-        author = doc.selectFirst("a[href*=author], .author a")?.text()?.trim()
-        description = doc.selectFirst(".desc, .book-desc, #bookIntro")?.text()?.trim()
+        author = doc.selectFirst("a[href*=author], .author a")?.text()
+        description = doc.selectFirst(".desc, .book-desc, #bookIntro")?.text()
     }
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {

@@ -730,10 +730,10 @@ abstract class TomatoMTL :
                     mangas.isNotEmpty()
                 } else {
                     val activePage = pagination.selectFirst("li.page-item.active")
-                        ?.text()?.trim()?.toIntOrNull() ?: 1
+                        ?.text()?.toIntOrNull() ?: 1
                     val pageLinks = pagination.select("li.page-item a.page-link")
                     pageLinks.any { link ->
-                        val pageNum = link.text().trim().toIntOrNull()
+                        val pageNum = link.text().toIntOrNull()
                         pageNum != null && pageNum > activePage
                     }
                 }
@@ -979,7 +979,7 @@ abstract class TomatoMTL :
         // First decode HTML entities
         val decoded = Parser.unescapeEntities(text, false)
         // Then parse with Jsoup to remove tags and normalize whitespace
-        val cleaned = Jsoup.parse(decoded).text().trim()
+        val cleaned = Jsoup.parse(decoded).text()
         // Remove excessive whitespace
         return cleaned.replace(Regex("\\s+"), " ")
     }
@@ -1088,13 +1088,13 @@ abstract class TomatoMTL :
             // Word Count and Chapters
             val wordsItem = metadataItems.find { it.text().contains("Words:") }
             if (wordsItem != null) {
-                val wordsAndChapters = wordsItem.text().trim()
+                val wordsAndChapters = wordsItem.text()
                 description = "$wordsAndChapters\n\n$description"
             }
 
             // Genre/Categories
             val categories = document.select(".book-meta-item a[href*=categories]").map { it.text() }
-            genre = categories.joinToString(", ")
+            genre = categories.joinToString()
         }
     }
 
@@ -1268,7 +1268,7 @@ abstract class TomatoMTL :
                 if (href.isBlank() || href == "#" || !isChapterUrl(href)) return@forEach
 
                 // Extract and clean chapter name
-                val rawChapterName = link.text().trim().ifBlank {
+                val rawChapterName = link.text().ifBlank {
                     link.attr("title").ifBlank { "Chapter" }
                 }
                 val chapterName = cleanHtml(rawChapterName)

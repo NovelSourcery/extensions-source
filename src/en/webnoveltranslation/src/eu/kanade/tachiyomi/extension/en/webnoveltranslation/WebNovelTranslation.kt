@@ -241,7 +241,7 @@ abstract class WebNovelTranslation :
         thumbnail_url = cover?.let { if (it.startsWith("http")) it else "$baseUrl/${it.trimStart('/')}" }
         author = this@toSManga.author
         description = this@toSManga.description
-        genre = genres.joinToString(", ")
+        genre = genres.joinToString()
         status = when {
             statuses.any { it.equals("Completed", true) } -> SManga.COMPLETED
             statuses.any { it.equals("Ongoing", true) } -> SManga.ONGOING

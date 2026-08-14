@@ -55,7 +55,7 @@ abstract class NovelHall :
 
             SManga.create().apply {
                 url = mangaPathTemplate.slug(href)
-                title = element.text().trim()
+                title = element.text()
                 thumbnail_url = null // No cover in list view
             }
         }
@@ -69,7 +69,7 @@ abstract class NovelHall :
 
                 SManga.create().apply {
                     url = mangaPathTemplate.slug(href)
-                    title = link.text().trim()
+                    title = link.text()
                     thumbnail_url = null
                 }
             }.distinctBy { it.url }
@@ -82,7 +82,7 @@ abstract class NovelHall :
         // NovelHall renders pagination as `.page-nav` with a rel=next anchor and a "last page" link.
         val nextByLink = document.selectFirst("div.page-nav a[rel=next], div.pagination a[rel=next]") != null ||
             document.select("div.page-nav a, div.pagination a, ul.pagination a").any { a ->
-                val text = a.text().trim()
+                val text = a.text()
                 text.equals("next page", true) || text.equals("Next", true) || text.contains(">") ||
                     (text.toIntOrNull()?.let { it > currentPage } == true)
             }
@@ -227,7 +227,7 @@ abstract class NovelHall :
         }
 
         // Parse genres
-        genre = totalSection?.select("a")?.map { it.text() }?.joinToString(", ")
+        genre = totalSection?.select("a")?.map { it.text() }?.joinToString()
     }
 
     private fun parseChapterList(document: org.jsoup.nodes.Document): List<SChapter> {
@@ -238,7 +238,7 @@ abstract class NovelHall :
 
             SChapter.create().apply {
                 url = href
-                name = link.text().trim()
+                name = link.text()
             }
         }
 
@@ -278,7 +278,7 @@ abstract class NovelHall :
             section.children().forEach { element ->
                 when (element.tagName()) {
                     "p" -> {
-                        val text = element.text()?.trim()
+                        val text = element.text()
                         if (!text.isNullOrEmpty()) {
                             content.append("<p>$text</p>\n")
                         }

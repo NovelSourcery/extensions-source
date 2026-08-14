@@ -59,7 +59,7 @@ abstract class NovelUpdates :
 
         val doc = Jsoup.parse(body, resolvedUrl.toString())
 
-        val title = doc.select("title").text().trim().lowercase()
+        val title = doc.select("title").text().lowercase()
         val blockedTitles = listOf(
             "bot verification",
             "just a moment...",
@@ -462,9 +462,9 @@ abstract class NovelUpdates :
             title = doc.select(".seriestitlenu").text().ifEmpty { "Untitled or invalid" }
             thumbnail_url = doc.select(".wpb_wrapper img").attr("src")
 
-            author = doc.select("#authtag").joinToString(", ") { it.text().trim() }
+            author = doc.select("#authtag").joinToString { it.text() }
 
-            genre = doc.select("#seriesgenre a").joinToString(", ") { it.text() }
+            genre = doc.select("#seriesgenre a").joinToString { it.text() }
 
             status = when {
                 doc.select("#editstatus").text().contains("Ongoing", ignoreCase = true) -> SManga.ONGOING
@@ -472,10 +472,10 @@ abstract class NovelUpdates :
                 else -> SManga.UNKNOWN
             }
 
-            val type = doc.select("#showtype").text().trim()
-            val summary = doc.select("#editdescription").text().trim()
+            val type = doc.select("#showtype").text()
+            val summary = doc.select("#editdescription").text()
 
-            val tags = doc.select("#showtags a.genre").joinToString(", ") { it.text() }
+            val tags = doc.select("#showtags a.genre").joinToString { it.text() }
 
             // Append tags to genre
             if (tags.isNotEmpty()) {

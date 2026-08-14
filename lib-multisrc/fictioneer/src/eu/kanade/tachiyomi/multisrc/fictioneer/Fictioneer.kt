@@ -53,7 +53,7 @@ abstract class Fictioneer :
             val titleEl = element.selectFirst("h3 > a") ?: return@mapNotNull null
             val url = titleEl.attr("href")
             SManga.create().apply {
-                title = titleEl.text().trim()
+                title = titleEl.text()
                 setSlugUrl(url.trimEnd('/'))
                 thumbnail_url = element.selectFirst("a.cell-img:has(img)")?.attr("href")
             }
@@ -81,7 +81,7 @@ abstract class Fictioneer :
             val titleEl = element.selectFirst("h3 > a") ?: return@mapNotNull null
             val url = titleEl.attr("href")
             SManga.create().apply {
-                title = titleEl.text().trim()
+                title = titleEl.text()
                 setSlugUrl(url.trimEnd('/'))
                 thumbnail_url = element.selectFirst("a.cell-img:has(img)")?.attr("href")
             }
@@ -109,15 +109,15 @@ abstract class Fictioneer :
     }
 
     protected open fun parseMangaDetails(doc: org.jsoup.nodes.Document): SManga = SManga.create().apply {
-        title = doc.selectFirst("h1.story__identity-title")?.text()?.trim() ?: "Untitled"
+        title = doc.selectFirst("h1.story__identity-title")?.text() ?: "Untitled"
         author = doc.selectFirst("div.story__identity-meta")?.text()
             ?.split("|")?.firstOrNull()
             ?.replace("Author:", "")?.replace("by ", "")?.trim()
         thumbnail_url = doc.selectFirst("figure.story__thumbnail > a")?.attr("href")
         genre = doc.select("div.tag-group > a, section.tag-group > a")
-            .joinToString { it.text().trim() }
-        description = doc.selectFirst("section.story__summary")?.text()?.trim()
-        status = when (doc.selectFirst("span.story__status")?.text()?.trim()?.lowercase()) {
+            .joinToString { it.text() }
+        description = doc.selectFirst("section.story__summary")?.text()
+        status = when (doc.selectFirst("span.story__status")?.text()?.lowercase()) {
             "ongoing" -> SManga.ONGOING
             "completed" -> SManga.COMPLETED
             "cancelled" -> SManga.CANCELLED
@@ -136,7 +136,7 @@ abstract class Fictioneer :
             val url = linkEl.attr("href")
             SChapter.create().apply {
                 this.url = url.replace(baseUrl, "").trimEnd('/')
-                name = linkEl.text().trim()
+                name = linkEl.text()
             }
         }.reversed()
 

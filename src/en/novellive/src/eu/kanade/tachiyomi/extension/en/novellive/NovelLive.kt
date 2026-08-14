@@ -52,7 +52,7 @@ abstract class NovelLive : ReadNovelFull() {
     override fun popularMangaFromElement(element: Element): SManga = SManga.create().apply {
         val link = element.selectFirst(".txt h3.tit > a, h3.tit > a") ?: return@apply
         setSlugUrl(link.attr("abs:href"))
-        title = link.attr("title").ifBlank { link.text().trim() }
+        title = link.attr("title").ifBlank { link.text() }
         thumbnail_url = element.selectFirst(".pic img")?.let {
             it.attr("abs:data-src").ifEmpty { it.attr("abs:src") }.ifEmpty { it.attr("src") }
         }
@@ -66,17 +66,17 @@ abstract class NovelLive : ReadNovelFull() {
     override fun getFilterList(data: JsonElement?) = FilterList()
 
     override fun mangaDetailsParse(document: Document): SManga = SManga.create().apply {
-        title = document.selectFirst(".m-desc h1.tit, h1.tit")?.text()?.trim()
+        title = document.selectFirst(".m-desc h1.tit, h1.tit")?.text()
             ?: document.selectFirst("meta[property=og:novel:novel_name]")?.attr("content").orEmpty()
         thumbnail_url = document.selectFirst(".m-imgtxt .pic img, .pic img")?.let {
             it.attr("abs:data-src").ifEmpty { it.attr("abs:src") }.ifEmpty { it.attr("src") }
         }
-        author = document.select(".m-imgtxt a[href*=/author/]").joinToString { it.text().trim() }
+        author = document.select(".m-imgtxt a[href*=/author/]").joinToString { it.text() }
             .ifBlank { document.selectFirst("meta[property=og:novel:author]")?.attr("content")?.trim() }
-        genre = document.select(".m-imgtxt a[href*=/genres/]").joinToString { it.text().trim() }
+        genre = document.select(".m-imgtxt a[href*=/genres/]").joinToString { it.text() }
             .ifBlank {
                 document.selectFirst("meta[property=og:novel:genre]")?.attr("content")
-                    ?.split(",")?.joinToString(", ") { g -> g.trim().lowercase().replaceFirstChar(Char::uppercase) }
+                    ?.split(",")?.joinToString { g -> g.trim().lowercase().replaceFirstChar(Char::uppercase) }
                     .orEmpty()
             }
         status = when (
@@ -149,7 +149,7 @@ abstract class NovelLive : ReadNovelFull() {
                     val href = a.attr("abs:href").ifBlank { return@mapNotNull null }
                     SChapter.create().apply {
                         setUrlWithoutDomain(href)
-                        name = a.attr("title").ifBlank { a.text().trim() }.stripChapterNumberPrefix()
+                        name = a.attr("title").ifBlank { a.text() }.stripChapterNumberPrefix()
                     }
                 }
                 Pair(chapters, page < totalPages)

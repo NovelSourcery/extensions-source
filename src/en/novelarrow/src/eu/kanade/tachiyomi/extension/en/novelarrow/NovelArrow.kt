@@ -140,7 +140,7 @@ abstract class NovelArrow :
         genre = (genreLabels + tagLabels)
             .map { label -> label.lowercase().split(" ").joinToString(" ") { w -> w.replaceFirstChar(Char::uppercase) } }
             .distinct()
-            .joinToString(", ")
+            .joinToString()
             .ifBlank { null }
         status = when (STRING.decode(STATUS.firstGroup(flight))?.lowercase()) {
             "ongoing" -> SManga.ONGOING

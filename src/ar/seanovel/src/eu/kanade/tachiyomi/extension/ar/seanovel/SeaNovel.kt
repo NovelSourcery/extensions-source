@@ -238,7 +238,7 @@ abstract class SeaNovel :
         author = this@toSManga.author
         description = this@toSManga.description
         thumbnail_url = "$baseUrl/api/novel/$slug/cover?type=original&v=$coverVersion"
-        genre = genres.joinToString(", ")
+        genre = genres.joinToString()
         status = when (this@toSManga.status) {
             "ongoing" -> SManga.ONGOING
             "completed" -> SManga.COMPLETED

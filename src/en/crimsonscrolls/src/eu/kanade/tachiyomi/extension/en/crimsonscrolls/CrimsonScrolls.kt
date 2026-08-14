@@ -115,16 +115,16 @@ abstract class CrimsonScrolls :
     private fun parseMangaDetails(response: Response): SManga {
         val doc = Jsoup.parse(response.body.string(), baseUrl)
         return SManga.create().apply {
-            title = doc.selectFirst("h1")?.text()?.trim().orEmpty()
+            title = doc.selectFirst("h1")?.text().orEmpty()
             thumbnail_url = doc.selectFirst(".cs-cover img")?.let {
                 it.attr("abs:data-src").ifBlank { it.attr("abs:src") }
             }
             description = doc.selectFirst(".cs-about-synopsis .cs-prose, .cs-about-synopsis")?.formattedText()
             author = doc.select(".cs-novel-details dl div, dl div")
                 .firstOrNull { it.selectFirst("dt")?.text()?.equals("Author", true) == true }
-                ?.selectFirst("dd")?.text()?.trim()
-            genre = doc.select(".cs-detail-genres a").joinToString(", ") { it.text().trim() }
-            status = when (doc.selectFirst(".cs-cover-status")?.text()?.trim()?.lowercase()) {
+                ?.selectFirst("dd")?.text()
+            genre = doc.select(".cs-detail-genres a").joinToString { it.text() }
+            status = when (doc.selectFirst(".cs-cover-status")?.text()?.lowercase()) {
                 "ongoing" -> SManga.ONGOING
                 "hiatus" -> SManga.ON_HIATUS
                 "dropped", "cancelled" -> SManga.CANCELLED

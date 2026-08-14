@@ -760,7 +760,7 @@ abstract class WtrLab :
             .filter { it.isNotEmpty() }
             .distinctBy { it.lowercase() }
         if (combined.isNotEmpty()) {
-            manga.genre = combined.joinToString(", ")
+            manga.genre = combined.joinToString()
         }
 
         val finalAltTitles = altTitles

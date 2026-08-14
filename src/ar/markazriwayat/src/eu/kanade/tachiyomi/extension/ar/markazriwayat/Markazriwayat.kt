@@ -109,23 +109,23 @@ abstract class Markazriwayat :
     }
 
     private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
-        title = doc.selectFirst("h1.manga-title")?.text()?.trim().orEmpty()
+        title = doc.selectFirst("h1.manga-title")?.text().orEmpty()
         thumbnail_url = doc.selectFirst(".manga-cover-wrap > img")?.absCover()
         val authors = doc.select(".manga-author")
         author = if (authors.size >= 2) {
-            authors[1].text().trim()
+            authors[1].text()
         } else {
-            authors.firstOrNull()?.text()?.trim() ?: ""
+            authors.firstOrNull()?.text() ?: ""
         }
         if (authors.size >= 2) {
             description = buildString {
-                append("مترجم الرواية : ${authors[0].text().trim()}\n")
-                append("مؤلف الرواية : ${authors[1].text().trim()}")
+                append("مترجم الرواية : ${authors[0].text()}\n")
+                append("مؤلف الرواية : ${authors[1].text()}")
             }
         } else {
-            description = authors.joinToString("\n") { it.text().trim() }
+            description = authors.joinToString("\n") { it.text() }
         }
-        genre = (doc.select(".pill-list .pill").map { it.text().trim() }).joinToString()
+        genre = (doc.select(".pill-list .pill").map { it.text() }).joinToString()
         val statusText = doc.selectFirst(".status-pill")?.text().orEmpty().lowercase()
         status = when {
             "مكتملة" in statusText || "complete" in statusText -> SManga.COMPLETED
@@ -177,7 +177,7 @@ abstract class Markazriwayat :
     private fun parseChaptersFromHtml(doc: Document): List<SChapter> = doc.select(".ch-row").mapNotNull { row ->
         val link = row.selectFirst("a")?.attr("href")?.ifBlank { null } ?: return@mapNotNull null
         SChapter.create().apply {
-            name = row.selectFirst(".ch-title")?.text()?.trim() ?: link
+            name = row.selectFirst(".ch-title")?.text() ?: link
             url = link.toRelative()
             chapter_number = (row.selectFirst(".ch-num")?.text() ?: name).toChapterNumber()
             date_upload = DATE_FORMAT.tryParse(row.selectFirst(".ch-date")?.text())

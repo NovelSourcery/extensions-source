@@ -188,7 +188,7 @@ abstract class NovelBuddy :
     }.getOrNull()
 
     private fun JsonObject.names(key: String): String = this[key]?.jsonArray?.mapNotNull { it.jsonObject["name"]?.jsonPrimitive?.contentOrNull }
-        ?.joinToString(", ").orEmpty()
+        ?.joinToString().orEmpty()
 
     private fun parseChapterList(response: Response): List<SChapter> {
         val script = Jsoup.parse(response.body.string()).selectFirst("#__NEXT_DATA__")?.html()

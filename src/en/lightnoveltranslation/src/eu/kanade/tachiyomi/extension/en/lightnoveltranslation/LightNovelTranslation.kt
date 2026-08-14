@@ -40,7 +40,7 @@ abstract class LightNovelTranslation :
             try {
                 val link = element.selectFirst(".item_thumb a") ?: return@mapNotNull null
                 val url = link.attr("href")
-                val title = link.attr("title").ifEmpty { link.text().trim() }
+                val title = link.attr("title").ifEmpty { link.text() }
                 val cover = element.selectFirst(".item_thumb img")?.attr("src") ?: ""
 
                 SManga.create().apply {
@@ -93,9 +93,9 @@ abstract class LightNovelTranslation :
 
     private fun parseMangaDetails(doc: org.jsoup.nodes.Document, response: Response): SManga = SManga.create().apply {
         thumbnail_url = doc.selectFirst("div.novel-image img")?.attr("src")
-        title = doc.selectFirst("div.novel_title h3")?.text()?.trim() ?: ""
+        title = doc.selectFirst("div.novel_title h3")?.text() ?: ""
 
-        val statusText = doc.selectFirst("div.novel_status")?.text()?.trim() ?: ""
+        val statusText = doc.selectFirst("div.novel_status")?.text() ?: ""
         status = when {
             statusText.contains("Ongoing", ignoreCase = true) -> SManga.ONGOING
             statusText.contains("Hiatus", ignoreCase = true) -> SManga.ON_HIATUS
@@ -124,7 +124,7 @@ abstract class LightNovelTranslation :
 
             val locked = !element.hasClass("unlock") &&
                 (element.hasClass("lock") || element.selectFirst(".lock, .premium, i.fa-lock") != null)
-            val title = link.text().trim()
+            val title = link.text()
 
             SChapter.create().apply {
                 url = chapterUrl.removePrefix(baseUrl)

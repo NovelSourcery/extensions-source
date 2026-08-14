@@ -70,7 +70,7 @@ abstract class WebNovelNovels :
                 val title = link.attr("title").ifEmpty {
                     link.selectFirst("img")?.attr("alt") ?: ""
                 }.ifEmpty {
-                    link.parent()?.selectFirst("h3, h4, .title, p")?.text()?.trim() ?: ""
+                    link.parent()?.selectFirst("h3, h4, .title, p")?.text() ?: ""
                 }
                 if (title.isBlank()) return@forEach
 
@@ -210,7 +210,7 @@ abstract class WebNovelNovels :
                 val title = link.attr("title").ifEmpty {
                     link.selectFirst("img")?.attr("alt") ?: ""
                 }.ifEmpty {
-                    link.parent()?.selectFirst("h3, h4, .title, p")?.text()?.trim() ?: ""
+                    link.parent()?.selectFirst("h3, h4, .title, p")?.text() ?: ""
                 }
                 if (title.isBlank()) return@forEach
 
@@ -280,19 +280,19 @@ abstract class WebNovelNovels :
                     cleaned.lines().joinToString("\n") { it.trim() }.trim()
                 }.filter { it.isNotBlank() }.joinToString("\n\n")
             // Fallback to whole element text if no paragraphs found
-            description = synopsisText.ifBlank { synopsisEl?.text()?.trim().orEmpty() }
+            description = synopsisText.ifBlank { synopsisEl?.text().orEmpty() }
             author = document.select(".det-info .c_s").firstOrNull { it.text().contains("Author") }?.nextElementSibling()?.text()
             // Prefer tag list under .j_tagWrap (site's tag block). Fallback to older selector.
             val tags = document.select(".j_tagWrap .m-tags a")
-                .map { it.text().trim().replace("#", "").trim() }
+                .map { it.text().replace("#", "").trim() }
                 .filter { it.isNotEmpty() }
 
             genre = if (tags.isNotEmpty()) {
-                tags.joinToString(", ")
+                tags.joinToString()
             } else {
                 document.select(".det-hd-detail > .det-hd-tag").attr("title")
             }
-            status = when (document.select(".det-hd-detail svg").firstOrNull { it.attr("title") == "Status" }?.nextElementSibling()?.text()?.trim()) {
+            status = when (document.select(".det-hd-detail svg").firstOrNull { it.attr("title") == "Status" }?.nextElementSibling()?.text()) {
                 "Completed" -> SManga.COMPLETED
                 "Ongoing" -> SManga.ONGOING
                 else -> SManga.UNKNOWN
@@ -302,21 +302,21 @@ abstract class WebNovelNovels :
             val extras = mutableListOf<String>()
 
             // Rating and number of ratings (e.g. 4.65 (5,977 ratings))
-            val ratingValue = document.selectFirst("p._score strong")?.text()?.trim()
-            val ratingsCount = document.selectFirst("p._score small")?.text()?.trim()?.removePrefix("(")?.removeSuffix(")")
+            val ratingValue = document.selectFirst("p._score strong")?.text()
+            val ratingsCount = document.selectFirst("p._score small")?.text()?.removePrefix("(")?.removeSuffix(")")
             if (!ratingValue.isNullOrEmpty()) {
                 extras.add("Rating: ${ratingValue}${if (!ratingsCount.isNullOrEmpty()) " ($ratingsCount)" else ""}")
             }
 
             // Views (look for svg title="View")
-            val views = document.select(".det-hd-detail svg").firstOrNull { it.attr("title") == "View" }?.nextElementSibling()?.text()?.trim()
+            val views = document.select(".det-hd-detail svg").firstOrNull { it.attr("title") == "View" }?.nextElementSibling()?.text()
             if (!views.isNullOrEmpty()) extras.add("Views: $views")
 
             // Review score breakdown (Translation Quality, Stability of Updates, ...)
             val reviewScoreElements = document.select(".rev-score-list li")
             if (reviewScoreElements.isNotEmpty()) {
                 val scoreLines = reviewScoreElements.mapNotNull { li ->
-                    val name = li.selectFirst("strong")?.text()?.trim() ?: return@mapNotNull null
+                    val name = li.selectFirst("strong")?.text() ?: return@mapNotNull null
                     val full = li.select(".g_star svg._on").size
                     val half = li.select(".g_star svg._half").size
                     val score = full + half * 0.5
@@ -366,7 +366,7 @@ abstract class WebNovelNovels :
         val document = response.asJsoup()
         val chapters = mutableListOf<SChapter>()
         document.select(".volume-item").forEach { volumeItem ->
-            val originalVolumeName = volumeItem.first()?.text()?.trim().orEmpty()
+            val originalVolumeName = volumeItem.first()?.text().orEmpty()
             val volumeNameMatch = Regex("Volume\\s(\\d+)").find(originalVolumeName)
             val volumeName = volumeNameMatch?.let { "Volume ${it.groupValues[1]}" } ?: "Unknown Volume"
 

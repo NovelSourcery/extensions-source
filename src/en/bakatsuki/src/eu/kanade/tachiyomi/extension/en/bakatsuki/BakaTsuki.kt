@@ -160,7 +160,7 @@ abstract class BakaTsuki :
                 ?: return@forEach
             if (!chapterTitle.startsWith("$projectTitle:")) return@forEach
             if (chapterTitle.contains("Illustrations", ignoreCase = true)) return@forEach
-            val text = a.text().trim()
+            val text = a.text()
             if (!CHAPTER_REGEX.containsMatchIn(text)) return@forEach
             if (!seen.add(chapterTitle)) return@forEach
 

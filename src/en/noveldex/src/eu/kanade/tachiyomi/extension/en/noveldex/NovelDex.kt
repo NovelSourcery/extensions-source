@@ -327,7 +327,7 @@ abstract class NovelDex :
                 Regex(""""name"\s*:\s*"((?:[^"\\]|\\.)*)"""").findAll(it).map { m -> m.groupValues[1].unescape() }.toList()
             } ?: emptyList()
 
-            genre = (genreNames + tagNames).joinToString(", ").takeIf { it.isNotBlank() }
+            genre = (genreNames + tagNames).joinToString().takeIf { it.isNotBlank() }
 
             status = parseStatus(
                 Regex(""""status"\s*:\s*"([A-Z_]+)"""").find(seriesJson)?.groupValues?.get(1),
@@ -379,7 +379,7 @@ abstract class NovelDex :
             Regex(""""name"\s*:\s*"((?:[^"\\]|\\.)*)"""").findAll(it).map { m -> m.groupValues[1].unescape() }.toList()
         } ?: emptyList()
 
-        genre = (genreNames + tagNames).joinToString(", ").takeIf { it.isNotBlank() }
+        genre = (genreNames + tagNames).joinToString().takeIf { it.isNotBlank() }
 
         status = parseStatus(
             Regex(""""status"\s*:\s*"([A-Z_]+)"""").find(body)?.groupValues?.get(1),

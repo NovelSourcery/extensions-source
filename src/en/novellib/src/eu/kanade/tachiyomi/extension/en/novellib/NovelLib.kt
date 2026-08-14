@@ -145,10 +145,10 @@ abstract class NovelLib :
     }
 
     private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
-        title = doc.selectFirst("h1")?.text()?.trim().orEmpty()
+        title = doc.selectFirst("h1")?.text().orEmpty()
         thumbnail_url = doc.selectFirst("img[alt$=Cover]")?.attr("abs:src")
-        author = doc.selectFirst("a[href^=/author/]")?.text()?.trim()
-        genre = doc.select("div.flex-1 a[href^=/genre/]").joinToString(", ") { it.text().trim() }
+        author = doc.selectFirst("a[href^=/author/]")?.text()
+        genre = doc.select("div.flex-1 a[href^=/genre/]").joinToString { it.text() }
 
         val statusText = doc.selectFirst("h1")?.previousElementSibling()?.text()
             ?: doc.selectFirst("span:matchesOwn(^(?i)(Ongoing|Completed)\$)")?.text()
@@ -165,14 +165,14 @@ abstract class NovelLib :
 
         // Stats with no SManga field (rating, words, views, votes) go into the description
         val extras = buildList {
-            doc.selectFirst("div.text-amber-500 > span.font-bold")?.text()?.trim()
+            doc.selectFirst("div.text-amber-500 > span.font-bold")?.text()
                 ?.takeIf { it.isNotBlank() && !it.equals("N/A", ignoreCase = true) }
                 ?.let { add("Rating: $it") }
 
             doc.select("div.grid-cols-3 > div").forEach { stat ->
                 val cells = stat.select("p")
-                val value = cells.getOrNull(0)?.text()?.trim()
-                val label = cells.getOrNull(1)?.text()?.trim()
+                val value = cells.getOrNull(0)?.text()
+                val label = cells.getOrNull(1)?.text()
                 if (!value.isNullOrBlank() && !label.isNullOrBlank() && !value.equals("N/A", ignoreCase = true)) {
                     add("$label: $value")
                 }
@@ -197,9 +197,9 @@ abstract class NovelLib :
 
         return doc.select("a[href^=/novel/$slug/]").mapNotNull { element ->
             val spans = element.select("span")
-            val chapterName = spans.getOrNull(0)?.text()?.trim()?.takeIf { it.isNotBlank() }
+            val chapterName = spans.getOrNull(0)?.text()?.takeIf { it.isNotBlank() }
                 ?: return@mapNotNull null
-            val lockLabel = spans.getOrNull(1)?.text()?.trim().orEmpty()
+            val lockLabel = spans.getOrNull(1)?.text().orEmpty()
             val locked = lockLabel.isNotBlank() && !lockLabel.equals("free", ignoreCase = true)
 
             SChapter.create().apply {

@@ -198,7 +198,7 @@ abstract class LnCrawler :
             url = mangaPath.slug("/novels/${novel.slug}/${source?.sourceSlug ?: ""}")
             title = novel.title
             thumbnail_url = resolveCover(source?.coverUrl ?: novel.preferedSource?.coverUrl)
-            author = source?.authors?.joinToString(", ") ?: novel.preferedSource?.authors?.joinToString(", ")
+            author = source?.authors?.joinToString() ?: novel.preferedSource?.authors?.joinToString()
 
             description = buildString {
                 val synopsis = source?.synopsis ?: novel.preferedSource?.synopsis ?: ""
@@ -216,7 +216,7 @@ abstract class LnCrawler :
                 }
             }
 
-            genre = source?.tags?.joinToString(", ") ?: novel.preferedSource?.tags?.joinToString(", ") ?: ""
+            genre = source?.tags?.joinToString() ?: novel.preferedSource?.tags?.joinToString() ?: ""
 
             status = SManga.UNKNOWN
         }
@@ -341,7 +341,7 @@ abstract class LnCrawler :
                         }
                         content.append("<img src=\"$fullUrl\">\n")
                     } else {
-                        val text = element.text()?.trim()
+                        val text = element.text()
                         if (!text.isNullOrEmpty()) {
                             content.append("<p>$text</p>\n")
                         }
@@ -361,7 +361,7 @@ abstract class LnCrawler :
                 }
 
                 else -> {
-                    val text = element.text()?.trim()
+                    val text = element.text()
                     if (!text.isNullOrEmpty()) {
                         content.append("<p>$text</p>\n")
                     }
@@ -466,7 +466,7 @@ abstract class LnCrawler :
         thumbnail_url = resolveCover(novel.preferedSource?.coverMinUrl ?: novel.preferedSource?.coverUrl)
         author = novel.preferedSource?.authors?.firstOrNull()
         description = novel.preferedSource?.synopsis?.let { Jsoup.parse(it).text() }
-        genre = novel.preferedSource?.tags?.take(5)?.joinToString(", ") ?: ""
+        genre = novel.preferedSource?.tags?.take(5)?.joinToString() ?: ""
     }
 
     private fun toWebPath(input: String?): String {

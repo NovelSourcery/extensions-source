@@ -84,7 +84,7 @@ abstract class WordExcerpt :
         thumbnail_url = cover_url
         author = author_name
         description = synopsis
-        genre = genres.joinToString(", ")
+        genre = genres.joinToString()
         status = when (this@toSManga.status?.lowercase()) {
             "ongoing" -> SManga.ONGOING
             "completed" -> SManga.COMPLETED

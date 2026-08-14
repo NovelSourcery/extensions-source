@@ -29,7 +29,7 @@ abstract class KatReadingCafe :
             ?.let { it.nextElementSibling()?.text() ?: it.parent()?.text()?.substringAfter("Author")?.replace(":", "")?.trim() }
 
         genre = doc.select(".genxed a, .sertogenre a, .sztag a, a[rel=tag]")
-            .map { it.text().trim() }
+            .map { it.text() }
             .filter { it.isNotEmpty() }
             .distinctBy { it.lowercase() }
             .joinToString()
@@ -53,7 +53,7 @@ abstract class KatReadingCafe :
         description = buildString {
             doc.selectFirst(".rating .num, [itemprop=ratingValue]")?.text()?.takeIf { it.isNotEmpty() }
                 ?.let { append("Rating: $it\n") }
-            val synopsis = doc.selectFirst("[itemprop=description], .entry-content")?.text()?.trim()
+            val synopsis = doc.selectFirst("[itemprop=description], .entry-content")?.text()
             if (!synopsis.isNullOrEmpty()) {
                 if (isNotEmpty()) append("\n")
                 append(synopsis)

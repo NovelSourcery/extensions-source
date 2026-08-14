@@ -105,14 +105,14 @@ abstract class WuxiaDreams :
         thumbnail_url = doc.selectFirst("img[src*=/covers/]")?.attr("abs:src")
         author = doc.selectFirst("a[href^=/author/]")?.text()
         genre = doc.select("a[href^=/genre/], a[href^=/tag/]")
-            .map { it.text().trim() }
+            .map { it.text() }
             .filter { it.isNotEmpty() }
             .distinctBy { it.lowercase() }
             .joinToString()
         status = parseStatus(statValue(doc, "Status"))
 
         val altTitle = doc.selectFirst("h1")?.nextElementSibling()
-            ?.takeIf { it.tagName() == "h2" }?.text()?.trim()
+            ?.takeIf { it.tagName() == "h2" }?.text()
         if (!altTitle.isNullOrEmpty() && altTitle != title) setAltTitles(listOf(altTitle))
 
         description = buildString {
@@ -129,7 +129,7 @@ abstract class WuxiaDreams :
 
     private fun statValue(doc: Document, label: String): String? = doc
         .select("span:matchesOwn(^$label$)").firstOrNull()
-        ?.nextElementSibling()?.text()?.trim()?.takeIf { it.isNotEmpty() }
+        ?.nextElementSibling()?.text()?.takeIf { it.isNotEmpty() }
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -175,8 +175,8 @@ abstract class WuxiaDreams :
 
     private fun parseChapters(doc: Document): List<SChapter> = doc.select("section.scroll-mt-24 a[href*=/chapter-]").map { el ->
         SChapter.create().apply {
-            name = el.selectFirst("span.line-clamp-1")?.text()?.trim()
-                ?: el.text().trim()
+            name = el.selectFirst("span.line-clamp-1")?.text()
+                ?: el.text()
             url = el.attr("href")
             date_upload = el.select("span").firstOrNull { it.text().contains(",") }
                 ?.let { runCatching { dateFormat.parse(it.text())?.time }.getOrNull() } ?: 0L

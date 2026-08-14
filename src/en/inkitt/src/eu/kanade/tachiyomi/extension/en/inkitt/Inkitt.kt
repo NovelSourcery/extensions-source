@@ -327,8 +327,8 @@ abstract class Inkitt :
         if (chapterElements.isNotEmpty()) {
             return chapterElements.mapIndexed { index, el ->
                 SChapter.create().apply {
-                    val nr = el.selectFirst(".chapter-nr, [class*=chapter-nr]")?.text()?.trim() ?: "${index + 1}"
-                    val chTitle = el.selectFirst(".chapter-title, [class*=chapter-title]")?.text()?.trim() ?: ""
+                    val nr = el.selectFirst(".chapter-nr, [class*=chapter-nr]")?.text() ?: "${index + 1}"
+                    val chTitle = el.selectFirst(".chapter-title, [class*=chapter-title]")?.text() ?: ""
                     name = if (chTitle.isNotBlank()) "$nr. $chTitle" else "Chapter $nr"
                     url = el.attr("href").removePrefix(baseUrl)
                     chapter_number = nr.toFloatOrNull() ?: (index + 1).toFloat()

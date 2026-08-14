@@ -173,18 +173,18 @@ abstract class LNMTL :
         title = cover?.attr("title").orEmpty()
         thumbnail_url = cover?.attr("abs:src")
 
-        author = doc.selectFirst("dt:containsOwn(Authors) ~ dd")?.text()?.trim()
+        author = doc.selectFirst("dt:containsOwn(Authors) ~ dd")?.text()
 
-        status = when (doc.selectFirst("dt:containsOwn(Current status) ~ dd")?.text()?.trim()) {
+        status = when (doc.selectFirst("dt:containsOwn(Current status) ~ dd")?.text()) {
             "Ongoing" -> SManga.ONGOING
             "Completed" -> SManga.COMPLETED
             else -> SManga.UNKNOWN
         }
 
         genre = doc.select("div.panel-heading:containsOwn(Genres) ~ div.panel-body ul.list-inline li a")
-            .joinToString(", ") { it.text().trim() }
+            .joinToString { it.text() }
 
-        description = doc.select("div.description p").joinToString("\n\n") { it.text().trim() }
+        description = doc.select("div.description p").joinToString("\n\n") { it.text() }
             .ifBlank { null }
     }
 
@@ -250,7 +250,7 @@ abstract class LNMTL :
     // Sentences are flat siblings in the source HTML (translated/original alternating, no
     // paragraph wrapper) - one <p> per sentence matches the site's own rendering.
     private fun extractChapterText(doc: Document): String = doc.select("sentence.translated")
-        .map { it.text().trim().replace('„', '"') }
+        .map { it.text().replace('„', '"') }
         .filter { it.isNotEmpty() }
         .joinToString("") { "<p>$it</p>" }
 

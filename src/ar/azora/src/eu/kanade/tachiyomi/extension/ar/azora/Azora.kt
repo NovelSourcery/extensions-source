@@ -45,7 +45,7 @@ abstract class Azora :
         val doc = response.asJsoup()
         val items = doc.select("a[href*='/series/']").map { el ->
             SManga.create().apply {
-                title = el.selectFirst("h3, .title, h2, .novel-title")?.text()?.trim().orEmpty()
+                title = el.selectFirst("h3, .title, h2, .novel-title")?.text().orEmpty()
                 url = el.attr("href").toRelative()
                 thumbnail_url = el.selectFirst("img")?.absCover()
             }
@@ -71,12 +71,12 @@ abstract class Azora :
     }
 
     private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
-        title = doc.selectFirst("h1")?.text()?.trim().orEmpty()
+        title = doc.selectFirst("h1")?.text().orEmpty()
         thumbnail_url = doc.selectFirst(".cover img, .poster img")?.absCover()
-        author = doc.selectFirst(".author, .novel-author")?.text()?.trim().orEmpty()
-        description = doc.selectFirst(".description, .synopsis, .novel-description")?.text()?.trim().orEmpty()
-        genre = doc.select(".genre, .tag, .pill").joinToString { it.text().trim() }
-        status = when (doc.selectFirst(".status, .novel-status")?.text()?.trim()?.lowercase()) {
+        author = doc.selectFirst(".author, .novel-author")?.text().orEmpty()
+        description = doc.selectFirst(".description, .synopsis, .novel-description")?.text().orEmpty()
+        genre = doc.select(".genre, .tag, .pill").joinToString { it.text() }
+        status = when (doc.selectFirst(".status, .novel-status")?.text()?.lowercase()) {
             "completed", "مكتملة" -> SManga.COMPLETED
             "ongoing", "مستمرة" -> SManga.ONGOING
             "hiatus", "متوقفة" -> SManga.ON_HIATUS
@@ -88,7 +88,7 @@ abstract class Azora :
         val rows = doc.select(".ch-row, .chapter-row, .chapter-list a")
         val chapters = rows.mapNotNull { row ->
             val link = row.selectFirst("a[href]")?.attr("href")?.ifBlank { null } ?: return@mapNotNull null
-            val name = row.selectFirst(".ch-title, .chapter-title, .title")?.text()?.trim() ?: row.text().trim()
+            val name = row.selectFirst(".ch-title, .chapter-title, .title")?.text() ?: row.text()
             val numText = row.selectFirst(".ch-num, .chapter-num, .num")?.text() ?: name
             val dateText = row.selectFirst(".ch-date, .chapter-date, .date")?.text() ?: ""
             SChapter.create().apply {

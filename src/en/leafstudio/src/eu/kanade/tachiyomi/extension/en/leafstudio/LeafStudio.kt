@@ -75,7 +75,7 @@ abstract class LeafStudio :
         val mangas = document.select("a.novel-item").map { element ->
             SManga.create().apply {
                 setSlugUrl(element.attr("abs:href"))
-                title = element.selectFirst("p.novel-item-title")?.text()?.trim().orEmpty()
+                title = element.selectFirst("p.novel-item-title")?.text().orEmpty()
                 thumbnail_url = element.selectFirst("img.novel-item-Cover")?.attr("abs:src")
             }
         }
@@ -103,11 +103,11 @@ abstract class LeafStudio :
     }
 
     private fun parseMangaDetails(document: Document): SManga = SManga.create().apply {
-        title = document.selectFirst("h1.title")?.text()?.trim().orEmpty()
+        title = document.selectFirst("h1.title")?.text().orEmpty()
         thumbnail_url = document.selectFirst("img#novel_cover")?.attr("abs:src")
         description = document.select("div.desc_div > p").joinToString("\n\n") { it.text() }.ifBlank { null }
-        genre = document.select("div#tags_div > a.novel_genre").joinToString(", ") { it.text().trim() }.ifBlank { null }
-        status = when (document.selectFirst("a#novel_status")?.text()?.trim()) {
+        genre = document.select("div#tags_div > a.novel_genre").joinToString { it.text() }.ifBlank { null }
+        status = when (document.selectFirst("a#novel_status")?.text()) {
             "Active" -> SManga.ONGOING
             "Completed" -> SManga.COMPLETED
             "Hiatus" -> SManga.ON_HIATUS
@@ -121,7 +121,7 @@ abstract class LeafStudio :
     private fun parseChapterList(document: Document): List<SChapter> = document.select("a.chap").mapNotNull { element ->
         val href = element.attr("abs:href")
         if (href.isBlank()) return@mapNotNull null
-        val rawName = element.selectFirst("p")?.text()?.trim().orEmpty()
+        val rawName = element.selectFirst("p")?.text().orEmpty()
         val locked = element.hasClass("premium_chap")
         SChapter.create().apply {
             setUrlWithoutDomain(href)

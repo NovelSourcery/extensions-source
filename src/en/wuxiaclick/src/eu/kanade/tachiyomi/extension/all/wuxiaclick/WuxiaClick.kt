@@ -158,7 +158,7 @@ abstract class WuxiaClick :
                                 thumbnail_url = if (img.startsWith("http")) img else img
                                 author = categories.firstOrNull()
                                 description = obj["description"]?.asStringOrNull() ?: ""
-                                genre = categories.joinToString(", ")
+                                genre = categories.joinToString()
                                 status = when (obj["status"]?.asStringOrNull()) {
                                     "CP", "completed", "cp" -> SManga.COMPLETED
                                     "OG", "ongoing", "og" -> SManga.ONGOING
@@ -198,7 +198,7 @@ abstract class WuxiaClick :
                 thumbnail_url = novel.image ?: ""
                 author = novel.categories?.firstOrNull()?.name
                 description = novel.description
-                genre = novel.categories?.joinToString(", ") { it.name } ?: ""
+                genre = novel.categories?.joinToString { it.name } ?: ""
                 status = when {
                     novel.chapters >= (novel.numOfChaps ?: 0) -> SManga.COMPLETED
                     else -> SManga.ONGOING
@@ -395,7 +395,7 @@ abstract class WuxiaClick :
                         thumbnail_url = localImg
                         author = localAuthor
                         this.description = localDescription
-                        genre = localCategories.joinToString(", ")
+                        genre = localCategories.joinToString()
                         status = when {
                             statusStr.contains("completed") || statusStr.contains("cp") -> SManga.COMPLETED
                             statusStr.contains("ongoing") || statusStr.contains("og") -> SManga.ONGOING
@@ -419,7 +419,7 @@ abstract class WuxiaClick :
                 append(novel.description)
                 val otherNamesList = novel.getOtherNamesList()
                 if (otherNamesList.isNotEmpty()) {
-                    append("\n\nAlternative Names: ${otherNamesList.joinToString(", ")}")
+                    append("\n\nAlternative Names: ${otherNamesList.joinToString()}")
                 }
                 novel.rating?.let { rating ->
                     append("\n\nRating: $rating")
@@ -430,12 +430,12 @@ abstract class WuxiaClick :
             }
             genre = buildString {
                 novel.categories?.let { cats ->
-                    append(cats.joinToString(", ") { it.name })
+                    append(cats.joinToString { it.name })
                 }
                 novel.tags?.let { tags ->
                     if (tags.isNotEmpty()) {
                         if (isNotEmpty()) append(", ")
-                        append(tags.take(10).joinToString(", ") { it.name })
+                        append(tags.take(10).joinToString { it.name })
                     }
                 }
             }

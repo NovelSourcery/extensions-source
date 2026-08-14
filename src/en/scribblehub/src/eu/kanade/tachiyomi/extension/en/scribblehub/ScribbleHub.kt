@@ -150,12 +150,12 @@ abstract class ScribbleHub :
             img.attr("data-src").ifEmpty { img.attr("src") }
         } ?: ""
 
-        author = doc.select(".auth_name_fic").text().trim()
+        author = doc.select(".auth_name_fic").text()
         // Collect genres and tags (tags are in .wi_fic_showtags a.stag)
-        val genresFromPage = doc.select(".fic_genre").map { it.text().trim() }.filter { it.isNotEmpty() }
-        val tagsFromPage = doc.select(".wi_fic_showtags a.stag, .wi_fic_showtags_inner a.stag").map { it.text().trim() }.filter { it.isNotEmpty() }
+        val genresFromPage = doc.select(".fic_genre").map { it.text() }.filter { it.isNotEmpty() }
+        val tagsFromPage = doc.select(".wi_fic_showtags a.stag, .wi_fic_showtags_inner a.stag").map { it.text() }.filter { it.isNotEmpty() }
         val allGenres = (genresFromPage + tagsFromPage).distinct()
-        genre = allGenres.joinToString(", ")
+        genre = allGenres.joinToString()
 
         // Extract status from stats
         val statsText = doc.select(".rnd_stats").text().lowercase()
@@ -166,7 +166,7 @@ abstract class ScribbleHub :
             else -> SManga.UNKNOWN
         }
 
-        description = doc.select(".wi_fic_desc").text().trim()
+        description = doc.select(".wi_fic_desc").text()
     }
 
     private fun fetchChapterList(doc: Document, urlPath: String): List<SChapter> {
@@ -191,7 +191,7 @@ abstract class ScribbleHub :
             val link = element.select("a").first() ?: return@mapNotNull null
             val chapterUrl = link.attr("href")
             val chapterName = element.select(".toc_a").first()?.text() ?: link.text()
-            val dateText = element.select(".fic_date_pub").text().trim()
+            val dateText = element.select(".fic_date_pub").text()
 
             SChapter.create().apply {
                 name = chapterName.trim()
@@ -272,7 +272,7 @@ abstract class ScribbleHub :
         val doc = Jsoup.parse(body, page.url)
 
         // Handle CAPTCHA cases
-        val title = doc.select("title").text().trim().lowercase()
+        val title = doc.select("title").text().lowercase()
         val blockedTitles = listOf(
             "bot verification",
             "just a moment...",

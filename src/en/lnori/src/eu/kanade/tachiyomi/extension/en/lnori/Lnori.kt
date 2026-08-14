@@ -299,13 +299,13 @@ abstract class Lnori :
             }
 
             val title = card.attr("data-t").ifEmpty {
-                card.selectFirst("h3, h2, h4, [class*=title], [class*=name]")?.text()?.trim()
-                    ?: link?.text()?.trim()?.takeIf { it.length > 2 }
+                card.selectFirst("h3, h2, h4, [class*=title], [class*=name]")?.text()
+                    ?: link?.text()?.takeIf { it.length > 2 }
                     ?: return@mapNotNull null
             }
 
             val author = card.attr("data-a").ifEmpty {
-                card.selectFirst("[class*=author], .author")?.text()?.trim() ?: ""
+                card.selectFirst("[class*=author], .author")?.text() ?: ""
             }
             val tagsRaw = card.attr("data-tags").ifEmpty { card.attr("data-tag") }
             val tags = tagsRaw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
@@ -335,9 +335,9 @@ abstract class Lnori :
             .distinctBy { it.attr("href") }
             .mapNotNull { link ->
                 val href = link.attr("href").takeIf { it.contains("/") } ?: return@mapNotNull null
-                val title = link.selectFirst("h3, h2, h4, [class*=title]")?.text()?.trim()
+                val title = link.selectFirst("h3, h2, h4, [class*=title]")?.text()
                     ?: link.attr("title").trim().takeIf { it.length > 2 }
-                    ?: link.text().trim().takeIf { it.length > 3 }
+                    ?: link.text().takeIf { it.length > 3 }
                     ?: return@mapNotNull null
                 // Extract ID from href: /series/3336/slug ? "3336-slug"
                 val pathParts = href.trimEnd('/').split("/").filter { it.isNotEmpty() }
@@ -365,7 +365,7 @@ abstract class Lnori :
         title = novel.title
         thumbnail_url = novel.coverUrl
         author = novel.author
-        genre = novel.tags.joinToString(", ")
+        genre = novel.tags.joinToString()
         description = novel.description
     }
 
@@ -500,10 +500,10 @@ abstract class Lnori :
         // Title: try multiple selectors
         title = document.selectFirst(
             "h1.s-title, h1.series-title, h1[class*=title], h1[class*=series], h1",
-        )?.text()?.trim() ?: ""
+        )?.text() ?: ""
 
         author = document.selectFirst("p.author, .author, [itemprop='author'], [class*=author]")
-            ?.text()?.trim()
+            ?.text()
             ?.removePrefix("Author:")?.trim()
 
         val imgEl = document.selectFirst(
@@ -520,9 +520,9 @@ abstract class Lnori :
         description = document.selectFirst(
             "p.description, .series-description, .synopsis, [itemprop='description'], " +
                 ".desc, .summary, [class*=description], [class*=synopsis]",
-        )?.text()?.trim() ?: run {
+        )?.text() ?: run {
             // Fallback: find paragraph with >80 chars that's likely the description
-            document.select("p").firstOrNull { it.text().length > 80 }?.text()?.trim()
+            document.select("p").firstOrNull { it.text().length > 80 }?.text()
         }
 
         // Genres/Tags
@@ -530,9 +530,9 @@ abstract class Lnori :
             "nav.tags-box a.tag, .tags a, .genre-tag, a[class*=tag], " +
                 "[class*=genre] a, [class*=tag] a",
         )
-            .map { it.text().trim() }
+            .map { it.text() }
             .filter { it.isNotEmpty() }
-            .joinToString(", ")
+            .joinToString()
             .ifEmpty { null }
 
         // Status
@@ -554,22 +554,22 @@ abstract class Lnori :
             val id = card.attr("data-id").ifEmpty { return@mapNotNull null }
 
             val title = card.attr("data-t").ifEmpty {
-                card.selectFirst(".card-title span, .card-title, .card-title a")?.text()?.trim()
+                card.selectFirst(".card-title span, .card-title, .card-title a")?.text()
                     ?: return@mapNotNull null
             }
 
             val author = card.attr("data-a").ifEmpty {
-                card.selectFirst(".popup-author, .author")?.text()?.trim()?.split("(")?.firstOrNull() ?: ""
+                card.selectFirst(".popup-author, .author")?.text()?.split("(")?.firstOrNull() ?: ""
             }
 
-            val year = card.attr("data-d").ifEmpty { card.selectFirst(".card-meta .year-badge")?.text()?.trim() ?: "" }
+            val year = card.attr("data-d").ifEmpty { card.selectFirst(".card-meta .year-badge")?.text() ?: "" }
 
             val volumes = card.attr("data-v").toIntOrNull()
                 ?: card.selectFirst(".card-meta span")?.text()?.filter { it.isDigit() }?.toIntOrNull()
                 ?: 1
 
             val tags = card.attr("data-tags").ifEmpty {
-                card.select(".popup-tag").map { it.text().trim() }.joinToString(",")
+                card.select(".popup-tag").map { it.text() }.joinToString(",")
             }
                 .split(",")
                 .map { it.trim() }
@@ -588,7 +588,7 @@ abstract class Lnori :
                 }
             } ?: ""
 
-            val desc = card.selectFirst(".popup-description")?.text()?.trim() ?: ""
+            val desc = card.selectFirst(".popup-description")?.text() ?: ""
 
             NovelData(
                 id = id,
@@ -712,12 +712,12 @@ abstract class Lnori :
                 if (href.isBlank()) return@forEachIndexed
 
                 val titleText = card.selectFirst("h3.c-title a, h3 a, .c-title, h3, h2, .card-title")
-                    ?.text()?.trim() ?: link.text().trim()
+                    ?.text() ?: link.text()
 
                 val volumeNum = Regex("""(?:vol(?:ume)?\.?\s*|#|v)?\s*(\d+)""", RegexOption.IGNORE_CASE)
                     .find(titleText)?.groupValues?.get(1)?.toIntOrNull() ?: (index + 1)
                 val subtitle = card.selectFirst("p.card-sub, .subtitle, p.card-description, p")
-                    ?.text()?.trim() ?: ""
+                    ?.text() ?: ""
 
                 val chapterUrl = when {
                     href.startsWith("http") -> href.removePrefix(baseUrl)
@@ -774,7 +774,7 @@ abstract class Lnori :
                 if (href.startsWith(basePath + "/") || href.startsWith(basePath.trimEnd('/') + "/")) {
                     val childPath = if (href.startsWith("/")) href else "/$href"
                     if (seen.add(childPath)) {
-                        val title = link.text().trim().ifEmpty {
+                        val title = link.text().ifEmpty {
                             link.attr("title").trim().ifEmpty {
                                 "Volume ${seen.size}"
                             }

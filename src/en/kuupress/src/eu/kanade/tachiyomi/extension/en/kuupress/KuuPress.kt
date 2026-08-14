@@ -195,7 +195,7 @@ abstract class KuuPress :
                 "dropped" -> SManga.CANCELLED
                 else -> SManga.UNKNOWN
             }
-            genre = (genres + tags).distinctBy { it.lowercase() }.joinToString(", ")
+            genre = (genres + tags).distinctBy { it.lowercase() }.joinToString()
             description = buildString {
                 if (infoLines.isNotEmpty()) {
                     append(infoLines.joinToString("\n"))
@@ -641,7 +641,7 @@ abstract class KuuPress :
 
     private fun cleanHtml(text: String): String {
         val decoded = Parser.unescapeEntities(text, false)
-        return Jsoup.parse(decoded).text().trim().replace(Regex("\\s+"), " ")
+        return Jsoup.parse(decoded).text().replace(Regex("\\s+"), " ")
     }
 
     private fun formatDescription(rawHtml: String): String {

@@ -472,7 +472,7 @@ abstract class Fenrirealm :
 
             val altTitles = altTitle
                 ?.split("\n", "/", " | ", ";")
-                ?.map { Jsoup.parse(it).text().trim() }
+                ?.map { Jsoup.parse(it).text() }
                 ?.filter { it.isNotBlank() }
                 ?.distinct()
                 .orEmpty()
@@ -531,7 +531,7 @@ abstract class Fenrirealm :
             }.map { it.trim() }
                 .filter { it.isNotBlank() }
                 .distinct()
-                .joinToString(", ")
+                .joinToString()
 
             this.status = when (this@NovelDto.status?.lowercase()) {
                 "on-going", "ongoing" -> SManga.ONGOING

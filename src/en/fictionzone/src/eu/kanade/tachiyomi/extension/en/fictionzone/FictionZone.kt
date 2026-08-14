@@ -416,7 +416,7 @@ abstract class FictionZone :
                     element.jsonPrimitive.contentOrNull
                 }
             } ?: emptyList()
-            genre = (genresList + tagsList).joinToString(", ")
+            genre = (genresList + tagsList).joinToString()
 
             status = when (data["status"]?.jsonPrimitive?.contentOrNull) {
                 "1", "ongoing" -> SManga.ONGOING

@@ -199,7 +199,7 @@ abstract class Konkon :
                 "dropped" -> SManga.CANCELLED
                 else -> SManga.UNKNOWN
             }
-            genre = (genres + tags).distinctBy { it.lowercase() }.joinToString(", ")
+            genre = (genres + tags).distinctBy { it.lowercase() }.joinToString()
             description = buildString {
                 if (infoLines.isNotEmpty()) {
                     append(infoLines.joinToString("\n"))
@@ -302,7 +302,7 @@ abstract class Konkon :
 
         val doc = Jsoup.parse(body, resolvedUrl.toString())
 
-        val title = doc.select("title").text().trim().lowercase()
+        val title = doc.select("title").text().lowercase()
         val blockedTitles = listOf(
             "bot verification",
             "just a moment...",
@@ -648,7 +648,7 @@ abstract class Konkon :
 
     private fun cleanHtml(text: String): String {
         val decoded = Parser.unescapeEntities(text, false)
-        return Jsoup.parse(decoded).text().trim().replace(Regex("\\s+"), " ")
+        return Jsoup.parse(decoded).text().replace(Regex("\\s+"), " ")
     }
 
     private fun formatDescription(rawHtml: String): String {

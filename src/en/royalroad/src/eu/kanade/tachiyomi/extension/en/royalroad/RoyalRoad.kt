@@ -60,7 +60,7 @@ abstract class RoyalRoad :
         val doc = Jsoup.parse(body, url)
 
         // Handle CAPTCHA cases
-        val title = doc.select("title").text().trim().lowercase()
+        val title = doc.select("title").text().lowercase()
         val blockedTitles = listOf(
             "bot verification",
             "just a moment...",
@@ -420,7 +420,7 @@ abstract class RoyalRoad :
             absoluteUrl(src)
         } ?: ""
 
-        val genres = doc.select("span.tags a, a.fiction-tag").joinToString(", ") { it.text() }
+        val genres = doc.select("span.tags a, a.fiction-tag").joinToString { it.text() }
 
         return SManga.create().apply {
             this.title = title

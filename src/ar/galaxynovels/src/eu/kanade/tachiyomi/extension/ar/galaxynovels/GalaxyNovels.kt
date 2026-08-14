@@ -91,7 +91,7 @@ abstract class GalaxyNovels :
 
         val novels = doc.select("article.wor-novel-card").mapNotNull { card ->
             val link = card.selectFirst("a.wor-novel-card__cover") ?: return@mapNotNull null
-            val title = card.selectFirst("h3 a")?.text()?.trim()
+            val title = card.selectFirst("h3 a")?.text()
                 ?: link.attr("aria-label").trim().ifEmpty { return@mapNotNull null }
 
             SManga.create().apply {
@@ -155,7 +155,7 @@ abstract class GalaxyNovels :
                 ?: card.selectFirst("a.wor-library-card__cover, a[href*=novel]") ?: return@mapNotNull null
             val imgElement = card.selectFirst("img.wor-cover-img, img")
             val href = titleLink.attr("href")
-            val title = titleLink.text().trim().ifEmpty {
+            val title = titleLink.text().ifEmpty {
                 titleLink.attr("aria-label").trim().ifEmpty { return@mapNotNull null }
             }
             val relativeUrl = href.removePrefix(baseUrl)
@@ -188,16 +188,16 @@ abstract class GalaxyNovels :
     }
 
     private fun parseMangaDetails(doc: org.jsoup.nodes.Document): SManga = SManga.create().apply {
-        title = doc.selectFirst("h1")?.text()?.trim() ?: "No Title"
+        title = doc.selectFirst("h1")?.text() ?: "No Title"
 
         val img = doc.selectFirst("img.wor-cover-img")
         thumbnail_url = img?.attr("data-src")?.toAbsoluteUrl()
             ?: img?.attr("src")?.toAbsoluteUrl()
 
-        author = doc.selectFirst(".wor-single-hero__meta-text span")?.text()?.trim()
+        author = doc.selectFirst(".wor-single-hero__meta-text span")?.text()
 
-        val genres = doc.select(".wor-tag-pill").map { it.text().trim() }
-        genre = genres.joinToString(", ")
+        val genres = doc.select(".wor-tag-pill").map { it.text() }
+        genre = genres.joinToString()
 
         val statusText = doc.selectFirst(".wor-cover-status")?.text()?.lowercase()
         status = when {
@@ -209,12 +209,12 @@ abstract class GalaxyNovels :
 
         description = doc.selectFirst(".wor-single-summary__text")?.let { element ->
             element.select("script, style").remove()
-            element.text().trim()
+            element.text()
         }
 
         val chapterCountText = doc.select(".wor-single-stats__item")
             .firstOrNull { it.text().contains("عدد الفصول") }
-            ?.selectFirst("strong")?.text()?.trim()
+            ?.selectFirst("strong")?.text()
         val chapterCount = chapterCountText?.replace(Regex("[^0-9]"), "")?.toIntOrNull() ?: 0
 
         if (chapterCount > 0) {
@@ -273,9 +273,9 @@ abstract class GalaxyNovels :
 
         return doc.select("article.wor-novel-chapter-item").mapNotNull { item ->
             val link = item.selectFirst("a[href]") ?: return@mapNotNull null
-            val chapterNum = item.selectFirst(".wor-novel-chapter-item__num")?.text()?.trim()
+            val chapterNum = item.selectFirst(".wor-novel-chapter-item__num")?.text()
                 ?.toFloatOrNull() ?: -1f
-            val title = item.selectFirst("h3 a")?.text()?.trim() ?: ""
+            val title = item.selectFirst("h3 a")?.text() ?: ""
             val dateText = item.selectFirst("time")?.attr("datetime") ?: ""
 
             SChapter.create().apply {

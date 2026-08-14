@@ -203,7 +203,7 @@ abstract class AsianNovel :
                     thumbnail_url = schema.image?.firstOrNull()
                     author = schema.author?.name
                     description = schema.description
-                    genre = schema.genre?.joinToString(", ")
+                    genre = schema.genre?.joinToString()
                     status = SManga.UNKNOWN
                 }
             } catch (_: Exception) {}
@@ -222,7 +222,7 @@ abstract class AsianNovel :
 
             description = document.selectFirst(".story__summary p")?.text()
 
-            genre = document.select(".story__taxonomies .tag-pill").map { it.text() }.joinToString(", ")
+            genre = document.select(".story__taxonomies .tag-pill").map { it.text() }.joinToString()
 
             val statusText = document.selectFirst(".story__meta .story__status")?.text()?.lowercase() ?: ""
             status = when {
@@ -242,7 +242,7 @@ abstract class AsianNovel :
 
             SChapter.create().apply {
                 url = java.net.URL(href).path
-                name = element.text().trim()
+                name = element.text()
 
                 val dateText = element.parent()?.selectFirst("time")?.text() ?: ""
                 date_upload = parseDateString(dateText)
@@ -293,7 +293,7 @@ abstract class AsianNovel :
 
                 when (element.tagName()) {
                     "p" -> {
-                        val text = element.text()?.trim()
+                        val text = element.text()
                         if (!text.isNullOrEmpty()) {
                             content.append("<p>$text</p>\n")
                         }
@@ -491,7 +491,7 @@ abstract class AsianNovel :
                     else -> SManga.UNKNOWN
                 }
 
-                genre = card.select(".card__tag-list .tag-pill").map { it.text() }.joinToString(", ")
+                genre = card.select(".card__tag-list .tag-pill").map { it.text() }.joinToString()
             }
         }
 

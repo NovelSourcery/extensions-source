@@ -120,7 +120,7 @@ abstract class WoopRead :
             thumbnail_url = doc.selectFirst("meta[property=og:image]")?.attr("content")
             author = doc.selectFirst("span:matchesOwn(^Author$) ~ a, span:contains(Author) + a")?.text()
             genre = doc.select("a[href*=genres=], a[href*=tags=]")
-                .map { it.text().trim() }
+                .map { it.text() }
                 .filter { it.isNotEmpty() }
                 .distinctBy { it.lowercase() }
                 .joinToString()
@@ -128,9 +128,9 @@ abstract class WoopRead :
                 doc.selectFirst("span:matchesOwn(^Status$) ~ span, span:contains(Status) + span")?.text(),
             )
             description = buildString {
-                val type = doc.selectFirst("span:matchesOwn(^Type$) ~ span, span:contains(Type) + span")?.text()?.trim()
+                val type = doc.selectFirst("span:matchesOwn(^Type$) ~ span, span:contains(Type) + span")?.text()
                 if (!type.isNullOrEmpty()) append("Type: $type\n")
-                val synopsis = doc.selectFirst("#novel-description-content")?.text()?.trim()
+                val synopsis = doc.selectFirst("#novel-description-content")?.text()
                 if (!synopsis.isNullOrEmpty()) {
                     if (isNotEmpty()) append("\n")
                     append(synopsis)

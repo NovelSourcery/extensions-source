@@ -59,7 +59,7 @@ abstract class MtlBooks :
                 thumbnail_url = buildImageUrl(novel.thumbnail)
                 author = novel.users?.name
                 description = novel.description
-                genre = (novel.genres + novel.tags).joinToString(", ")
+                genre = (novel.genres + novel.tags).joinToString()
                 status = when (novel.status.lowercase()) {
                     "ongoing" -> SManga.ONGOING
                     "completed" -> SManga.COMPLETED
@@ -206,7 +206,7 @@ abstract class MtlBooks :
             author = novel.users?.name
             description = novel.description
             // Include both genres and tags
-            genre = (novel.genres + novel.tags).joinToString(", ")
+            genre = (novel.genres + novel.tags).joinToString()
             status = when (novel.status.lowercase()) {
                 "ongoing" -> SManga.ONGOING
                 "completed" -> SManga.COMPLETED

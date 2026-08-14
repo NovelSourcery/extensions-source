@@ -96,7 +96,7 @@ abstract class FreeWebNovel : ReadNovelFull() {
             // Fallback: find first link with title
             element.selectFirst("a[href]")?.let { link ->
                 manga.setSlugUrl(link.attr("abs:href").ifEmpty { link.attr("href") })
-                manga.title = link.attr("title").ifEmpty { link.text().trim() }
+                manga.title = link.attr("title").ifEmpty { link.text() }
                     .substringBefore(" - Free Web Novel")
                     .substringBefore(" - FreeWebNovel")
                     .trim()

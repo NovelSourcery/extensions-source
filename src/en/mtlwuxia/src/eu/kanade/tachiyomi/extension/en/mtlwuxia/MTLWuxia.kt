@@ -432,7 +432,7 @@ abstract class MTLWuxia :
             thumbnail_url = coverImage
             genre = (genres.mapNotNull { it.genre?.name } + tags.mapNotNull { it.tag?.name })
                 .distinct()
-                .joinToString(", ")
+                .joinToString()
             status = when (this@NovelDto.status?.uppercase()) {
                 "ONGOING" -> SManga.ONGOING
                 "COMPLETED" -> SManga.COMPLETED

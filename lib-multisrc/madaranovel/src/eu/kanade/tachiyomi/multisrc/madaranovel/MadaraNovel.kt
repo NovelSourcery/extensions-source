@@ -177,7 +177,7 @@ abstract class MadaraNovel :
                 "div.hover-details, .badge-pos-2 .page-item-detail",
         ).mapNotNull { element ->
             try {
-                val title = element.selectFirst(".post-title")?.text()?.trim()
+                val title = element.selectFirst(".post-title")?.text()
                     ?: element.selectFirst("a")?.attr("title")?.ifEmpty { null }
                     ?: return@mapNotNull null
                 val url = element.selectFirst(".post-title a")?.attr("href")
@@ -230,7 +230,7 @@ abstract class MadaraNovel :
         extractPostId(doc)?.let { cachePostId(mangaUrl, it) }
 
         return SManga.create().apply {
-            title = doc.selectFirst(".post-title h1, #manga-title h1")?.text()?.trim() ?: ""
+            title = doc.selectFirst(".post-title h1, #manga-title h1")?.text() ?: ""
 
             // Get cover from summary image
             val summaryImage = doc.selectFirst(".summary_image img")
@@ -246,14 +246,14 @@ abstract class MadaraNovel :
                 ?: doc.selectFirst("#tab-manga-about")?.formattedDescription()
                 ?: doc.selectFirst(".manga-excerpt")?.formattedDescription()
                 ?: ""
-            author = doc.selectFirst(".manga-authors")?.text()?.trim()
+            author = doc.selectFirst(".manga-authors")?.text()
                 ?: doc.select(".post-content_item, .post-content")
                     .find { it.selectFirst("h5")?.text() == "Author" }
-                    ?.selectFirst(".summary-content")?.text()?.trim()
+                    ?.selectFirst(".summary-content")?.text()
                 ?: ""
             genre = doc.select(".post-content_item, .post-content")
                 .filter { element ->
-                    val h5Text = element.selectFirst("h5")?.text()?.trim()?.lowercase() ?: ""
+                    val h5Text = element.selectFirst("h5")?.text()?.lowercase() ?: ""
                     // Match various genre/tag label variations (including i18n)
                     h5Text.contains("genre") ||
                         h5Text.contains("tag") ||
@@ -262,8 +262,8 @@ abstract class MadaraNovel :
                 }
                 .mapNotNull { it.selectFirst(".summary-content")?.select("a") }
                 .flatten()
-                .map { it.text().trim() }
-                .joinToString(", ")
+                .map { it.text() }
+                .joinToString()
             status = if (doc.select(".post-content_item, .post-content")
                     .find { it.selectFirst("h5")?.text() == "Status" }
                     ?.selectFirst(".summary-content")?.text()?.contains("Ongoing", ignoreCase = true) == true
@@ -274,7 +274,7 @@ abstract class MadaraNovel :
             }
 
             val altTitles = doc.select(".post-content_item, .post-content")
-                .find { element -> element.selectFirst("h5")?.text()?.trim()?.lowercase()?.contains("alt") == true }
+                .find { element -> element.selectFirst("h5")?.text()?.lowercase()?.contains("alt") == true }
                 ?.selectFirst(".summary-content")
                 ?.text()
                 ?.split(",", ";", "|", "\n")
@@ -376,17 +376,17 @@ abstract class MadaraNovel :
         // Primary: look for a post-content_item whose h5 label is "Chapters" (or "Chapter")
         val labeled = doc.select(".post-content_item")
             .find { item ->
-                val h5 = item.selectFirst("h5")?.text()?.trim() ?: return@find false
+                val h5 = item.selectFirst("h5")?.text() ?: return@find false
                 h5.equals("Chapters", ignoreCase = true) || h5.equals("Chapter", ignoreCase = true)
             }
             ?.selectFirst(".summary-content")
-            ?.text()?.trim()?.toIntOrNull()
+            ?.text()?.toIntOrNull()
         if (labeled != null && labeled > 0) return labeled
 
         // Fallback: any summary-content whose trimmed text is a pure integer (works for
         // non-English sites where the label differs)
         return doc.select(".post-content_item .summary-content")
-            .mapNotNull { it.text().trim().toIntOrNull() }
+            .mapNotNull { it.text().toIntOrNull() }
             .firstOrNull { it > 0 } ?: 0
     }
 
@@ -414,7 +414,7 @@ abstract class MadaraNovel :
 
         chapDoc.select(".wp-manga-chapter").forEachIndexed { index, element ->
             try {
-                val rawName = element.selectFirst("a")?.text()?.trim() ?: return@forEachIndexed
+                val rawName = element.selectFirst("a")?.text() ?: return@forEachIndexed
                 val isLocked = element.className().contains("premium-block")
 
                 // The app shows the chapter number separately from the title,
@@ -428,7 +428,7 @@ abstract class MadaraNovel :
 
                 if (isLocked) chapterName = "🔒 $chapterName"
 
-                val releaseDate = element.selectFirst(".chapter-release-date")?.text()?.trim() ?: ""
+                val releaseDate = element.selectFirst(".chapter-release-date")?.text() ?: ""
                 val chapterUrl = element.selectFirst("a")?.attr("href") ?: return@forEachIndexed
 
                 if (chapterUrl != "#") {

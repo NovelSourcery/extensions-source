@@ -113,8 +113,8 @@ abstract class FUCKNOVELPIA :
 
     private fun parseMangaDetails(document: Document): SManga = SManga.create().apply {
         // Title - Try multiple selectors
-        title = document.selectFirst("h1")?.text()?.trim()
-            ?: document.selectFirst("strong.book-title")?.text()?.trim()
+        title = document.selectFirst("h1")?.text()
+            ?: document.selectFirst("strong.book-title")?.text()
             ?: ""
 
         // Cover image
@@ -129,13 +129,13 @@ abstract class FUCKNOVELPIA :
 
         // Description
         description = document.select("section.description-box .description, section.box.description-box .description, div.description")
-            .firstOrNull()?.text()?.trim() ?: ""
+            .firstOrNull()?.text() ?: ""
 
         // Tags/Genres
         genre = document.select("div.tags a, .tags-box a")
-            .mapNotNull { it.text()?.trim() }
+            .mapNotNull { it.text() }
             .filter { it.isNotEmpty() }
-            .joinToString(", ")
+            .joinToString()
 
         // Author
         author = document.selectFirst("ul.info-list li:contains(Author)")?.let {
@@ -165,7 +165,7 @@ abstract class FUCKNOVELPIA :
                 ?: chapters.size + 1
 
             // Get chapter title/name
-            val chapterName = link.text()?.trim() ?: "Chapter $chapterNum"
+            val chapterName = link.text() ?: "Chapter $chapterNum"
 
             // Get chapter URL
             val chapterUrl = link.attr("href").let { href ->
@@ -270,7 +270,7 @@ abstract class FUCKNOVELPIA :
             url = mangaPath.slug(relativeUrl)
 
             // Title from strong.book-title
-            title = card.selectFirst("strong.book-title")?.text()?.trim() ?: ""
+            title = card.selectFirst("strong.book-title")?.text() ?: ""
 
             // Cover handling
             val coverDiv = card.selectFirst("div.cover")
@@ -285,9 +285,9 @@ abstract class FUCKNOVELPIA :
 
             // Tags
             genre = card.select("div.tags a")
-                .mapNotNull { it.text()?.trim() }
+                .mapNotNull { it.text() }
                 .filter { it.isNotEmpty() }
-                .joinToString(", ")
+                .joinToString()
 
             // Check if it has image chapters
             val hasImageChapters = card.select("span.book-flag.image-chapters").isNotEmpty()

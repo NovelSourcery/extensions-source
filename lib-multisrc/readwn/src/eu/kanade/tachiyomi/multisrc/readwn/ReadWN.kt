@@ -86,7 +86,7 @@ abstract class ReadWN :
                 setSlugUrl(href)
             }
         }
-        title = element.selectFirst("h4")?.text()?.trim() ?: ""
+        title = element.selectFirst("h4")?.text() ?: ""
         thumbnail_url = element.selectFirst(".novel-cover img")?.let {
             val src = it.attr("data-src").ifEmpty { it.attr("src") }
             if (src.startsWith("/")) "$baseUrl$src" else src
@@ -210,20 +210,20 @@ abstract class ReadWN :
     }
 
     protected open fun mangaDetailsParse(document: Document): SManga = SManga.create().apply {
-        title = document.selectFirst("h1.novel-title")?.text()?.trim() ?: ""
-        author = document.selectFirst("span[itemprop=author]")?.text()?.trim()
+        title = document.selectFirst("h1.novel-title")?.text() ?: ""
+        author = document.selectFirst("span[itemprop=author]")?.text()
         thumbnail_url = document.selectFirst("figure.cover img")?.let {
             val src = it.attr("data-src").ifEmpty { it.attr("src") }
             if (src.startsWith("/")) "$baseUrl$src" else src
         }
         description = document.selectFirst(".summary")?.text()
             ?.replace("Summary", "")?.trim()
-        genre = document.select("div.categories ul li").joinToString { it.text().trim() }
+        genre = document.select("div.categories ul li").joinToString { it.text() }
 
         // Get status from header stats
         document.select("div.header-stats span").forEach { span ->
             if (span.selectFirst("small")?.text() == "Status") {
-                status = when (span.selectFirst("strong")?.text()?.trim()?.lowercase()) {
+                status = when (span.selectFirst("strong")?.text()?.lowercase()) {
                     "ongoing" -> SManga.ONGOING
                     "completed" -> SManga.COMPLETED
                     else -> SManga.UNKNOWN
@@ -235,18 +235,18 @@ abstract class ReadWN :
     protected open fun parseChapterList(document: Document, novelPath: String): List<SChapter> {
         // Get the latest chapter number from header stats
         val latestChapterNo = document.selectFirst(".header-stats span strong")
-            ?.text()?.trim()?.toIntOrNull() ?: 0
+            ?.text()?.toIntOrNull() ?: 0
 
         val chapters = document.select(".chapter-list li").mapIndexed { index, element ->
             SChapter.create().apply {
                 element.selectFirst("a")?.let {
                     setUrlWithoutDomain(it.attr("abs:href"))
                 }
-                name = element.selectFirst("a .chapter-title")?.text()?.trim() ?: "Chapter ${index + 1}"
+                name = element.selectFirst("a .chapter-title")?.text() ?: "Chapter ${index + 1}"
                 chapter_number = (index + 1).toFloat()
 
                 // Parse release time
-                val releaseTime = element.selectFirst("a .chapter-update")?.text()?.trim()
+                val releaseTime = element.selectFirst("a .chapter-update")?.text()
                 date_upload = releaseTime?.let { parseRelativeDate(it) } ?: 0L
             }
         }.toMutableList()

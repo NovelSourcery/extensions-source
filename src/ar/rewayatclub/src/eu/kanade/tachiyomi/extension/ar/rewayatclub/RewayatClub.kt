@@ -189,8 +189,8 @@ abstract class RewayatClub :
         if (content.isEmpty()) return ""
         val html = content.flatten().joinToString("\n")
         val doc = org.jsoup.Jsoup.parseBodyFragment(html)
-        val paragraphs = doc.select("p").mapNotNull { it.text().trim().ifEmpty { null } }
-        return if (paragraphs.isNotEmpty()) paragraphs.joinToString("\n\n") else doc.text().trim()
+        val paragraphs = doc.select("p").mapNotNull { it.text().ifEmpty { null } }
+        return if (paragraphs.isNotEmpty()) paragraphs.joinToString("\n\n") else doc.text()
     }
 
     private suspend fun parseChapterWebPage(page: Page): String {
@@ -209,11 +209,11 @@ abstract class RewayatClub :
             contentEl.select(
                 "script, style, nav, footer, header, .ads, .navigation, .chapter-nav, .prev-next, .share, .comments, .breadcrumb, .v-data-table, table",
             ).remove()
-            val paragraphs = contentEl.select("p").mapNotNull { it.text().trim().ifEmpty { null } }
+            val paragraphs = contentEl.select("p").mapNotNull { it.text().ifEmpty { null } }
             if (paragraphs.isNotEmpty()) {
                 return paragraphs.joinToString("\n\n")
             }
-            return contentEl.text().trim()
+            return contentEl.text()
         }
 
         return ""

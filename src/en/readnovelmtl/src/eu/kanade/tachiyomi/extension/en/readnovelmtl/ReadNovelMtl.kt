@@ -160,7 +160,7 @@ abstract class ReadNovelMtl :
                     thumbnail_url = schema.image?.firstOrNull()
                     author = schema.author
                     description = schema.description
-                    genre = schema.genre?.joinToString(", ")
+                    genre = schema.genre?.joinToString()
                     status = SManga.UNKNOWN
                 }
             } catch (_: Exception) {}
@@ -179,7 +179,7 @@ abstract class ReadNovelMtl :
 
             description = document.selectFirst(".mb-4[style*=font-size]")?.text()
 
-            genre = document.select(".d-flex.flex-wrap.gap-2 a.badge").map { it.text() }.joinToString(", ")
+            genre = document.select(".d-flex.flex-wrap.gap-2 a.badge").map { it.text() }.joinToString()
 
             val statusText = document.select(".d-flex.align-items-center.gap-2").find { it.selectFirst("i.fa-info-circle") != null }?.selectFirst("span")?.text()?.lowercase() ?: ""
 
@@ -204,9 +204,9 @@ abstract class ReadNovelMtl :
                 chapters.add(
                     SChapter.create().apply {
                         url = extractUrlPath(href)
-                        name = link.text().trim()
+                        name = link.text()
 
-                        val dateText = row.selectFirst("span.text-muted")?.text()?.trim() ?: ""
+                        val dateText = row.selectFirst("span.text-muted")?.text() ?: ""
                         date_upload = parseDateString(dateText)
                     },
                 )
@@ -246,7 +246,7 @@ abstract class ReadNovelMtl :
             section.children().forEach { element ->
                 when (element.tagName()) {
                     "p" -> {
-                        val text = element.text()?.trim()
+                        val text = element.text()
                         if (!text.isNullOrEmpty()) {
                             content.append("<p>$text</p>\n")
                         }
@@ -333,7 +333,7 @@ abstract class ReadNovelMtl :
                     else -> SManga.UNKNOWN
                 }
 
-                genre = item.select("a.badge").map { it.text() }.joinToString(", ")
+                genre = item.select("a.badge").map { it.text() }.joinToString()
             }
         }.distinctBy { it.url }
 

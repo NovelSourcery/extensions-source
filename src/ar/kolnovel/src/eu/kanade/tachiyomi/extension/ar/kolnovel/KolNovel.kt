@@ -49,7 +49,7 @@ abstract class KolNovel : LightNovelWPNovel() {
 
         // Remove paragraphs that are too short (likely spam/ads)
         content.select("p").forEach { p ->
-            val text = p.text().trim()
+            val text = p.text()
 
             // Skip empty paragraphs
             if (text.isEmpty()) {
@@ -96,7 +96,7 @@ abstract class KolNovel : LightNovelWPNovel() {
 
         // Remove any remaining non-content divs
         content.select("div").forEach { div ->
-            val text = div.text().trim()
+            val text = div.text()
             if (text.isEmpty() || text.length < 20) {
                 // Check if this div has no meaningful content
                 val hasImages = div.select("img").isNotEmpty()

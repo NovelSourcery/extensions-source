@@ -212,7 +212,7 @@ abstract class BrightNovels :
 
         val genres = series["genres"].asArray()
             ?.mapNotNull { it.asObject()?.string("name") }
-            ?.joinToString(", ")
+            ?.joinToString()
             .orEmpty()
 
         val coverObj = series["cover"].asObject()

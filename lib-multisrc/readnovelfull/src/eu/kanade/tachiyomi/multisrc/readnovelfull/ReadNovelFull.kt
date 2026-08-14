@@ -171,7 +171,7 @@ abstract class ReadNovelFull :
 
         if (link != null) {
             // Prefer title attribute, then text content
-            title = link.attr("title").ifEmpty { link.text().trim() }.ifBlank { "Unknown Title" }
+            title = link.attr("title").ifEmpty { link.text() }.ifBlank { "Unknown Title" }
             // Set URL regardless of title - even "Unknown Title" entries need URLs to work
             val href = link.attr("abs:href")
             if (href.isNotBlank()) {
@@ -181,7 +181,7 @@ abstract class ReadNovelFull :
             // Last resort: look for any link with href in the element
             val anyLink = element.selectFirst("a[href]")
             if (anyLink != null) {
-                val linkText = anyLink.attr("title").ifEmpty { anyLink.text().trim() }
+                val linkText = anyLink.attr("title").ifEmpty { anyLink.text() }
                 if (linkText.isNotBlank()) {
                     title = linkText
                     setSlugUrl(anyLink.attr("abs:href"))
@@ -230,7 +230,7 @@ abstract class ReadNovelFull :
                 url = ""
                 val link = element.selectFirst("a.tit")
                 if (link != null) {
-                    title = link.attr("title").ifEmpty { link.text().trim() }.ifBlank { "Unknown Title" }
+                    title = link.attr("title").ifEmpty { link.text() }.ifBlank { "Unknown Title" }
                     setSlugUrl(link.attr("abs:href"))
                 }
                 thumbnail_url = element.selectFirst("div.pic img")?.let { img ->
@@ -410,12 +410,12 @@ abstract class ReadNovelFull :
             val text = element.text()
             when {
                 text.contains("Author", ignoreCase = true) -> {
-                    author = element.select("a").joinToString { it.text().trim() }
+                    author = element.select("a").joinToString { it.text() }
                         .ifEmpty { text.substringAfter(":").trim() }
                 }
 
                 text.contains("Genre", ignoreCase = true) || element.select("span.glyphicon-th-list").isNotEmpty() -> {
-                    val gs = element.select("a").map { it.text().trim() }.filter { it.isNotBlank() }
+                    val gs = element.select("a").map { it.text() }.filter { it.isNotBlank() }
                     if (gs.isNotEmpty()) {
                         genresList.addAll(gs)
                     } else {
@@ -426,7 +426,7 @@ abstract class ReadNovelFull :
                     }
                     // Also check for genres in child divs with class 'right' or 's2'/'s3' (LibRead/FreeWebNovel)
                     element.select("div.right a, span.s2 a, span.s3 a").forEach { link ->
-                        val linkText = link.text().trim()
+                        val linkText = link.text()
                         if (linkText.isNotBlank() && !genresList.contains(linkText)) {
                             genresList.add(linkText)
                         }
@@ -519,14 +519,14 @@ abstract class ReadNovelFull :
         var descCandidate = document.selectFirst("div.tab-content div#tab-description div.desc-text, div#tab-description div.novel-description-block div.desc-text")
             ?.let { element ->
                 // Extract all paragraphs or full text, preserving line breaks
-                val paragraphs = element.select("p").map { it.text().trim() }.filter { it.isNotBlank() }
+                val paragraphs = element.select("p").map { it.text() }.filter { it.isNotBlank() }
                 if (paragraphs.isNotEmpty()) {
                     paragraphs.joinToString("\n\n")
                 } else {
                     // Preserve br tags as line breaks
                     element.html()
                         .replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
-                        .let { html -> org.jsoup.Jsoup.parse(html).text().trim() }
+                        .let { html -> org.jsoup.Jsoup.parse(html).text() }
                 }
             }
             ?.takeIf { it.isNotBlank() }
@@ -535,14 +535,14 @@ abstract class ReadNovelFull :
         if (descCandidate.isBlank()) {
             descCandidate = document.selectFirst("div.col-xs-12.col-sm-8.col-md-8.desc div.desc-text")
                 ?.let { element ->
-                    val paragraphs = element.select("p").map { it.text().trim() }.filter { it.isNotBlank() }
+                    val paragraphs = element.select("p").map { it.text() }.filter { it.isNotBlank() }
                     if (paragraphs.isNotEmpty()) {
                         paragraphs.joinToString("\n\n")
                     } else {
                         // Preserve br tags as line breaks
                         element.html()
                             .replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
-                            .let { html -> org.jsoup.Jsoup.parse(html).text().trim() }
+                            .let { html -> org.jsoup.Jsoup.parse(html).text() }
                     }
                 }
                 ?.takeIf { it.isNotBlank() }
@@ -557,11 +557,11 @@ abstract class ReadNovelFull :
                     "div.summary div.content, div#editdescription, div.desc-text-full, " +
                     "div.novel-detail-body div.summary, div.desc_panel",
             )?.let { element ->
-                val paragraphs = element.select("p").map { it.text().trim() }.filter { it.isNotBlank() }
+                val paragraphs = element.select("p").map { it.text() }.filter { it.isNotBlank() }
                 if (paragraphs.isNotEmpty()) {
                     paragraphs.joinToString("\n\n")
                 } else {
-                    element.text().trim()
+                    element.text()
                 }
             }
                 ?.takeIf { it.isNotBlank() }
@@ -598,13 +598,13 @@ abstract class ReadNovelFull :
 
         // Extract tags from tag container and add to genres list
         val tags = document.select("div.tag-container a, div.tags a, div.novel-tags a, div.tag a")
-            .mapNotNull { it.text().trim().takeIf { t -> t.isNotBlank() } }
+            .mapNotNull { it.text().takeIf { t -> t.isNotBlank() } }
         if (tags.isNotEmpty()) {
             genresList.addAll(tags)
         }
 
         // Build final genre string from collected genres and tags, deduplicated
-        val finalGenres = genresList.map { it.trim() }.filter { it.isNotBlank() }.distinct().joinToString(", ")
+        val finalGenres = genresList.map { it.trim() }.filter { it.isNotBlank() }.distinct().joinToString()
         if (finalGenres.isNotBlank()) {
             genre = finalGenres
         }
@@ -652,7 +652,7 @@ abstract class ReadNovelFull :
         if (chapterUrl.isBlank()) return@mapNotNull null
         SChapter.create().apply {
             setUrlWithoutDomain(chapterUrl)
-            name = element.attr("title").ifEmpty { element.text().trim() }
+            name = element.attr("title").ifEmpty { element.text() }
         }
     }
 
@@ -761,9 +761,9 @@ abstract class ReadNovelFull :
                         SChapter.create().apply {
                             setUrlWithoutDomain(chapterUrl)
                             name = if (element.tagName() == "option") {
-                                element.text().trim().ifEmpty { "Chapter ${index + 1}" }
+                                element.text().ifEmpty { "Chapter ${index + 1}" }
                             } else {
-                                element.attr("title").ifEmpty { element.text().trim() }
+                                element.attr("title").ifEmpty { element.text() }
                             }
                             chapter_number = (index + 1).toFloat()
                         }
@@ -786,7 +786,7 @@ abstract class ReadNovelFull :
 
             SChapter.create().apply {
                 setUrlWithoutDomain(chapterUrl)
-                name = element.attr("title").ifEmpty { element.text().trim() }
+                name = element.attr("title").ifEmpty { element.text() }
                 chapter_number = (index + 1).toFloat()
             }
         }.reversed()

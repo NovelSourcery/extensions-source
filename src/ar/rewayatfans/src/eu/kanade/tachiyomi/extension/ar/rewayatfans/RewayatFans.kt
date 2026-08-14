@@ -51,7 +51,7 @@ abstract class RewayatFans :
                 ?: return@mapNotNull null
             val imgElement = figure.selectFirst("img")
             val href = captionLink.attr("href")
-            val title = captionLink.text().trim()
+            val title = captionLink.text()
             val relativeUrl = href.toRelativeUrl()
             if (relativeUrl.isNotEmpty() && title.isNotEmpty()) {
                 SManga.create().apply {
@@ -110,7 +110,7 @@ abstract class RewayatFans :
                 ?: return@mapNotNull null
             val imgElement = item.selectFirst("figure.post-thumbnail img, figure img")
             val href = titleLink.attr("href")
-            val title = titleLink.text().trim()
+            val title = titleLink.text()
             val relativeUrl = href.toRelativeUrl()
             if (relativeUrl.isNotEmpty() && title.isNotEmpty()) {
                 SManga.create().apply {
@@ -157,9 +157,9 @@ abstract class RewayatFans :
 
     private fun parseMangaDetails(document: Document): SManga = SManga.create().apply {
         title = document.selectFirst("h1.entry-title")
-            ?.text()?.trim()
+            ?.text()
             ?: document.selectFirst("header.entry-header h2.entry-title")
-                ?.text()?.trim()
+                ?.text()
             ?: document.selectFirst("meta[property=og:title]")
                 ?.attr("content")
                 ?.substringBefore(" – روايات فانز")
@@ -168,7 +168,7 @@ abstract class RewayatFans :
         thumbnail_url = document.select("meta[property=og:image]").attr("content")
         description = document.select("meta[property=og:description]").attr("content").trim()
         if (description.isNullOrBlank()) {
-            description = document.select(".entry-content p").firstOrNull()?.text()?.trim()
+            description = document.select(".entry-content p").firstOrNull()?.text()
         }
         status = SManga.UNKNOWN
         update_strategy = UpdateStrategy.ALWAYS_UPDATE
@@ -179,7 +179,7 @@ abstract class RewayatFans :
 
         document.select(".entry-content ul.wp-block-list li a[href], .entry-content p a[href]").forEach { link ->
             val href = link.attr("href")
-            val text = link.text().trim()
+            val text = link.text()
             val relativeUrl = href.toRelativeUrl()
 
             if (relativeUrl.isNotEmpty() && text.matches(Regex("^\\d+.*")) && !relativeUrl.contains("/page/")) {
@@ -210,7 +210,7 @@ abstract class RewayatFans :
                 "script, style, .sharedaddy, .jetpack-related-posts",
         ).remove()
         val paragraphs = content.select("p").filter { p ->
-            val text = p.text().trim()
+            val text = p.text()
             text.isNotEmpty() && !text.startsWith("السابق") && !text.startsWith("التالي")
         }
         return paragraphs.joinToString("<br><br>") { it.html() }

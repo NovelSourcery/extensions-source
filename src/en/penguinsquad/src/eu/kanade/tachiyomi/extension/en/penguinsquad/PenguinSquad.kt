@@ -128,7 +128,7 @@ abstract class PenguinSquad :
         genre = doc.select("span[data-slot=badge][data-variant=outline]")
             .eachText()
             .distinct()
-            .joinToString(", ")
+            .joinToString()
         author = doc.selectFirst("span:containsOwn(Translated by)")
             ?.text()
             ?.removePrefix("Translated by")

@@ -57,7 +57,7 @@ abstract class Novelight :
         val novels = doc.select("a.item").mapNotNull { el ->
             val href = el.attr("href").ifBlank { return@mapNotNull null }
             SManga.create().apply {
-                title = el.selectFirst("div.title")?.text()?.trim().orEmpty()
+                title = el.selectFirst("div.title")?.text().orEmpty()
                 url = mangaPath.slug("/" + href.trimStart('/'))
                 thumbnail_url = el.selectFirst("img")?.attr("abs:src")
             }
@@ -76,20 +76,20 @@ abstract class Novelight :
     }
 
     private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
-        title = doc.selectFirst("h1")?.text()?.trim().orEmpty()
+        title = doc.selectFirst("h1")?.text().orEmpty()
         thumbnail_url = doc.selectFirst(".poster > img")?.attr("abs:src")
         description = doc.selectFirst("section.text-info.section > p, section.text-info.section")?.formattedText()
 
         var statusText = ""
         var translation = ""
         doc.select("div.mini-info > .item").forEach { item ->
-            val type = item.selectFirst(".sub-header")?.text()?.trim()
-            val value = item.selectFirst("div.info")?.text()?.trim().orEmpty()
+            val type = item.selectFirst(".sub-header")?.text()
+            val value = item.selectFirst("div.info")?.text().orEmpty()
             when (type) {
                 "Status" -> statusText = value.lowercase()
                 "Translation" -> translation = value.lowercase()
                 "Author" -> author = value
-                "Genres" -> genre = item.select("div.info > a").joinToString(", ") { it.text().trim() }
+                "Genres" -> genre = item.select("div.info > a").joinToString { it.text() }
             }
         }
         status = when {
@@ -130,7 +130,7 @@ abstract class Novelight :
         // "Loaded Chapters" count; skip the full fetch when nothing changed.
         val siteTotal = detailDoc.select("div.mini-info .item, .item")
             .firstOrNull { it.selectFirst(".sub-header")?.text()?.contains("Loaded Chapters", true) == true }
-            ?.selectFirst(".info")?.text()?.trim()?.toIntOrNull() ?: 0
+            ?.selectFirst(".info")?.text()?.toIntOrNull() ?: 0
         if (chapters.isNotEmpty() && siteTotal > 0 && chapters.size == siteTotal) {
             return SMangaUpdate(updatedManga, chapters)
         }
@@ -151,13 +151,13 @@ abstract class Novelight :
             val payload = client.newCall(req).execute().body.string().parseAs<HtmlPayload>()
             return Jsoup.parse("<html>${payload.html}</html>", baseUrl).select("a").mapNotNull { a ->
                 val titleEl = a.selectFirst(".title")
-                val fullTitle = titleEl?.text()?.trim().orEmpty()
+                val fullTitle = titleEl?.text().orEmpty()
                 // The chapter number is embedded in the title, e.g. "130 chapter - Bronze Blood".
                 val volume = Regex("""(\d+)\s*vol\.""", RegexOption.IGNORE_CASE)
                     .find(fullTitle)?.groupValues?.get(1)?.toIntOrNull()
                 val number = Regex("""(\d+)\s*chapter""", RegexOption.IGNORE_CASE)
                     .find(fullTitle)?.groupValues?.get(1)?.toIntOrNull() ?: -1
-                val title = titleEl?.selectFirst("span")?.text()?.trim()
+                val title = titleEl?.selectFirst("span")?.text()
                     ?.takeIf { it.isNotBlank() }
                     ?: fullTitle
                         .replace(chapterNumberPattern, "")
@@ -180,7 +180,7 @@ abstract class Novelight :
                     url = "/" + href.trimStart('/'),
                     chapter = number,
                     volume = volume,
-                    date = a.selectFirst(".date")?.text()?.trim(),
+                    date = a.selectFirst(".date")?.text(),
                 )
             }
         }

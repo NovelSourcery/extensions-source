@@ -52,7 +52,7 @@ abstract class RewayahFans :
                 ?: return@mapNotNull null
             val imgElement = figure.selectFirst("img")
             val href = captionLink.attr("href")
-            val title = captionLink.text().trim()
+            val title = captionLink.text()
             val relativeUrl = href.toRelativeUrl()
             if (relativeUrl.isNotEmpty() && title.isNotEmpty()) {
                 SManga.create().apply {
@@ -110,7 +110,7 @@ abstract class RewayahFans :
                 ?: return@mapNotNull null
             val imgElement = item.selectFirst("figure.wp-block-post-featured-image img")
             val href = titleLink.attr("href")
-            val title = titleLink.text().trim()
+            val title = titleLink.text()
             val relativeUrl = href.toRelativeUrl()
             if (relativeUrl.isNotEmpty() && title.isNotEmpty()) {
                 SManga.create().apply {
@@ -157,7 +157,7 @@ abstract class RewayahFans :
 
     private fun parseMangaDetails(document: Document): SManga = SManga.create().apply {
         title = document.selectFirst("h1.wp-block-post-title")
-            ?.text()?.trim()
+            ?.text()
             ?: run {
                 val pageTitle = document.title()
                     .substringBefore(" - الصفحة الرئيسية")
@@ -176,14 +176,14 @@ abstract class RewayahFans :
                         ?.substringBefore(" – روايه فانز")
                         ?.trim()
                         ?.takeIf { it.isNotEmpty() }
-                        ?: document.selectFirst("h1")?.text()?.trim()
+                        ?: document.selectFirst("h1")?.text()
                         ?: ""
                 }
             }
         thumbnail_url = document.select("meta[property=og:image]").attr("content")
         description = document.select("meta[property=og:description]").attr("content").trim()
         if (description.isNullOrBlank()) {
-            description = document.select(".entry-content p").firstOrNull()?.text()?.trim()
+            description = document.select(".entry-content p").firstOrNull()?.text()
         }
         status = SManga.UNKNOWN
         update_strategy = UpdateStrategy.ALWAYS_UPDATE
@@ -192,7 +192,7 @@ abstract class RewayahFans :
     private fun parseChapterList(document: Document): List<SChapter> {
         val chapters = document.select("p.has-medium-font-size a[href]").mapNotNull { link ->
             val href = link.attr("href")
-            val text = link.text().trim()
+            val text = link.text()
             val relativeUrl = href.toRelativeUrl()
             if (relativeUrl.isNotEmpty() && text.isNotEmpty() && !relativeUrl.contains("/page/")) {
                 SChapter.create().apply {
@@ -218,7 +218,7 @@ abstract class RewayahFans :
                 "script, style, .sharedaddy, .jetpack-related-posts",
         ).remove()
         val paragraphs = content.select("p").filter { p ->
-            val text = p.text().trim()
+            val text = p.text()
             text.isNotEmpty() && !text.startsWith("السابق") && !text.startsWith("التالي")
         }
         return paragraphs.joinToString("<br><br>") { it.html() }

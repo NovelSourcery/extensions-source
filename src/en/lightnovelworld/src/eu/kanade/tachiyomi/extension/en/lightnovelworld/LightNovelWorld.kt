@@ -150,7 +150,7 @@ abstract class LightNovelWorld :
             val link = card.selectFirst("a.card-cover-link")
                 ?: card.selectFirst(".card-footer a[href]")
                 ?: return@mapNotNull null
-            val title = card.selectFirst(".card-title")?.text()?.trim()
+            val title = card.selectFirst(".card-title")?.text()
                 ?: card.selectFirst(".card-cover img")?.attr("alt")?.takeIf { it.isNotBlank() }
                 ?: return@mapNotNull null
 
@@ -176,7 +176,7 @@ abstract class LightNovelWorld :
         val doc = Jsoup.parse(response.body.string())
 
         return SManga.create().apply {
-            title = doc.selectFirst(".novel-title")?.text()?.trim()
+            title = doc.selectFirst(".novel-title")?.text()
                 ?: doc.selectFirst("img.novel-cover")?.attr("alt")?.takeIf { it.isNotBlank() }
                 ?: "No Title Found"
 
@@ -186,9 +186,9 @@ abstract class LightNovelWorld :
                 ?.removePrefix("Author:")?.trim()
 
             // Genres + tags combined
-            val genres = doc.select(".novel-genres .genre-tag").map { it.text().trim() }
-            val tags = doc.select(".tags-container .tag-item").map { it.text().trim() }
-            genre = (genres + tags).distinctBy { it.lowercase() }.joinToString(", ")
+            val genres = doc.select(".novel-genres .genre-tag").map { it.text() }
+            val tags = doc.select(".tags-container .tag-item").map { it.text() }
+            genre = (genres + tags).distinctBy { it.lowercase() }.joinToString()
 
             val statusText = doc.selectFirst(".status-badge")?.text()?.lowercase()
             status = when {
@@ -205,10 +205,10 @@ abstract class LightNovelWorld :
 
                 // Append stats info
                 val stats = mutableListOf<String>()
-                doc.selectFirst(".rank-badge")?.text()?.trim()?.let { stats.add(it) }
+                doc.selectFirst(".rank-badge")?.text()?.let { stats.add(it) }
                 doc.select(".novel-stats-grid .stat-box").forEach { box ->
-                    val value = box.selectFirst(".stat-value")?.text()?.trim()
-                    val label = box.selectFirst(".stat-label")?.text()?.trim()
+                    val value = box.selectFirst(".stat-value")?.text()
+                    val label = box.selectFirst(".stat-label")?.text()
                     if (value != null && label != null) {
                         stats.add("$label: $value")
                     }
@@ -304,9 +304,9 @@ abstract class LightNovelWorld :
 
             SChapter.create().apply {
                 url = chapterUrl.removePrefix(baseUrl)
-                name = card.selectFirst(".chapter-title")?.text()?.trim()
-                    ?: "Chapter ${card.selectFirst(".chapter-number")?.text()?.trim().orEmpty()}"
-                chapter_number = card.selectFirst(".chapter-number")?.text()?.trim()
+                name = card.selectFirst(".chapter-title")?.text()
+                    ?: "Chapter ${card.selectFirst(".chapter-number")?.text().orEmpty()}"
+                chapter_number = card.selectFirst(".chapter-number")?.text()
                     ?.toFloatOrNull() ?: -1f
                 date_upload = parseRelativeDate(card.selectFirst(".chapter-time")?.text().orEmpty())
             }

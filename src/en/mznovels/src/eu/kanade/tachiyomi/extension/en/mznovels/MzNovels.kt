@@ -146,7 +146,7 @@ abstract class MzNovels :
 
         val novels = doc.select("ul.search-results-list > li.search-result-item:not(.ad-result-item)").mapNotNull { element ->
             val titleElement = element.selectFirst("h2.search-result-title") ?: return@mapNotNull null
-            val title = titleElement.text().trim()
+            val title = titleElement.text()
             val linkElement = element.selectFirst("a.search-result-title-link") ?: return@mapNotNull null
             val novelUrl = linkElement.attr("href")
 
@@ -192,7 +192,7 @@ abstract class MzNovels :
         checkCaptcha(doc)
 
         return SManga.create().apply {
-            title = doc.selectFirst("h1.novel-title")?.text()?.trim() ?: "Untitled"
+            title = doc.selectFirst("h1.novel-title")?.text() ?: "Untitled"
 
             thumbnail_url = doc.selectFirst("img#novel-cover-image")?.attr("src")?.let { src ->
                 when {
@@ -212,11 +212,11 @@ abstract class MzNovels :
             }
 
             // Author
-            var authorText = doc.selectFirst("p.novel-author > a")?.text()?.trim() ?: "Unknown"
+            var authorText = doc.selectFirst("p.novel-author > a")?.text() ?: "Unknown"
             if (category == "translated") {
                 val origAuthorElement = doc.selectFirst("p:contains(Original Author)")
                 if (origAuthorElement != null) {
-                    val origAuthor = origAuthorElement.nextElementSibling()?.text()?.trim() ?: "Unknown"
+                    val origAuthor = origAuthorElement.nextElementSibling()?.text() ?: "Unknown"
                     val translator = authorText
                     authorText = "$origAuthor (Original) / $translator (Translator)"
                 }
@@ -227,9 +227,9 @@ abstract class MzNovels :
             val tags = mutableListOf<String>()
             if (category != null) tags.add(category.replaceFirstChar { it.uppercase() })
 
-            doc.select("div.genres-container > a.genre").forEach { tags.add(it.text().trim()) }
-            doc.select("div.tags-container > a.tag").forEach { tags.add(it.text().trim()) }
-            genre = tags.joinToString(", ")
+            doc.select("div.genres-container > a.genre").forEach { tags.add(it.text()) }
+            doc.select("div.tags-container > a.tag").forEach { tags.add(it.text()) }
+            genre = tags.joinToString()
 
             // Status
             val statusIndicator = doc.selectFirst("span.status-indicator")
@@ -273,7 +273,7 @@ abstract class MzNovels :
 
             currentDoc.select("ul.chapter-list > li.chapter-item").forEach { element ->
                 val chapterLink = element.selectFirst("a.chapter-link") ?: return@forEach
-                val chapterTitle = chapterLink.text().trim()
+                val chapterTitle = chapterLink.text()
                 val chapterUrl = chapterLink.attr("href")
 
                 chapters.add(

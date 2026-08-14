@@ -96,7 +96,7 @@ abstract class Riwyat : MadaraNovel() {
             try {
                 val titleEl = el.selectFirst(".post-title h3 a, .post-title h5 a, .post-title a")
                     ?: return@mapNotNull null
-                val title = titleEl.text().trim()
+                val title = titleEl.text()
                 val url = titleEl.attr("href")
                 if (title.isEmpty() || url.isEmpty()) return@mapNotNull null
                 val thumbnail = el.selectFirst("img")?.let { img ->
@@ -124,15 +124,15 @@ abstract class Riwyat : MadaraNovel() {
         val arabicChapterLabels = listOf("الفصول", "عدد الفصول", "الفصل", "chapters", "chapter")
         val labeled = doc.select(".post-content_item")
             .find { item ->
-                val h5 = item.selectFirst("h5")?.text()?.trim()?.lowercase() ?: return@find false
+                val h5 = item.selectFirst("h5")?.text()?.lowercase() ?: return@find false
                 arabicChapterLabels.any { h5.contains(it, ignoreCase = true) }
             }
             ?.selectFirst(".summary-content")
-            ?.text()?.trim()?.toIntOrNull()
+            ?.text()?.toIntOrNull()
         if (labeled != null && labeled > 0) return labeled
 
         return doc.select(".post-content_item .summary-content")
-            .mapNotNull { it.text().trim().toIntOrNull() }
+            .mapNotNull { it.text().toIntOrNull() }
             .firstOrNull { it > 0 } ?: 0
     }
 
@@ -189,7 +189,7 @@ abstract class Riwyat : MadaraNovel() {
         }
 
         contentElement.select("div").forEach { div ->
-            val text = div.text().trim()
+            val text = div.text()
             val hasSpam = (
                 text.contains("نص تمويهي", ignoreCase = true) ||
                     text.contains("فضاء الروايات", ignoreCase = true)

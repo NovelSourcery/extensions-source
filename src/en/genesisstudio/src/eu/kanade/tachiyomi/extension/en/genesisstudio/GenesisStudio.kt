@@ -175,7 +175,7 @@ abstract class GenesisStudio :
             author = data["author"]?.jsonPrimitive?.contentOrNull
             genre = data["genres"]?.jsonArray
                 ?.mapNotNull { it.jsonObject["genres_id"]?.jsonObject?.get("label")?.jsonPrimitive?.contentOrNull }
-                ?.joinToString(", ")
+                ?.joinToString()
             status = when (data["serialization"]?.jsonPrimitive?.contentOrNull?.lowercase()) {
                 "ongoing" -> SManga.ONGOING
                 "hiatus" -> SManga.ON_HIATUS

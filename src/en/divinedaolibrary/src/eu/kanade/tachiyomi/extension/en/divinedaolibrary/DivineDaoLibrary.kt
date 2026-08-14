@@ -27,7 +27,7 @@ abstract class DivineDaoLibrary : Fictioneer() {
             val card = link.parents().firstOrNull { it.selectFirst("img.wp-post-image") != null }
             SManga.create().apply {
                 setSlugUrl(href)
-                title = link.text().trim()
+                title = link.text()
                 thumbnail_url = card?.selectFirst("img.wp-post-image")?.absUrl("src")
             }
         }.distinctBy { it.url }
@@ -36,16 +36,16 @@ abstract class DivineDaoLibrary : Fictioneer() {
     }
 
     override fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
-        title = doc.selectFirst("h1.story__identity-title")?.text()?.trim() ?: "Untitled"
-        author = doc.selectFirst("div.story__identity-meta a.author")?.text()?.trim()
+        title = doc.selectFirst("h1.story__identity-title")?.text() ?: "Untitled"
+        author = doc.selectFirst("div.story__identity-meta a.author")?.text()
             ?: doc.selectFirst("div.story__identity-meta")?.text()
                 ?.split("|")?.firstOrNull()?.replace("Author:", "")?.replace("by ", "")?.trim()
         thumbnail_url = doc.selectFirst("figure.story__thumbnail > a")?.attr("href")
             ?: doc.selectFirst("img.story__thumbnail-image")?.absUrl("src")
         genre = doc.select("div.tag-group > a, section.tag-group > a")
-            .joinToString { it.text().trim() }
+            .joinToString { it.text() }
         description = doc.selectFirst("section.story__summary")?.formattedText()
-        status = when (doc.selectFirst("span.story__status")?.text()?.trim()?.lowercase()) {
+        status = when (doc.selectFirst("span.story__status")?.text()?.lowercase()) {
             "ongoing" -> SManga.ONGOING
             "completed" -> SManga.COMPLETED
             "cancelled" -> SManga.CANCELLED
@@ -53,7 +53,7 @@ abstract class DivineDaoLibrary : Fictioneer() {
             else -> SManga.UNKNOWN
         }
 
-        val altTitles = doc.select("*").firstOrNull { it.ownText().trim().equals("Other Names", true) }
+        val altTitles = doc.select("*").firstOrNull { it.ownText().equals("Other Names", true) }
             ?.nextElementSibling()?.text()
             ?.split(",")
             ?.map { it.trim() }
@@ -70,7 +70,7 @@ abstract class DivineDaoLibrary : Fictioneer() {
         fun addItem(li: Element, volNum: String?) {
             if (!li.className().contains("_publish") || li.isLocked()) return
             val a = li.selectFirst("a") ?: return
-            val title = a.text().trim().stripChapterNumberPrefix()
+            val title = a.text().stripChapterNumberPrefix()
             out += SChapter.create().apply {
                 url = a.attr("href").replace(baseUrl, "").trimEnd('/')
                 name = if (volNum != null) "Vol $volNum • $title" else title

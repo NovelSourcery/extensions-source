@@ -234,7 +234,7 @@ abstract class StorySeedling :
     }
 
     private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
-        title = doc.selectFirst("h1")?.text()?.trim() ?: ""
+        title = doc.selectFirst("h1")?.text() ?: ""
 
         // LN Reader: img[x-ref="art"].w-full.rounded.shadow-md
         val coverUrl = doc.selectFirst("img[x-ref=\"art\"].w-full.rounded.shadow-md")?.attr("src")
@@ -244,19 +244,19 @@ abstract class StorySeedling :
 
         // Get author from "Written by" section
         // Format: <div class="mb-1 leading-7"><span>Written by</span><a href="...">AuthorName</a></div>
-        author = doc.selectFirst("div.mb-1.leading-7:has(span:contains(Written by)) a")?.text()?.trim()
+        author = doc.selectFirst("div.mb-1.leading-7:has(span:contains(Written by)) a")?.text()
 
         // Get genres from both main genre section and additional tags
         val mainGenres = doc.select(
             "section[x-data=\"{ tab: location.hash.substr(1) || 'chapters' }\"].relative > div > div > div.flex.flex-wrap > a",
-        ).map { it.text().trim() }
+        ).map { it.text() }
 
         // Additional tags from order-3 section with tag links
         // Format: <a href="https://storyseedling.com/browse/?includeTags%5B%5D=XXX" class="...">#+TagName</a>
         val additionalTags = doc.select("div.order-3 div.flex.flex-wrap a[href*=includeTags]")
             .map { it.text().replace("#", "").trim() }
 
-        genre = (mainGenres + additionalTags).distinct().filter { it.isNotBlank() }.joinToString(", ")
+        genre = (mainGenres + additionalTags).distinct().filter { it.isNotBlank() }.joinToString()
 
         // Description from the order-3 lg:grid-in-content section
         // Format: <div class="order-3 lg:grid-in-content"><div x-data="{ expanded: false }">...<p>...</p></div>
@@ -265,13 +265,13 @@ abstract class StorySeedling :
             ?: doc.selectFirst("div.order-3 div[x-data] div.mb-4.order-2")
 
         description = descContainer?.let { container ->
-            container.select("p").joinToString("\n\n") { it.text().trim() }
+            container.select("p").joinToString("\n\n") { it.text() }
         }?.ifEmpty {
             doc.select("div.mb-4.text-base p, div.synopsis p")
-                .joinToString("\n\n") { it.text().trim() }
+                .joinToString("\n\n") { it.text() }
         } ?: doc.select("div.mb-4.text-base p, div.synopsis p")
-            .joinToString("\n\n") { it.text().trim() }
-            .ifEmpty { doc.selectFirst(".prose, .description")?.text()?.trim() }
+            .joinToString("\n\n") { it.text() }
+            .ifEmpty { doc.selectFirst(".prose, .description")?.text() }
 
         status = when {
             doc.text().contains("Completed", ignoreCase = true) -> SManga.COMPLETED
@@ -353,7 +353,7 @@ abstract class StorySeedling :
                                 val chapters = chaptersDoc.select("a[href*='/chapter/']").mapNotNull { element ->
                                     try {
                                         val url = element.attr("href").replace(baseUrl, "")
-                                        val name = element.text().trim()
+                                        val name = element.text()
 
                                         SChapter.create().apply {
                                             this.url = url
@@ -379,7 +379,7 @@ abstract class StorySeedling :
         return doc.select("div[x-show=\"tab === 'chapters'\"] a[href*='/chapter/'], a[href*='/chapter/']").mapNotNull { element ->
             try {
                 val url = element.attr("href").replace(baseUrl, "")
-                val name = element.text().trim()
+                val name = element.text()
                 if (name.isBlank()) return@mapNotNull null
 
                 SChapter.create().apply {

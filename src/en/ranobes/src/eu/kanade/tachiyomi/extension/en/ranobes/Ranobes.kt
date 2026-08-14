@@ -73,16 +73,16 @@ abstract class Ranobes :
             val link = article.selectFirst("h2.title a") ?: return@mapNotNull null
             SManga.create().apply {
                 url = mangaPathTemplate.slug(link.attr("href").removePrefix(baseUrl))
-                title = link.text().trim()
+                title = link.text()
 
                 thumbnail_url = article.selectFirst("figure img")?.attr("src")?.let {
                     if (it.startsWith("http")) it else baseUrl + it
                 }
 
-                description = article.selectFirst("div.moreless__short")?.text()?.trim()
+                description = article.selectFirst("div.moreless__short")?.text()
 
-                genre = article.select("div.rank-story-genre a").joinToString(", ") {
-                    it.text().trim()
+                genre = article.select("div.rank-story-genre a").joinToString {
+                    it.text()
                 }
             }
         }
@@ -114,7 +114,7 @@ abstract class Ranobes :
                     href
                 }
                 url = mangaPathTemplate.slug(resolvedHref)
-                title = block.selectFirst("h3.title")?.text()?.trim() ?: ""
+                title = block.selectFirst("h3.title")?.text() ?: ""
 
                 thumbnail_url = block.selectFirst("i.image.cover")?.attr("style")?.let {
                     extractBackgroundUrl(it)
@@ -188,15 +188,15 @@ abstract class Ranobes :
             val link = article.selectFirst("h2.title a") ?: return@mapNotNull null
             SManga.create().apply {
                 url = mangaPathTemplate.slug(link.attr("href").removePrefix(baseUrl))
-                title = link.text().trim()
+                title = link.text()
 
                 thumbnail_url = article.selectFirst("figure.cover")?.attr("style")?.let {
                     extractBackgroundUrl(it)
                 }
 
-                description = article.selectFirst("div.cont-in > div")?.text()?.trim()
+                description = article.selectFirst("div.cont-in > div")?.text()
 
-                genre = article.selectFirst("div.r-rate div.grey")?.text()?.trim()
+                genre = article.selectFirst("div.r-rate div.grey")?.text()
 
                 // Status from link
                 val statusLink = article.selectFirst("a[title*=translated]")?.text()?.lowercase() ?: ""
@@ -225,16 +225,16 @@ abstract class Ranobes :
 
             SManga.create().apply {
                 url = mangaPathTemplate.slug(link.attr("href").removePrefix(baseUrl))
-                title = link.text().trim()
+                title = link.text()
 
                 thumbnail_url = article.selectFirst("figure img, figure.cover")?.let {
                     it.attr("src").ifEmpty { extractBackgroundUrl(it.attr("style") ?: "") }
                 }?.let { if (it.startsWith("http")) it else baseUrl + it }
 
-                description = article.selectFirst("div.moreless__short")?.text()?.trim()
+                description = article.selectFirst("div.moreless__short")?.text()
 
-                genre = article.select("div.rank-story-genre a, .genre a").joinToString(", ") {
-                    it.text().trim()
+                genre = article.select("div.rank-story-genre a, .genre a").joinToString {
+                    it.text()
                 }
             }
         }
@@ -269,7 +269,7 @@ abstract class Ranobes :
 
         return SManga.create().apply {
             // Title
-            title = document.selectFirst("h1.title")?.ownText()?.trim() ?: ""
+            title = document.selectFirst("h1.title")?.ownText() ?: ""
 
             // Cover
             thumbnail_url = document.selectFirst("div.poster img")?.attr("src")?.let {
@@ -277,7 +277,7 @@ abstract class Ranobes :
             }
 
             // Author
-            author = document.selectFirst("li:contains(Authors) span.tag_list a")?.text()?.trim()
+            author = document.selectFirst("li:contains(Authors) span.tag_list a")?.text()
 
             // Status
             val statusCoo = document.selectFirst("li:contains(Status in COO) a")?.text()?.lowercase() ?: ""
@@ -291,9 +291,9 @@ abstract class Ranobes :
 
             // Genres - combine genres, events, and tags
             val genres = mutableListOf<String>()
-            document.select("#mc-fs-genre .links a").forEach { genres.add(it.text().trim()) }
-            document.select("#mc-fs-keyw .links a").take(10).forEach { genres.add(it.text().trim()) }
-            genre = genres.distinct().joinToString(", ")
+            document.select("#mc-fs-genre .links a").forEach { genres.add(it.text()) }
+            document.select("#mc-fs-keyw .links a").take(10).forEach { genres.add(it.text()) }
+            genre = genres.distinct().joinToString()
 
             // Description
             description = buildString {
@@ -458,12 +458,12 @@ abstract class Ranobes :
         return document.select("div.cat_block.cat_line a").map { link ->
             SChapter.create().apply {
                 url = link.attr("href").removePrefix(baseUrl)
-                name = link.selectFirst("h6.title")?.text()?.trim() ?: link.attr("title")
+                name = link.selectFirst("h6.title")?.text() ?: link.attr("title")
 
                 val numMatch = Regex("""Chapter\s*(\d+(?:\.\d+)?)""", RegexOption.IGNORE_CASE).find(name)
                 chapter_number = numMatch?.groupValues?.getOrNull(1)?.toFloatOrNull() ?: 0f
 
-                val dateText = link.selectFirst("small span.comment-count")?.text()?.trim() ?: ""
+                val dateText = link.selectFirst("small span.comment-count")?.text() ?: ""
                 date_upload = parseRelativeDate(dateText)
             }
         }
@@ -489,7 +489,7 @@ abstract class Ranobes :
 
         val content = StringBuilder()
 
-        val chapterTitle = document.selectFirst("h1.h4.title")?.ownText()?.trim()
+        val chapterTitle = document.selectFirst("h1.h4.title")?.ownText()
         if (!chapterTitle.isNullOrEmpty()) {
             content.append("<h2>$chapterTitle</h2>\n")
         }
@@ -498,7 +498,7 @@ abstract class Ranobes :
         textDiv?.children()?.forEach { element ->
             when (element.tagName()) {
                 "p" -> {
-                    val text = element.text()?.trim()
+                    val text = element.text()
                     if (!text.isNullOrEmpty()) {
                         content.append("<p>$text</p>\n")
                     }
@@ -507,7 +507,7 @@ abstract class Ranobes :
                 "br" -> content.append("<br>\n")
 
                 else -> {
-                    val text = element.text()?.trim()
+                    val text = element.text()
                     if (!text.isNullOrEmpty()) {
                         content.append("<p>$text</p>\n")
                     }

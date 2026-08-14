@@ -164,33 +164,33 @@ abstract class LightNovelWPNovel :
 
         // Parse title from multiple sources - always set it since it's lateinit
         title = thumbImg?.attr("title")?.trim()?.takeIf { it.isNotBlank() }
-            ?: doc.selectFirst(".entry-title")?.text()?.trim()?.takeIf { it.isNotBlank() }
+            ?: doc.selectFirst(".entry-title")?.text()?.takeIf { it.isNotBlank() }
             ?: doc.selectFirst("meta[property=og:title]")?.attr("content")
                 ?.substringBefore(" - ")?.trim()?.takeIf { it.isNotBlank() }
             ?: doc.selectFirst("title")?.text()
                 ?.substringBefore(" - ")?.trim()?.takeIf { it.isNotBlank() }
-            ?: doc.selectFirst(".post-title h1")?.text()?.trim()?.takeIf { it.isNotBlank() }
+            ?: doc.selectFirst(".post-title h1")?.text()?.takeIf { it.isNotBlank() }
             ?: "Unknown Title"
 
         description = doc.selectFirst(".entry-content, [itemprop=description]")?.formattedText()?.trim() ?: ""
 
         val authorElement = doc.select(".spe span:contains(Author), .serl:contains(Author)").first()
-        author = authorElement?.nextElementSibling()?.text()?.trim()
+        author = authorElement?.nextElementSibling()?.text()
             ?: authorElement?.parent()?.text()?.substringAfter("Author")?.replace(":", "")?.trim()
             ?: ""
 
         val artistElement = doc.select(".spe span:contains(Artist), .serl:contains(Artist)").first()
-        artist = artistElement?.nextElementSibling()?.text()?.trim()
+        artist = artistElement?.nextElementSibling()?.text()
             ?: artistElement?.parent()?.text()?.substringAfter("Artist")?.replace(":", "")?.trim()
             ?: ""
 
-        genre = doc.select(".genxed a, .sertogenre a").joinToString(", ") { it.text() }
+        genre = doc.select(".genxed a, .sertogenre a").joinToString { it.text() }
 
         // Parse alternative titles from info section
         val altNameText = doc.select(
             ".spe span:contains(Alternative), .spe span:contains(Alt), .infox .alternative, .seriestualt",
         ).firstOrNull()?.let { el ->
-            el.nextElementSibling()?.text()?.trim()?.takeIf { it.isNotBlank() }
+            el.nextElementSibling()?.text()?.takeIf { it.isNotBlank() }
                 ?: el.parent()?.text()
                     ?.substringAfter("Alternative")?.substringAfter("Alt")
                     ?.replace(":", "")?.trim()?.takeIf { it.isNotBlank() }
@@ -221,11 +221,11 @@ abstract class LightNovelWPNovel :
                 // epl-num structure: <div class="epl-num"><span>Ch. 50</span><span><i class="fas fa-lock"></i></span></div>
                 // The chapter number is in the FIRST span, second span may contain lock icon
                 val eplNumElement = element.selectFirst(".epl-num")
-                val chapterNum = eplNumElement?.selectFirst("span")?.text()?.trim()
-                    ?: eplNumElement?.ownText()?.trim()
+                val chapterNum = eplNumElement?.selectFirst("span")?.text()
+                    ?: eplNumElement?.ownText()
                     ?: ""
-                val chapterTitle = element.selectFirst(".epl-title")?.text()?.trim() ?: ""
-                val dateStr = element.selectFirst(".epl-date")?.text()?.trim() ?: ""
+                val chapterTitle = element.selectFirst(".epl-title")?.text() ?: ""
+                val dateStr = element.selectFirst(".epl-date")?.text() ?: ""
 
                 // Check for locked status - look for lock icon or price indicator
                 val isLocked = element.selectFirst(".fa-lock, .fas.fa-lock, i[class*='lock']") != null ||
