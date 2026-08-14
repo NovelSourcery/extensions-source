@@ -13,7 +13,10 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -24,6 +27,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -32,17 +36,15 @@ import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.net.URLDecoder
 
-class BrightNovels :
-    HttpSource(),
+@Source
+abstract class BrightNovels :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
-    override val name = "Bright Novels"
-    override val baseUrl = "https://brightnovels.com"
-    override val lang = "en"
     override val supportsLatest = true
 
-    override fun headersBuilder() = super.headersBuilder()
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = this
         .add("Referer", "$baseUrl/")
         .add("Accept", "text/html, application/xhtml+xml")
 
@@ -51,7 +53,11 @@ class BrightNovels :
         isLenient = true
     }
 
-    override val client = network.cloudflareClient.newBuilder()
+    /** [SManga.url] stored as bare slug under "/series/"; a stored value starting with "/" is a
+     * pre-existing full-path entry and is resolved unchanged. */
+    private val mangaPath = SlugPath("/series/")
+
+    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = this
         .addInterceptor { chain ->
             val request = chain.request()
             val response = chain.proceed(request)
@@ -74,7 +80,6 @@ class BrightNovels :
                 response
             }
         }
-        .build()
 
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
@@ -83,33 +88,37 @@ class BrightNovels :
     @kotlinx.serialization.Serializable
     private data class CachedOption(val name: String, val value: String)
 
-    override fun popularMangaRequest(page: Int): Request = seriesRequest(
-        page = page,
-        baseParams = mapOf(
-            "sort" to "popular",
-            "order" to "desc",
-        ),
+    override suspend fun getPopularManga(page: Int): MangasPage = parseSeriesListing(
+        client.newCall(
+            seriesRequest(
+                page = page,
+                baseParams = mapOf(
+                    "sort" to "popular",
+                    "order" to "desc",
+                ),
+            ),
+        ).execute(),
     )
 
-    override fun popularMangaParse(response: Response): MangasPage = parseSeriesListing(response)
-
-    override fun latestUpdatesRequest(page: Int): Request = seriesRequest(
-        page = page,
-        baseParams = mapOf(
-            "sort" to "latest_upload",
-            "order" to "desc",
-        ),
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseSeriesListing(
+        client.newCall(
+            seriesRequest(
+                page = page,
+                baseParams = mapOf(
+                    "sort" to "latest_upload",
+                    "order" to "desc",
+                ),
+            ),
+        ).execute(),
     )
 
-    override fun latestUpdatesParse(response: Response): MangasPage = parseSeriesListing(response)
-
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         if (query.length >= 3 && !hasActiveFilters(filters)) {
             val searchUrl = "$baseUrl/api/search".toHttpUrl().newBuilder()
                 .addQueryParameter("query", query)
                 .build()
                 .toString()
-            return GET(searchUrl, headers)
+            return parseApiSearch(client.newCall(GET(searchUrl, headers)).execute())
         }
 
         val params = mutableMapOf<String, String>()
@@ -167,25 +176,34 @@ class BrightNovels :
             params["origin"] = selectedCountry.orEmpty()
         }
 
-        return seriesRequest(page, params)
+        return parseSeriesListing(client.newCall(seriesRequest(page, params)).execute())
     }
 
-    override fun searchMangaParse(response: Response): MangasPage = if (response.request.url.encodedPath.contains("/api/search")) {
-        parseApiSearch(response)
-    } else {
-        parseSeriesListing(response)
+    private fun slugOf(manga: SManga): String = decodePathSegment(
+        mangaPath.resolve(manga.url)
+            .substringAfter("/series/")
+            .substringBefore("?")
+            .trim('/'),
+    )
+
+    private fun buildMangaDetailsRequest(manga: SManga): Request = inertiaRequest(dotSafePath("$baseUrl/series/${encodePathSegment(slugOf(manga))}"))
+
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        // Details and the chapter list both come from the same series page - fetch it once.
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+
+        val updatedManga = if (fetchDetails) parseMangaDetails(response) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(response) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    override fun mangaDetailsRequest(manga: SManga): Request {
-        val slug = decodePathSegment(
-            manga.url.substringAfter("/series/")
-                .substringBefore("?")
-                .trim('/'),
-        )
-        return inertiaRequest(dotSafePath("$baseUrl/series/${encodePathSegment(slug)}"))
-    }
-
-    override fun mangaDetailsParse(response: Response): SManga {
+    private fun parseMangaDetails(response: Response): SManga {
         val body = response.body.string()
         val page = extractInertiaProps(body, response.headers)
         val series = page["series"].asObject() ?: JsonObject(emptyMap())
@@ -200,7 +218,7 @@ class BrightNovels :
 
         return SManga.create().apply {
             title = series.string("title") ?: ""
-            url = "/series/${encodePathSegment(series.string("slug").orEmpty())}"
+            url = encodePathSegment(series.string("slug").orEmpty())
             description = formatDescription(series.string("description").orEmpty())
             thumbnail_url = coverObj?.string("url")?.let(::absoluteUrl).orEmpty()
             genre = genres
@@ -214,16 +232,7 @@ class BrightNovels :
         }
     }
 
-    override fun chapterListRequest(manga: SManga): Request {
-        val slug = decodePathSegment(
-            manga.url.substringAfter("/series/")
-                .substringBefore("?")
-                .trim('/'),
-        )
-        return inertiaRequest(dotSafePath("$baseUrl/series/${encodePathSegment(slug)}"))
-    }
-
-    override fun chapterListParse(response: Response): List<SChapter> {
+    private fun parseChapterList(response: Response): List<SChapter> {
         val fallbackSeriesSlug = response.request.url.pathSegments
             .lastOrNull { it.isNotBlank() }
             ?.let(::decodePathSegment)
@@ -268,9 +277,10 @@ class BrightNovels :
             .sortedByDescending { it.chapter_number }
     }
 
-    override fun pageListRequest(chapter: SChapter): Request = inertiaRequest(absoluteUrl(chapter.url))
-
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString(), null))
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.newCall(inertiaRequest(absoluteUrl(chapter.url))).execute()
+        return listOf(Page(0, response.request.url.toString(), null))
+    }
 
     override suspend fun fetchPageText(page: Page): String {
         // The app's getPageList short-circuit hands us the raw (relative) chapter url,
@@ -284,16 +294,7 @@ class BrightNovels :
             ?: Jsoup.parse(chapter.string("title").orEmpty()).text()
     }
 
-    override fun getMangaUrl(manga: SManga): String {
-        val slug = decodePathSegment(
-            manga.url.substringAfter("/series/")
-                .substringBefore("?")
-                .trim('/'),
-        )
-        return dotSafePath("$baseUrl/series/${encodePathSegment(slug)}")
-    }
-
-    override fun imageUrlParse(response: Response) = ""
+    override fun getMangaUrl(manga: SManga): String = dotSafePath("$baseUrl/series/${encodePathSegment(slugOf(manga))}")
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         val showPremiumPref = SwitchPreferenceCompat(screen.context).apply {
@@ -320,7 +321,7 @@ class BrightNovels :
         }.also(screen::addPreference)
     }
 
-    override fun getFilterList(): FilterList {
+    override fun getFilterList(data: JsonElement?): FilterList {
         ensureFilterMetadataLoaded()
         return FilterList(
             Filter.Header("Bright Novels filters"),
@@ -486,7 +487,7 @@ class BrightNovels :
 
         return SManga.create().apply {
             title = obj.string("title") ?: "Unknown Title"
-            url = "/series/${encodePathSegment(slug)}"
+            url = encodePathSegment(slug)
             thumbnail_url = coverUrl?.let(::absoluteUrl).orEmpty()
         }
     }
@@ -759,7 +760,7 @@ class BrightNovels :
         // 1) if we don't know the version yet, use plain HTML request and parse #app[data-page]
         // 2) once version is known, send Inertia headers to get JSON props directly
         val requestHeaders = if (inertiaVersion == null) {
-            val builder = headersBuilder()
+            val builder = headers.newBuilder()
                 .removeAll("X-Inertia")
                 .removeAll("X-Inertia-Version")
                 .removeAll("X-Inertia-Partial-Component")
@@ -768,7 +769,7 @@ class BrightNovels :
             xsrfToken?.let { builder.set("X-XSRF-TOKEN", it) }
             builder.build()
         } else {
-            val builder = headersBuilder()
+            val builder = headers.newBuilder()
                 .set("X-Inertia", "true")
                 .set("X-Requested-With", "XMLHttpRequest")
                 .set("X-Inertia-Version", inertiaVersion)
