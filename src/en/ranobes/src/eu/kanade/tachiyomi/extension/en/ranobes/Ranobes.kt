@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.novelextension.en.ranobes
+package eu.kanade.tachiyomi.novelextension.en.ranobes
 
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
@@ -13,16 +13,21 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.getPreferencesLazy
+import kotlinx.serialization.json.JsonElement
 import okhttp3.FormBody
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 import java.net.URLEncoder
 
-class Ranobes :
-    HttpSource(),
+@Source
+abstract class Ranobes :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
@@ -35,18 +40,21 @@ class Ranobes :
     private val reverseChapterList: Boolean
         get() = preferences.getBoolean(PREF_REVERSE_CHAPTERS, false)
 
-    override val name = "Ranobes"
-    override val baseUrl = "https://ranobes.net"
-    override val lang = "en"
     override val supportsLatest = true
-    override val isNovelSource = true
-
-    override val client = network.cloudflareClient
 
     private var dleHash: String? = null
+
+    /**
+     * The site's novel detail URL shape, as `/novels/<id>-<slug>.html`. [SManga.url] is stored
+     * as the bare slug (see [SlugPath]); a stored value starting with "/" is a pre-existing
+     * full-path entry from before this source adopted slug storage, and is resolved unchanged
+     * regardless of this template.
+     */
+    protected open val mangaPathTemplate: SlugPath = SlugPath("/novels/", ".html")
+
     // ======================== Popular ========================
 
-    override fun popularMangaRequest(page: Int): Request = if (page == 1) {
+    protected open fun buildPopularMangaRequest(page: Int): Request = if (page == 1) {
         GET("$baseUrl/ranking/", headers)
     } else {
         val formBody = FormBody.Builder()
@@ -56,13 +64,14 @@ class Ranobes :
         POST("$baseUrl/ranking/", headers, formBody)
     }
 
-    override fun popularMangaParse(response: Response): MangasPage {
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val response = client.newCall(buildPopularMangaRequest(page)).execute()
         val document = Jsoup.parse(response.body.string())
 
-        val novels = document.select("article.rank-story").map { article ->
+        val novels = document.select("article.rank-story").mapNotNull { article ->
+            val link = article.selectFirst("h2.title a") ?: return@mapNotNull null
             SManga.create().apply {
-                val link = article.selectFirst("h2.title a") ?: return@map null
-                url = link.attr("href").removePrefix(baseUrl)
+                url = mangaPathTemplate.slug(link.attr("href").removePrefix(baseUrl))
                 title = link.text().trim()
 
                 thumbnail_url = article.selectFirst("figure img")?.attr("src")?.let {
@@ -75,7 +84,7 @@ class Ranobes :
                     it.text().trim()
                 }
             }
-        }.filterNotNull()
+        }
 
         val hasNextPage = document.select("div.pages a").isNotEmpty()
 
@@ -83,33 +92,34 @@ class Ranobes :
     }
     // ======================== Latest ========================
 
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/updates/page/$page/", headers)
+    protected open fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/updates/page/$page/", headers)
 
-    override fun latestUpdatesParse(response: Response): MangasPage {
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val response = client.newCall(buildLatestUpdatesRequest(page)).execute()
         val document = Jsoup.parse(response.body.string())
 
-        val novels = document.select("div.block.story_line.story_line-img").map { block ->
-            val link = block.selectFirst("a") ?: return@map null
+        val novels = document.select("div.block.story_line.story_line-img").mapNotNull { block ->
+            val link = block.selectFirst("a") ?: return@mapNotNull null
 
             SManga.create().apply {
-                url = link.attr("href").let { href ->
-                    // e.g., /cultivation-being-immortal-1206585/3089467.html -> /novels/1206585-cultivation-being-immortal.html
-                    val match = Regex("""(/[^/]+-(\d+)/\d+\.html)""").find(href)
-                    if (match != null) {
-                        val novelSlug = href.split("/")[1].substringBeforeLast("-")
-                        val novelId = match.groupValues[2]
-                        "/novels/$novelId-$novelSlug.html"
-                    } else {
-                        href
-                    }
+                val href = link.attr("href")
+                // e.g., /cultivation-being-immortal-1206585/3089467.html -> /novels/1206585-cultivation-being-immortal.html
+                val match = Regex("""(/[^/]+-(\d+)/\d+\.html)""").find(href)
+                val resolvedHref = if (match != null) {
+                    val novelSlug = href.split("/")[1].substringBeforeLast("-")
+                    val novelId = match.groupValues[2]
+                    "/novels/$novelId-$novelSlug.html"
+                } else {
+                    href
                 }
+                url = mangaPathTemplate.slug(resolvedHref)
                 title = block.selectFirst("h3.title")?.text()?.trim() ?: ""
 
                 thumbnail_url = block.selectFirst("i.image.cover")?.attr("style")?.let {
                     extractBackgroundUrl(it)
                 }
             }
-        }.filterNotNull().distinctBy { it.url }
+        }.distinctBy { it.url }
 
         val hasNextPage = document.selectFirst("div.pages a:contains(${response.request.url.toString().substringAfter("page/").substringBefore("/").toIntOrNull()?.plus(1) ?: 2})") != null
 
@@ -117,7 +127,7 @@ class Ranobes :
     }
     // ======================== Search ========================
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    protected open fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         var genreId: String? = null
         var statusId: String? = null
         var sortBy: String? = null
@@ -158,28 +168,25 @@ class Ranobes :
         }
 
         // Default to popular
-        return popularMangaRequest(page)
+        return buildPopularMangaRequest(page)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage {
-        val requestUrl = response.request.url.toString()
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val request = buildSearchMangaRequest(page, query, filters)
+        val requestUrl = request.url.toString()
+        val response = client.newCall(request).execute()
 
         // Genre browse pages have similar structure to search
         if (requestUrl.contains("/genres/")) {
             return parseGenrePage(response)
         }
 
-        // Status browse pages
-        if (requestUrl.contains("/novels/") && !requestUrl.contains("/novels/")) {
-            return parseNovelsPage(response)
-        }
-
         val document = Jsoup.parse(response.body.string())
 
-        val novels = document.select("article.block.story.shortstory").map { article ->
+        val novels = document.select("article.block.story.shortstory").mapNotNull { article ->
+            val link = article.selectFirst("h2.title a") ?: return@mapNotNull null
             SManga.create().apply {
-                val link = article.selectFirst("h2.title a") ?: return@map null
-                url = link.attr("href").removePrefix(baseUrl)
+                url = mangaPathTemplate.slug(link.attr("href").removePrefix(baseUrl))
                 title = link.text().trim()
 
                 thumbnail_url = article.selectFirst("figure.cover")?.attr("style")?.let {
@@ -198,11 +205,11 @@ class Ranobes :
                     else -> SManga.UNKNOWN
                 }
             }
-        }.filterNotNull()
+        }
 
         val hasNextPage = document.select("div.pages a").any {
             it.text().toIntOrNull()?.let { num ->
-                num > (response.request.url.toString().substringAfter("page/").substringBefore("/").toIntOrNull() ?: 1)
+                num > (requestUrl.substringAfter("page/").substringBefore("/").toIntOrNull() ?: 1)
             } ?: false
         }
 
@@ -216,7 +223,7 @@ class Ranobes :
             val link = article.selectFirst("h2.title a") ?: return@mapNotNull null
 
             SManga.create().apply {
-                url = link.attr("href").removePrefix(baseUrl)
+                url = mangaPathTemplate.slug(link.attr("href").removePrefix(baseUrl))
                 title = link.text().trim()
 
                 thumbnail_url = article.selectFirst("figure img, figure.cover")?.let {
@@ -234,13 +241,29 @@ class Ranobes :
         val hasNextPage = document.select("div.pages a").isNotEmpty()
         return MangasPage(novels, hasNextPage)
     }
-
-    private fun parseNovelsPage(response: Response): MangasPage = popularMangaParse(response)
     // ======================== Details ========================
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val updatedManga = if (fetchDetails) {
+            val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+            parseMangaDetails(response)
+        } else {
+            manga
+        }
+
+        val updatedChapters = if (fetchChapters) fetchAllChapters(manga) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    private fun parseMangaDetails(response: Response): SManga {
         val document = Jsoup.parse(response.body.string())
 
         return SManga.create().apply {
@@ -302,17 +325,17 @@ class Ranobes :
     }
     // ======================== Chapters ========================
 
-    override fun chapterListRequest(manga: SManga): Request {
-        val novelId = manga.url.substringAfter("/novels/").substringBefore("-")
+    private fun buildChapterListRequest(manga: SManga): Request {
+        val novelId = mangaPathTemplate.resolve(manga.url).substringAfter("/novels/").substringBefore("-")
         return GET("$baseUrl/chapters/$novelId/", headers)
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> {
+    private fun fetchAllChapters(manga: SManga): List<SChapter> {
         val allChapters = mutableListOf<SChapter>()
         var currentPage = 1
-        var document = Jsoup.parse(response.body.string())
+        var document = Jsoup.parse(client.newCall(buildChapterListRequest(manga)).execute().body.string())
 
-        val baseChapterUrl = response.request.url.toString()
+        val baseChapterUrl = buildChapterListRequest(manga).url.toString()
             .substringBefore("/page/")
             .trimEnd('/')
 
@@ -444,11 +467,12 @@ class Ranobes :
             }
         }
     }
+
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
     // ======================== Pages ========================
 
-    override fun pageListRequest(chapter: SChapter): Request = GET(baseUrl + chapter.url, headers)
-
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
@@ -486,11 +510,9 @@ class Ranobes :
 
         return content.toString()
     }
-
-    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
     // ======================== Filters ========================
 
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         Filter.Header("Note: Text search overrides filters"),
         Filter.Separator(),
         GenreFilter(),
