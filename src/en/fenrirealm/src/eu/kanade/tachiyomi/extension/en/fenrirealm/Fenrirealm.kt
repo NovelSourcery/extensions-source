@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.novelextension.en.fenrirealm
+package eu.kanade.tachiyomi.novelextension.en.fenrirealm
 
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
@@ -12,11 +12,16 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.setAltTitles
 import keiyoushi.utils.setNumber
 import keiyoushi.utils.setVolume
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -27,8 +32,10 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -119,19 +126,13 @@ object FlexibleStringSerializer : KSerializer<String?> {
 }
 
 @Suppress("unused", "SpellCheckingInspection")
-class Fenrirealm :
-    HttpSource(),
+@Source
+abstract class Fenrirealm :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
-    override val name = "Fenrirealm"
-    override val baseUrl = "https://fenrirealm.com"
-    override val lang = "en"
     override val supportsLatest = true
-
-    // isNovelSource is provided by NovelSource interface with default value true
-
-    override val client = network.cloudflareClient
 
     private val json: Json by injectLazy()
     private val preferences: SharedPreferences by getPreferencesLazy()
@@ -145,33 +146,42 @@ class Fenrirealm :
     // Chapter Number Prefix
     private val titlePrefixRE = Regex("""^\s*Ch(?:apter|\.)?\s+\d+\s*(?:\W+\s+)?""", RegexOption.IGNORE_CASE)
 
-    override fun popularMangaRequest(page: Int): Request = GET("$apiBaseUrl/home/popular-series", headers)
+    /**
+     * The site's novel detail URL shape, as `/series/<slug>`. [SManga.url] is stored as the bare
+     * slug (see [SlugPath]); a stored value starting with "/" is a pre-existing full-path entry
+     * from before this source adopted slug storage, and is resolved unchanged regardless of
+     * this template.
+     */
+    private val mangaPathTemplate = SlugPath("/series/")
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        val novels = json.decodeFromString<List<NovelDto>>(response.body.string())
-        return MangasPage(novels.map { it.toSManga(baseUrl) }, false)
+    private fun buildPopularMangaRequest(page: Int): Request = GET("$apiBaseUrl/home/popular-series", headers)
+
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val novels = json.decodeFromString<List<NovelDto>>(client.newCall(buildPopularMangaRequest(page)).execute().body.string())
+        return MangasPage(novels.map { it.toSManga(baseUrl, mangaPathTemplate) }, false)
     }
 
-    override fun latestUpdatesRequest(page: Int): Request = GET("$apiBaseUrl/series?page=$page&per_page=20&status=any&sort=latest", headers)
+    private fun buildLatestUpdatesRequest(page: Int): Request = GET("$apiBaseUrl/series?page=$page&per_page=20&status=any&sort=latest", headers)
 
-    override fun latestUpdatesParse(response: Response): MangasPage {
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseSearchResultsResponse(client.newCall(buildLatestUpdatesRequest(page)).execute())
+
+    private fun parseSearchResultsResponse(response: Response): MangasPage {
         val result = json.decodeFromString<SearchResponse>(response.body.string())
         val hasNextPage = result.meta.currentPage < result.meta.lastPage
-        return MangasPage(result.data.map { it.toSManga(baseUrl) }, hasNextPage)
+        return MangasPage(result.data.map { it.toSManga(baseUrl, mangaPathTemplate) }, hasNextPage)
     }
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        if (query.startsWith("http") && query.contains("/series/")) {
-            val slug = query.substringAfter("/series/")
-                .substringBefore('?')
-                .substringBefore('#')
-                .trim('/')
-                .substringBefore('/')
-            if (slug.isNotBlank()) {
-                return GET("$apiBaseUrl/series/$slug", headers)
-            }
-        }
+    // Resolves URL-shaped search queries (e.g. "share this novel" links) via the standard
+    // getMangaByUrl hook instead of special-casing it inside search.
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        if (!url.encodedPath.contains("/series/")) return null
+        val slug = url.encodedPath.substringAfter("/series/").trim('/').substringBefore('/')
+        if (slug.isBlank()) return null
+        val response = client.newCall(GET("$apiBaseUrl/series/$slug", headers)).execute()
+        return runCatching { json.decodeFromString<NovelDto>(response.body.string()).toSManga(baseUrl, mangaPathTemplate) }.getOrNull()
+    }
 
+    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val url = "$apiBaseUrl/series".toHttpUrl().newBuilder().apply {
             addQueryParameter("page", page.toString())
             addQueryParameter("per_page", "20")
@@ -218,47 +228,61 @@ class Fenrirealm :
         return GET(url, headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage {
-        val lastSegment = response.request.url.encodedPath.trimEnd('/').substringAfterLast('/')
-        if (lastSegment != "series") {
-            return try {
-                val manga = json.decodeFromString<NovelDto>(response.body.string()).toSManga(baseUrl)
-                MangasPage(listOf(manga), false)
-            } catch (_: Exception) {
-                MangasPage(emptyList(), false)
-            }
-        }
-        return latestUpdatesParse(response)
-    }
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseSearchResultsResponse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
 
     override fun getMangaUrl(manga: SManga): String {
-        val slug = manga.url.trim('/').substringAfterLast('/')
+        val slug = mangaPathTemplate.resolve(manga.url).trim('/').substringAfterLast('/')
         return "$baseUrl/series/$slug"
     }
 
-    override fun mangaDetailsRequest(manga: SManga): Request {
-        val slug = manga.url.removePrefix("/").removeSuffix("/").removePrefix("series/")
+    private fun buildMangaDetailsRequest(manga: SManga): Request {
+        val slug = mangaPathTemplate.resolve(manga.url).removePrefix("/").removeSuffix("/").removePrefix("series/")
         return GET("$apiBaseUrl/series/$slug", headers)
     }
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    private fun buildChapterListRequest(manga: SManga): Request {
+        val slug = mangaPathTemplate.resolve(manga.url).removePrefix("/").removeSuffix("/").removePrefix("series/")
+        return GET("$apiBaseUrl/series/$slug/chapters", headers)
+    }
+
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate = coroutineScope {
+        // Details and chapters live on different endpoints - fire both concurrently when both
+        // are needed.
+        val detailsDeferred = if (fetchDetails) {
+            async { parseMangaDetails(client.newCall(buildMangaDetailsRequest(manga)).execute()) }
+        } else {
+            null
+        }
+        val chaptersDeferred = if (fetchChapters) {
+            async { parseChapterList(client.newCall(buildChapterListRequest(manga)).execute()) }
+        } else {
+            null
+        }
+
+        SMangaUpdate(
+            manga = detailsDeferred?.await() ?: manga,
+            chapters = chaptersDeferred?.await() ?: chapters,
+        )
+    }
+
+    private fun parseMangaDetails(response: Response): SManga {
         val body = response.body.string()
 
         return runCatching {
-            json.decodeFromString<NovelDto>(body).toSManga(baseUrl)
+            json.decodeFromString<NovelDto>(body).toSManga(baseUrl, mangaPathTemplate)
         }.getOrElse {
             runCatching {
-                json.decodeFromString<SearchResponse>(body).data.firstOrNull()?.toSManga(baseUrl)
+                json.decodeFromString<SearchResponse>(body).data.firstOrNull()?.toSManga(baseUrl, mangaPathTemplate)
             }.getOrNull() ?: fallbackMangaDetails(response)
         }
     }
 
-    override fun chapterListRequest(manga: SManga): Request {
-        val slug = manga.url.removePrefix("/").removeSuffix("/").removePrefix("series/")
-        return GET("$apiBaseUrl/series/$slug/chapters", headers)
-    }
-
-    override fun chapterListParse(response: Response): List<SChapter> {
+    private fun parseChapterList(response: Response): List<SChapter> {
         val chapters = json.decodeFromString<List<ChapterApiDto>>(response.body.string())
         val slug = response.request.url.pathSegments.dropLast(1).lastOrNull() ?: ""
 
@@ -318,9 +342,9 @@ class Fenrirealm :
         }.also(screen::addPreference)
     }
 
-    override fun pageListParse(response: Response): List<Page> {
-        val chapterUrl = response.request.url.toString().removePrefix(baseUrl)
-        return listOf(Page(0, chapterUrl))
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        return listOf(Page(0, response.request.url.toString().removePrefix(baseUrl)))
     }
 
     override suspend fun fetchPageText(page: Page): String {
@@ -361,7 +385,7 @@ class Fenrirealm :
         return readerArea.children().joinToString("") { it.outerHtml() }
     }
 
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         StatusFilter(),
         SortFilter(),
         TypeFilter(),
@@ -370,9 +394,6 @@ class Fenrirealm :
         Filter.Header("Include/Exclude Tags (Tap to toggle)"),
         TagFilter(),
     )
-
-    // Image URL - not used for novels
-    override fun imageUrlParse(response: Response): String = ""
 
     private fun parseDate(dateStr: String?): Long {
         if (dateStr == null) return 0L
@@ -395,7 +416,7 @@ class Fenrirealm :
             .orEmpty()
 
         return SManga.create().apply {
-            url = if (searchedSlug.isNotBlank()) "/series/$searchedSlug" else "/"
+            url = if (searchedSlug.isNotBlank()) mangaPathTemplate.slug("/series/$searchedSlug") else ""
             title = searchedSlug
                 .substringAfterLast('/')
                 .replace('-', ' ')
@@ -440,8 +461,8 @@ class Fenrirealm :
         val notices: List<NoticeDto>? = null,
         @SerialName("global_note") val globalNote: String? = null,
     ) {
-        fun toSManga(baseUrl: String): SManga = SManga.create().apply {
-            url = "/series/$slug"
+        fun toSManga(baseUrl: String, mangaPathTemplate: SlugPath): SManga = SManga.create().apply {
+            url = mangaPathTemplate.slug("/series/$slug")
             this.title = this@NovelDto.title.replace(INVISIBLE_CHARS, "").trim()
             thumbnail_url = if (!cover.isNullOrEmpty()) {
                 if (cover.startsWith("http")) cover else "$baseUrl/$cover"
