@@ -17,7 +17,6 @@ keiyoushi {
 
     deeplink {
         host("allnovel.org")
-        path("/{slug}")
-        path("/{slug}/chapter-..*")
+        path("/..*")
     }
 }

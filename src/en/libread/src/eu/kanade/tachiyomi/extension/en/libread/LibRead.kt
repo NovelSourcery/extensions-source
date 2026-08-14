@@ -8,6 +8,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.JsonElement
 import okhttp3.Request
 import org.jsoup.nodes.Document
@@ -26,9 +27,10 @@ abstract class LibRead : ReadNovelFull() {
     // come from #indexselect ("C.1 - C.40" ranges).
     override val noAjax = true
     override val chaptersPaginated = true
+    override val mangaPathTemplate = SlugPath("/libread/")
 
     override fun chapterListPageRequest(manga: SManga, page: Int): Request {
-        val base = baseUrl + manga.url.trimEnd('/')
+        val base = baseUrl + mangaPathTemplate.resolve(manga.url).trimEnd('/')
         val url = if (page <= 1) base else "$base?$pageParam=$page"
         return GET(url, headers)
     }
@@ -38,7 +40,7 @@ abstract class LibRead : ReadNovelFull() {
     // Chapter urls follow /libread/<slug>/chapter-0<N> (literal leading zero), so the fast list
     // can be synthesized.
     override fun chapterUrlFromNumber(manga: SManga, number: Int): String? {
-        val path = manga.url.trimEnd('/')
+        val path = mangaPathTemplate.resolve(manga.url).trimEnd('/')
         if (path.isBlank()) return null
         return "$path/chapter-0$number"
     }
@@ -52,7 +54,7 @@ abstract class LibRead : ReadNovelFull() {
         val link = element.selectFirst("h3.tit a, a.tit, a.con")
         if (link != null) {
             title = link.attr("title").ifEmpty { link.text().trim() }
-            setUrlWithoutDomain(link.attr("abs:href"))
+            setSlugUrl(link.attr("abs:href"))
         }
         thumbnail_url = element.selectFirst("img")?.let { img ->
             val src = img.attr("data-src").ifEmpty { img.attr("src") }

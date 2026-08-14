@@ -17,7 +17,6 @@ keiyoushi {
 
     deeplink {
         host("novgo.net")
-        path("/{slug}")
-        path("/{slug}/chapter-..*")
+        path("/..*")
     }
 }

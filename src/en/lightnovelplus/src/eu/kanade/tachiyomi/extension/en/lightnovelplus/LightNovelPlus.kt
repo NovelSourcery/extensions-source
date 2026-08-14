@@ -5,12 +5,14 @@ import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import keiyoushi.annotation.Source
+import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.JsonElement
 import okhttp3.Request
 
 @Source
 abstract class LightNovelPlus : ReadNovelFull() {
     // LightNovelPlus has a very different URL structure from the standard ReadNovelFull
+    override val mangaPathTemplate = SlugPath("/book/")
     override val latestPage = "last_release"
     override val searchPage = "book/search.html"
     override val novelListing = "book/bookclass.html"

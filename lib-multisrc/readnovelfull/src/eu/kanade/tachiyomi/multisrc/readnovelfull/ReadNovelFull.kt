@@ -19,6 +19,7 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.lib.chapterutils.paginatedChapterList
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.setAltTitles
 import kotlinx.serialization.json.JsonElement
 import okhttp3.FormBody
@@ -56,6 +57,18 @@ abstract class ReadNovelFull :
     ConfigurableSource {
 
     // isNovelSource is provided by NovelSource interface with default value true
+
+    /**
+     * The site's manga detail URL shape, as `<prefix><slug><suffix>`. [SManga.url] is stored as
+     * the bare slug (see [SlugPath]); override when a site doesn't use the common bare-slug
+     * ".html" shape. A stored value starting with "/" is a pre-existing full-path entry from
+     * before this source adopted slug storage, and is resolved unchanged regardless of this
+     * template.
+     */
+    protected open val mangaPathTemplate: SlugPath = SlugPath("/", ".html")
+
+    /** Stores [SManga.url] as a bare slug via [mangaPathTemplate]. */
+    protected fun SManga.setSlugUrl(href: String) = setSlugUrl(mangaPathTemplate, href)
 
     // Sliding-window rate limit: the first [rateLimitPermits] requests in any [rateLimitPeriodSeconds]
     // window dispatch immediately, the rest are throttled. This lets the common case (one page in fast
@@ -161,7 +174,7 @@ abstract class ReadNovelFull :
             // Set URL regardless of title - even "Unknown Title" entries need URLs to work
             val href = link.attr("abs:href")
             if (href.isNotBlank()) {
-                setUrlWithoutDomain(href)
+                setSlugUrl(href)
             }
         } else {
             // Last resort: look for any link with href in the element
@@ -170,12 +183,12 @@ abstract class ReadNovelFull :
                 val linkText = anyLink.attr("title").ifEmpty { anyLink.text().trim() }
                 if (linkText.isNotBlank()) {
                     title = linkText
-                    setUrlWithoutDomain(anyLink.attr("abs:href"))
+                    setSlugUrl(anyLink.attr("abs:href"))
                 } else {
                     // If no text, still set URL with generic title
                     val href = anyLink.attr("abs:href")
                     if (href.isNotBlank()) {
-                        setUrlWithoutDomain(href)
+                        setSlugUrl(href)
                     }
                 }
             }
@@ -217,7 +230,7 @@ abstract class ReadNovelFull :
                 val link = element.selectFirst("a.tit")
                 if (link != null) {
                     title = link.attr("title").ifEmpty { link.text().trim() }.ifBlank { "Unknown Title" }
-                    setUrlWithoutDomain(link.attr("abs:href"))
+                    setSlugUrl(link.attr("abs:href"))
                 }
                 thumbnail_url = element.selectFirst("div.pic img")?.let { img ->
                     img.attr("abs:data-src").ifEmpty { img.attr("abs:src") }
@@ -625,7 +638,7 @@ abstract class ReadNovelFull :
 
     // Request for page [page] of the chapter list. Page 1 is the novel page itself.
     protected open fun chapterListPageRequest(manga: SManga, page: Int): Request {
-        val path = manga.url.trimEnd('/')
+        val path = mangaPathTemplate.resolve(manga.url).trimEnd('/')
         val url = if (page <= 1) baseUrl + path else "$baseUrl$path/$page"
         return GET(url, headers)
     }
@@ -648,14 +661,14 @@ abstract class ReadNovelFull :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(GET(baseUrl + manga.url, headers)).execute().asJsoup()) else manga
+        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)).execute().asJsoup()) else manga
         val updatedChapters = if (fetchChapters) fetchReadNovelFullChapterList(manga, chapters) else chapters
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
     private suspend fun fetchReadNovelFullChapterList(manga: SManga, existingChapters: List<SChapter>): List<SChapter> {
         if (!chaptersPaginated) {
-            return parseChapterListResponse(client.newCall(GET(baseUrl + manga.url, headers)).execute())
+            return parseChapterListResponse(client.newCall(GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)).execute())
         }
 
         val detailDoc = fetchChapterListPage(manga, 1)
@@ -777,6 +790,8 @@ abstract class ReadNovelFull :
             }
         }.reversed()
     }
+
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
     // ======================== Pages ========================
 

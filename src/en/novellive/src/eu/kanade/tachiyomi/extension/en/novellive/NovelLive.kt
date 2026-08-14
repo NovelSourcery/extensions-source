@@ -13,6 +13,7 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.lib.chapterutils.paginatedChapterList
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.formattedText
 import keiyoushi.utils.stripChapterNumberPrefix
 import kotlinx.serialization.json.JsonElement
@@ -33,6 +34,8 @@ import uy.kohesive.injekt.api.get
 @Source
 abstract class NovelLive : ReadNovelFull() {
 
+    override val mangaPathTemplate = SlugPath("/book/")
+
     private val prefs: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
@@ -48,7 +51,7 @@ abstract class NovelLive : ReadNovelFull() {
     // Base picks the cover anchor first (matches a.cover/a[title] earlier in DOM) -> empty title.
     override fun popularMangaFromElement(element: Element): SManga = SManga.create().apply {
         val link = element.selectFirst(".txt h3.tit > a, h3.tit > a") ?: return@apply
-        setUrlWithoutDomain(link.attr("abs:href"))
+        setSlugUrl(link.attr("abs:href"))
         title = link.attr("title").ifBlank { link.text().trim() }
         thumbnail_url = element.selectFirst(".pic img")?.let {
             it.attr("abs:data-src").ifEmpty { it.attr("abs:src") }.ifEmpty { it.attr("src") }
@@ -98,13 +101,13 @@ abstract class NovelLive : ReadNovelFull() {
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(GET(baseUrl + manga.url, headers)).execute().asJsoup()) else manga
+        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)).execute().asJsoup()) else manga
         val updatedChapters = if (fetchChapters) fetchNovelLiveChapterList(manga, chapters) else chapters
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
     private suspend fun fetchNovelLiveChapterList(manga: SManga, existingChapters: List<SChapter>): List<SChapter> {
-        val novelPath = manga.url.trimEnd('/')
+        val novelPath = mangaPathTemplate.resolve(manga.url).trimEnd('/')
         val detailDoc = client.newCall(GET(baseUrl + novelPath, headers)).execute().asJsoup()
         val options = detailDoc.select("#indexselect option")
         val totalPages = options.size.coerceAtLeast(1)

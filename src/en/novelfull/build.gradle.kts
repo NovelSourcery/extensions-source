@@ -17,7 +17,6 @@ keiyoushi {
 
     deeplink {
         host("novelfull.com")
-        path("/{slug}")
-        path("/{slug}/chapter-..*")
+        path("/..*")
     }
 }
