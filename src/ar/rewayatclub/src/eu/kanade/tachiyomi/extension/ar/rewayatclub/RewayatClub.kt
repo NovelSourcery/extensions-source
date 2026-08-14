@@ -329,16 +329,16 @@ abstract class RewayatClub :
     private class TranslatorBlockGroup(checkboxes: List<TranslatorCheckBox>) : Filter.Group<TranslatorCheckBox>("المساهمون", checkboxes)
 
     @Serializable
-    data class NovelsResponse(
-        val count: Int = 0,
+    class NovelsResponse(
+        private val count: Int = 0,
         val next: String? = null,
         val results: List<NovelItem> = emptyList(),
     )
 
     @Serializable
-    data class NovelItem(
+    class NovelItem(
         val arabic: String = "",
-        val english: String = "",
+        private val english: String = "",
         val about: String = "",
         val slug: String = "",
         @SerialName("poster_url") val poster_url: String = "",
@@ -348,42 +348,42 @@ abstract class RewayatClub :
     )
 
     @Serializable
-    data class ContributorItem(
+    class ContributorItem(
         val username: String = "",
-        val id: Int = 0,
+        private val id: Int = 0,
     )
 
     @Serializable
-    data class GenreItem(val arabic: String = "")
+    class GenreItem(val arabic: String = "")
 
     @Serializable
-    data class ChaptersResponse(
-        val count: Int = 0,
+    class ChaptersResponse(
+        private val count: Int = 0,
         val next: String? = null,
         val results: List<ChapterItem> = emptyList(),
     )
 
     @Serializable
-    data class ChapterItem(
+    class ChapterItem(
         val number: Int = 0,
         val title: String = "",
         val date: String = "",
-        @SerialName("novel_slug") val novel_slug: String = "",
+        @SerialName("novel_slug") private val novel_slug: String = "",
         val uploader: UploaderItem? = null,
     )
 
     @Serializable
-    data class ChapterDetail(
-        val id: Int = 0,
-        val number: Int = 0,
-        val title: String = "",
+    class ChapterDetail(
+        private val id: Int = 0,
+        private val number: Int = 0,
+        private val title: String = "",
         val content: List<List<String>> = emptyList(),
     )
 
     @Serializable
-    data class UploaderItem(
+    class UploaderItem(
         val username: String = "",
-        val id: Int = 0,
+        private val id: Int = 0,
     )
 
     companion object {

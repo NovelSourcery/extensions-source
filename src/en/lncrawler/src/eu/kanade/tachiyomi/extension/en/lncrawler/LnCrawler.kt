@@ -536,108 +536,108 @@ abstract class LnCrawler :
     // ======================== Data Classes ========================
 
     @Serializable
-    data class SearchResponse(
-        val count: Int,
+    class SearchResponse(
+        private val count: Int,
         @SerialName("total_pages") val totalPages: Int,
         @SerialName("current_page") val currentPage: Int,
         val results: List<NovelSearchResult>,
     )
 
     @Serializable
-    data class NovelSearchResult(
-        val id: String,
+    class NovelSearchResult(
+        private val id: String,
         val title: String,
         val slug: String = "",
-        @SerialName("sources_count") val sourcesCount: Int = 0,
-        @SerialName("avg_rating") val avgRating: Double? = null,
-        @SerialName("rating_count") val ratingCount: Int = 0,
-        @SerialName("total_views") val totalViews: Int = 0,
-        @SerialName("weekly_views") val weeklyViews: Int = 0,
+        @SerialName("sources_count") private val sourcesCount: Int = 0,
+        @SerialName("avg_rating") private val avgRating: Double? = null,
+        @SerialName("rating_count") private val ratingCount: Int = 0,
+        @SerialName("total_views") private val totalViews: Int = 0,
+        @SerialName("weekly_views") private val weeklyViews: Int = 0,
         @SerialName("prefered_source") val preferedSource: SourceInfo? = null,
-        val languages: List<String>? = null,
-        @SerialName("is_bookmarked") val isBookmarked: Boolean? = null,
-        @SerialName("comment_count") val commentCount: Int = 0,
+        private val languages: List<String>? = null,
+        @SerialName("is_bookmarked") private val isBookmarked: Boolean? = null,
+        @SerialName("comment_count") private val commentCount: Int = 0,
     )
 
     @Serializable
-    data class NovelDetail(
-        val id: String,
+    class NovelDetail(
+        private val id: String,
         val title: String,
         val slug: String,
         val sources: List<SourceInfo>? = null,
-        @SerialName("created_at") val createdAt: String? = null,
-        @SerialName("updated_at") val updatedAt: String? = null,
+        @SerialName("created_at") private val createdAt: String? = null,
+        @SerialName("updated_at") private val updatedAt: String? = null,
         @SerialName("avg_rating") val avgRating: Double? = null,
         @SerialName("rating_count") val ratingCount: Int = 0,
         @SerialName("total_views") val totalViews: Int = 0,
         @SerialName("weekly_views") val weeklyViews: Int = 0,
         @SerialName("prefered_source") val preferedSource: SourceInfo? = null,
-        @SerialName("similar_novels") val similarNovels: List<NovelSearchResult>? = null,
+        @SerialName("similar_novels") private val similarNovels: List<NovelSearchResult>? = null,
     )
 
     @Serializable
-    data class SourceInfo(
-        val id: String,
-        val title: String,
-        @SerialName("source_url") val sourceUrl: String? = null,
+    class SourceInfo(
+        private val id: String,
+        private val title: String,
+        @SerialName("source_url") private val sourceUrl: String? = null,
         @SerialName("source_name") val sourceName: String,
         @SerialName("source_slug") val sourceSlug: String,
         val authors: List<String>? = null,
         val tags: List<String>? = null,
-        val language: String? = null,
+        private val language: String? = null,
         val synopsis: String? = null,
         @SerialName("cover_min_url") val coverMinUrl: String? = null,
         @SerialName("cover_url") val coverUrl: String? = null,
         @SerialName("chapters_count") val chaptersCount: Int = 0,
         @SerialName("volumes_count") val volumesCount: Int = 0,
-        @SerialName("last_chapter_update") val lastChapterUpdate: String? = null,
-        @SerialName("novel_id") val novelId: String? = null,
+        @SerialName("last_chapter_update") private val lastChapterUpdate: String? = null,
+        @SerialName("novel_id") private val novelId: String? = null,
         @SerialName("novel_slug") val novelSlug: String? = null,
-        @SerialName("novel_title") val novelTitle: String? = null,
-        @SerialName("latest_available_chapter") val latestAvailableChapter: ChapterInfo? = null,
-        @SerialName("overview_url") val overviewUrl: String? = null,
+        @SerialName("novel_title") private val novelTitle: String? = null,
+        @SerialName("latest_available_chapter") private val latestAvailableChapter: ChapterInfo? = null,
+        @SerialName("overview_url") private val overviewUrl: String? = null,
     )
 
     @Serializable
-    data class ChapterInfo(
-        val id: Int,
+    class ChapterInfo(
+        private val id: Int,
         @SerialName("chapter_id") val chapterId: Int,
         val title: String,
-        val url: String? = null,
-        val volume: Int? = null,
+        private val url: String? = null,
+        private val volume: Int? = null,
         @SerialName("volume_title") val volumeTitle: String? = null,
-        @SerialName("has_content") val hasContent: Boolean = true,
+        @SerialName("has_content") private val hasContent: Boolean = true,
     )
 
     @Serializable
-    data class ChapterListResponse(
-        @SerialName("novel_id") val novelId: String,
-        @SerialName("novel_title") val novelTitle: String,
+    class ChapterListResponse(
+        @SerialName("novel_id") private val novelId: String,
+        @SerialName("novel_title") private val novelTitle: String,
         @SerialName("novel_slug") val novelSlug: String,
-        @SerialName("source_id") val sourceId: String,
-        @SerialName("source_name") val sourceName: String,
+        @SerialName("source_id") private val sourceId: String,
+        @SerialName("source_name") private val sourceName: String,
         @SerialName("source_slug") val sourceSlug: String,
-        val count: Int,
+        private val count: Int,
         @SerialName("total_pages") val totalPages: Int,
         @SerialName("current_page") val currentPage: Int,
         val chapters: List<ChapterInfo>,
     )
 
     @Serializable
-    data class ChapterContent(
-        val id: Int,
-        @SerialName("chapter_id") val chapterId: Int,
-        val title: String,
-        @SerialName("novel_title") val novelTitle: String? = null,
-        @SerialName("novel_id") val novelId: String? = null,
-        @SerialName("novel_slug") val novelSlug: String? = null,
-        @SerialName("source_id") val sourceId: String? = null,
-        @SerialName("source_name") val sourceName: String? = null,
-        @SerialName("source_slug") val sourceSlug: String? = null,
+    class ChapterContent(
+        private val id: Int,
+        @SerialName("chapter_id") private val chapterId: Int,
+        private val title: String,
+        @SerialName("novel_title") private val novelTitle: String? = null,
+        @SerialName("novel_id") private val novelId: String? = null,
+        @SerialName("novel_slug") private val novelSlug: String? = null,
+        @SerialName("source_id") private val sourceId: String? = null,
+        @SerialName("source_name") private val sourceName: String? = null,
+        @SerialName("source_slug") private val sourceSlug: String? = null,
         val body: String,
-        @SerialName("prev_chapter") val prevChapter: Int? = null,
-        @SerialName("next_chapter") val nextChapter: Int? = null,
+        @SerialName("prev_chapter") private val prevChapter: Int? = null,
+        @SerialName("next_chapter") private val nextChapter: Int? = null,
         @SerialName("images_path") val imagesPath: String? = null,
-        @SerialName("source_overview_image_url") val sourceOverviewImageUrl: String? = null,
+        @SerialName("source_overview_image_url") private val sourceOverviewImageUrl: String? = null,
     )
 }
