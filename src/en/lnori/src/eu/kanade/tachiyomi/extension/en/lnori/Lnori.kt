@@ -64,7 +64,7 @@ abstract class Lnori :
     private val cacheLifetime = DAY_MILLIS
 
     @Serializable
-    data class NovelData(
+    class NovelData(
         val id: String,
         val title: String,
         val author: String,
@@ -109,7 +109,7 @@ abstract class Lnori :
             // Lnori exposes the entire series catalog at /library — fetch that page
             val response = client.newCall(GET("$baseUrl/library", headers)).execute()
             val html = response.body.string()
-            val document = Jsoup.parse(html)
+            val document = Jsoup.parse(html, response.request.url.toString())
 
             // Primary parsing: article.card elements with data-* attributes
             parseFromLibrary(document)

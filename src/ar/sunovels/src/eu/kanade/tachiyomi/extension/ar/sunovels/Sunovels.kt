@@ -34,7 +34,7 @@ abstract class Sunovels :
 
     private fun parsePopularOrLatestResponse(response: Response): MangasPage {
         val body = response.body?.string() ?: return MangasPage(emptyList(), false)
-        val doc = Jsoup.parse(body)
+        val doc = Jsoup.parse(body, response.request.url.toString())
         val novels = mutableListOf<SManga>()
 
         // Extract per-novel data from RSC: each list-item has href + src + title together
@@ -86,7 +86,7 @@ abstract class Sunovels :
         val q = java.net.URLEncoder.encode(query, "UTF-8")
         val response = client.newCall(GET("$baseUrl/search/?title=$q&page=$page", headers)).execute()
         val body = response.body?.string() ?: return MangasPage(emptyList(), false)
-        val doc = Jsoup.parse(body)
+        val doc = Jsoup.parse(body, response.request.url.toString())
         val novels = mutableListOf<SManga>()
 
         // Parse from RSC data (search results are in RSC, not regular HTML)
@@ -164,7 +164,7 @@ abstract class Sunovels :
 
     private fun parseMangaDetails(response: Response): SManga {
         val body = response.body?.string() ?: return SManga.create()
-        val doc = Jsoup.parse(body)
+        val doc = Jsoup.parse(body, response.request.url.toString())
         return SManga.create().apply {
             val novelH1 = doc.selectFirst(".info h1, .novel-header h1, .main-head h1")
             val novelH3 = doc.selectFirst(".info h3, .novel-header h3, .main-head h3")
@@ -210,7 +210,7 @@ abstract class Sunovels :
         val chapters = mutableListOf<SChapter>()
 
         // Parse first page chapters (default = page 0 = chapters 1-50)
-        parseChaptersFromHtml(body, slug, chapters)
+        parseChaptersFromHtml(body, slug, chapters, novelUrl)
 
         // Extract total pages
         val totalPages = extractTotalPages(body)
@@ -233,7 +233,7 @@ abstract class Sunovels :
                             val pageBody = pageResponse.body?.string() ?: return@Thread
                             synchronized(chapters) {
                                 val before = chapters.size
-                                parseChaptersFromHtml(pageBody, slug, chapters)
+                                parseChaptersFromHtml(pageBody, slug, chapters, novelUrl)
                                 if (chapters.size == before) {
                                     synchronized(failedPages) { failedPages.add(page) }
                                 }
@@ -253,9 +253,9 @@ abstract class Sunovels :
         return chapters.sortedBy { it.chapter_number }
     }
 
-    private fun parseChaptersFromHtml(body: String, slug: String, chapters: MutableList<SChapter>) {
+    private fun parseChaptersFromHtml(body: String, slug: String, chapters: MutableList<SChapter>, docUrl: String) {
         // Method 1: Plain HTML links
-        val doc = Jsoup.parse(body)
+        val doc = Jsoup.parse(body, docUrl)
         doc.select("a[href*=/novel/$slug/]").forEach { link ->
             val href = link.attr("href")
             if (href.isEmpty()) return@forEach

@@ -332,7 +332,7 @@ abstract class PawRead :
         fun toUriPart() = genres[state].second
     }
 
-    private fun Response.asJsoup(): Document = Jsoup.parse(body.string())
+    private fun Response.asJsoup(): Document = Jsoup.parse(body.string(), request.url.toString())
 
     companion object {
         private val DATE_FORMAT = SimpleDateFormat("yyyy.MM.dd", Locale.US)

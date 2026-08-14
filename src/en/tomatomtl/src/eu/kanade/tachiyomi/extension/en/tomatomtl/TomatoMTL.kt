@@ -56,7 +56,7 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 @Serializable
-data class SourceItem(
+class SourceItem(
     val id: String,
     val name: String,
     val baseUrl: String = "",
@@ -1004,7 +1004,7 @@ abstract class TomatoMTL :
 
     private fun parseMangaDetailsHtml(response: Response): SManga {
         val html = response.body.string()
-        val document = Jsoup.parse(html)
+        val document = Jsoup.parse(html, response.request.url.toString())
 
         return SManga.create().apply {
             val bookName = extractJsVariable(html, "book_name")

@@ -241,5 +241,5 @@ abstract class ReadFromNet :
         }
     }
 
-    private fun Response.asJsoup(): Document = Jsoup.parse(body.string())
+    private fun Response.asJsoup(): Document = Jsoup.parse(body.string(), request.url.toString())
 }

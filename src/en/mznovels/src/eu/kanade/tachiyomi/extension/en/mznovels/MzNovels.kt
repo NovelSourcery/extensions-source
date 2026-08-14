@@ -183,7 +183,7 @@ abstract class MzNovels :
         val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
         val html = response.body.string()
 
-        val updatedManga = if (fetchDetails) parseMangaDetails(Jsoup.parse(html)) else manga
+        val updatedManga = if (fetchDetails) parseMangaDetails(Jsoup.parse(html, response.request.url.toString())) else manga
         val updatedChapters = if (fetchChapters) fetchAllChapters(response) else chapters
 
         return SMangaUpdate(updatedManga, updatedChapters)

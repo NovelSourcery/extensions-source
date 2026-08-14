@@ -159,5 +159,5 @@ abstract class LightNovelTranslation :
         return content.html()
     }
 
-    private fun Response.asJsoup() = Jsoup.parse(body.string())
+    private fun Response.asJsoup() = Jsoup.parse(body.string(), request.url.toString())
 }
