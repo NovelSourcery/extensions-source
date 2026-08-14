@@ -14,28 +14,30 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
-class LnCrawler :
-    HttpSource(),
+@Source
+abstract class LnCrawler :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
-    override val name = "LnCrawler"
-    override val baseUrl = "https://lncrawler.monster"
     private val apiUrl = "https://api.lncrawler.monster"
-    override val lang = "all"
     override val supportsLatest = true
-    override val isNovelSource = true
 
     private val json: Json = Json {
         ignoreUnknownKeys = true
@@ -47,27 +49,31 @@ class LnCrawler :
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
 
-    override val client = network.cloudflareClient.newBuilder()
-        .addInterceptor { chain ->
-            val request = chain.request()
-            val response = chain.proceed(request)
+    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor { chain ->
+        val request = chain.request()
+        val response = chain.proceed(request)
 
-            response.headers("Set-Cookie").forEach { cookie ->
-                if (cookie.startsWith("csrftoken=")) {
-                    val token = cookie.substringAfter("csrftoken=").substringBefore(";")
-                    preferences.edit().putString(PREF_CSRF_TOKEN, token).apply()
-                }
+        response.headers("Set-Cookie").forEach { cookie ->
+            if (cookie.startsWith("csrftoken=")) {
+                val token = cookie.substringAfter("csrftoken=").substringBefore(";")
+                preferences.edit().putString(PREF_CSRF_TOKEN, token).apply()
             }
-
-            response
         }
-        .build()
+
+        response
+    }
+
+    /** [SManga.url] is stored as the bare "<novelSlug>/<sourceSlug>" under `/novels/`; a stored
+     * value starting with "/" is a pre-existing full-path entry and is resolved unchanged. */
+    private val mangaPath = SlugPath("/novels/")
 
     // ======================== Popular ========================
 
-    override fun popularMangaRequest(page: Int): Request = GET("$apiUrl/novels/search/?page=$page&page_size=24&sort_by=popularity&sort_order=desc", headers)
+    private fun buildPopularMangaRequest(page: Int): Request = GET("$apiUrl/novels/search/?page=$page&page_size=24&sort_by=popularity&sort_order=desc", headers)
 
-    override fun popularMangaParse(response: Response): MangasPage {
+    override suspend fun getPopularManga(page: Int): MangasPage = parsePopularMangaResponse(client.newCall(buildPopularMangaRequest(page)).execute())
+
+    private fun parsePopularMangaResponse(response: Response): MangasPage {
         val searchResponse = json.decodeFromString<SearchResponse>(response.body.string())
 
         val novels = searchResponse.results.map { novel ->
@@ -80,13 +86,13 @@ class LnCrawler :
 
     // ======================== Latest ========================
 
-    override fun latestUpdatesRequest(page: Int): Request = GET("$apiUrl/novels/search/?page=$page&page_size=24&sort_by=last_updated&sort_order=desc", headers)
+    private fun buildLatestUpdatesRequest(page: Int): Request = GET("$apiUrl/novels/search/?page=$page&page_size=24&sort_by=last_updated&sort_order=desc", headers)
 
-    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parsePopularMangaResponse(client.newCall(buildLatestUpdatesRequest(page)).execute())
 
     // ======================== Search ========================
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val url = StringBuilder("$apiUrl/novels/search/?page=$page&page_size=24")
 
         if (query.isNotBlank()) {
@@ -154,22 +160,41 @@ class LnCrawler :
         return GET(url.toString(), headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parsePopularMangaResponse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
 
     // ======================== Details ========================
 
-    override fun mangaDetailsRequest(manga: SManga): Request {
-        val slug = manga.url.removePrefix("/novels/").substringBefore("/")
+    private fun buildMangaDetailsRequest(manga: SManga): Request {
+        val slug = mangaPath.resolve(manga.url).removePrefix("/novels/").substringBefore("/")
         return GET("$apiUrl/novels/$slug/", headers)
     }
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val updatedManga = if (fetchDetails) {
+            parseMangaDetails(client.newCall(buildMangaDetailsRequest(manga)).execute())
+        } else {
+            manga
+        }
+        val updatedChapters = if (fetchChapters) {
+            parseChapterList(client.newCall(buildChapterListRequest(manga)).execute())
+        } else {
+            chapters
+        }
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    private fun parseMangaDetails(response: Response): SManga {
         val novel = json.decodeFromString<NovelDetail>(response.body.string())
 
         val source = getPreferredSource(novel)
 
         return SManga.create().apply {
-            url = "/novels/${novel.slug}/${source?.sourceSlug ?: ""}"
+            url = mangaPath.slug("/novels/${novel.slug}/${source?.sourceSlug ?: ""}")
             title = novel.title
             thumbnail_url = resolveCover(source?.coverUrl ?: novel.preferedSource?.coverUrl)
             author = source?.authors?.joinToString(", ") ?: novel.preferedSource?.authors?.joinToString(", ")
@@ -198,8 +223,8 @@ class LnCrawler :
 
     // ======================== Chapters ========================
 
-    override fun chapterListRequest(manga: SManga): Request {
-        val parts = manga.url.removePrefix("/novels/").split("/")
+    private fun buildChapterListRequest(manga: SManga): Request {
+        val parts = mangaPath.resolve(manga.url).removePrefix("/novels/").split("/")
         val novelSlug = parts[0]
         val sourceSlug = parts.getOrNull(1)
 
@@ -210,7 +235,7 @@ class LnCrawler :
         }
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> {
+    private fun parseChapterList(response: Response): List<SChapter> {
         val body = response.body.string()
 
         return if (body.contains("\"chapters\":")) {
@@ -257,7 +282,7 @@ class LnCrawler :
             if (source != null) {
                 val chaptersRequest = GET("$apiUrl/novels/${novel.slug}/${source.sourceSlug}/chapters/?page=1&page_size=1000", headers)
                 val chaptersResponse = client.newCall(chaptersRequest).execute()
-                return chapterListParse(chaptersResponse)
+                return parseChapterList(chaptersResponse)
             }
 
             emptyList()
@@ -265,16 +290,17 @@ class LnCrawler :
     }
 
     // Return web URL for the manga (used by app webview)
-    override fun getMangaUrl(manga: SManga): String = baseUrl + (if (manga.url.startsWith("/")) manga.url else "/${manga.url}")
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
     // Return web URL for the chapter (used by app webview)
     override fun getChapterUrl(chapter: SChapter): String = baseUrl + (if (chapter.url.startsWith("/")) chapter.url else "/${chapter.url}")
 
     // ======================== Pages ========================
 
-    override fun pageListRequest(chapter: SChapter): Request = GET("$apiUrl${chapter.url.replace("/chapter/", "/chapter/")}/", headers)
-
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.newCall(GET("$apiUrl${chapter.url}", headers)).execute()
+        return listOf(Page(0, response.request.url.toString()))
+    }
 
     // ======================== Page Text (Novel) ========================
 
@@ -337,11 +363,9 @@ class LnCrawler :
         return content.toString()
     }
 
-    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
-
     // ======================== Filters ========================
 
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         Filter.Header("Language"),
         LanguageFilter("Language", languageOptions),
         Filter.Separator(),
@@ -428,7 +452,7 @@ class LnCrawler :
     // ======================== Helpers ========================
 
     private fun novelToSManga(novel: NovelSearchResult): SManga = SManga.create().apply {
-        url = toWebPath("/novels/${novel.preferedSource?.novelSlug ?: novel.slug}/${novel.preferedSource?.sourceSlug ?: ""}")
+        url = mangaPath.slug(toWebPath("/novels/${novel.preferedSource?.novelSlug ?: novel.slug}/${novel.preferedSource?.sourceSlug ?: ""}"))
         title = novel.title
         thumbnail_url = resolveCover(novel.preferedSource?.coverMinUrl ?: novel.preferedSource?.coverUrl)
         author = novel.preferedSource?.authors?.firstOrNull()
