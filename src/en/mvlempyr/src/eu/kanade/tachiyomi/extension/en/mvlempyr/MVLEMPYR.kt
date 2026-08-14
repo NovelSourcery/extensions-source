@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.novelextension.en.mvlempyr
+package eu.kanade.tachiyomi.novelextension.en.mvlempyr
 
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
@@ -10,13 +10,17 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.formattedText
 import keiyoushi.utils.setAltTitles
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
@@ -32,21 +36,23 @@ import java.math.BigInteger
 import java.text.SimpleDateFormat
 import java.util.Locale
 
-class MVLEMPYR :
-    HttpSource(),
+@Source
+abstract class MVLEMPYR :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
-    override val name = "MVLEMPYR"
-    override val baseUrl = "https://www.mvlempyr.io"
-    override val lang = "en"
     override val supportsLatest = true
 
-    override val isNovelSource = true
-
-    override val client = network.cloudflareClient
-
     private val perPage = 20
+
+    /**
+     * The site's novel detail URL shape, as `/novel/<slug>`. [SManga.url] is stored as the bare
+     * slug (see [SlugPath]); a stored value starting with "/" is a pre-existing full-path entry
+     * from before this source adopted slug storage, and is resolved unchanged regardless of
+     * this template.
+     */
+    private val mangaPathTemplate: SlugPath = SlugPath("/novel/")
 
     @Volatile
     private var cachedNovels: List<CachedNovel>? = null
@@ -63,7 +69,7 @@ class MVLEMPYR :
         val tags: List<String>,
     )
 
-    override fun headersBuilder(): Headers.Builder = super.headersBuilder()
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = this
         .add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
         .add("Referer", chapSite)
         .add("Origin", chapSite)
@@ -106,56 +112,25 @@ class MVLEMPYR :
     @Serializable
     private data class ChapterAcf(
         @SerialName("ch_name") val chName: String? = null,
-        @SerialName("novel_code") val novelCode: kotlinx.serialization.json.JsonElement? = null,
-        @SerialName("chapter_number") val chapterNumber: kotlinx.serialization.json.JsonElement? = null,
+        @SerialName("novel_code") val novelCode: JsonElement? = null,
+        @SerialName("chapter_number") val chapterNumber: JsonElement? = null,
     )
 
-    override fun popularMangaRequest(page: Int): Request {
-        // Always load all novels for local filtering (matching TS approach)
-        return GET("$chapSite/wp-json/wp/v2/mvl-novels?per_page=10000", headers)
+    private fun buildNovelListRequest(): Request = GET("$chapSite/wp-json/wp/v2/mvl-novels?per_page=10000", headers)
+
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        ensureCache(client.newCall(buildNovelListRequest()).execute())
+        return getFilteredPage(page, "", FilterList())
     }
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        ensureCache(response)
-        return getFilteredPage(1, "", FilterList())
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        ensureCache(client.newCall(buildNovelListRequest()).execute())
+        return getFilteredPage(page, "", FilterList(), sortBy = "created")
     }
 
-    override fun latestUpdatesRequest(page: Int): Request = GET("$chapSite/wp-json/wp/v2/mvl-novels?per_page=10000", headers)
-
-    override fun latestUpdatesParse(response: Response): MangasPage {
-        ensureCache(response)
-        return getFilteredPage(1, "", FilterList(), sortBy = "created")
-    }
-
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = GET("$chapSite/wp-json/wp/v2/mvl-novels?per_page=10000", headers)
-
-    override fun searchMangaParse(response: Response): MangasPage {
-        ensureCache(response)
-        return MangasPage(emptyList(), false)
-    }
-
-    override fun fetchPopularManga(page: Int): rx.Observable<MangasPage> = rx.Observable.fromCallable {
-        if (cachedNovels == null) {
-            val response = client.newCall(popularMangaRequest(1)).execute()
-            ensureCache(response)
-        }
-        getFilteredPage(page, "", FilterList())
-    }
-
-    override fun fetchLatestUpdates(page: Int): rx.Observable<MangasPage> = rx.Observable.fromCallable {
-        if (cachedNovels == null) {
-            val response = client.newCall(latestUpdatesRequest(1)).execute()
-            ensureCache(response)
-        }
-        getFilteredPage(page, "", FilterList(), sortBy = "created")
-    }
-
-    override fun fetchSearchManga(page: Int, query: String, filters: FilterList): rx.Observable<MangasPage> = rx.Observable.fromCallable {
-        if (cachedNovels == null) {
-            val response = client.newCall(searchMangaRequest(1, query, filters)).execute()
-            ensureCache(response)
-        }
-        getFilteredPage(page, query, filters)
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        ensureCache(client.newCall(buildNovelListRequest()).execute())
+        return getFilteredPage(page, query, filters)
     }
 
     private fun ensureCache(response: Response) {
@@ -270,7 +245,7 @@ class MVLEMPYR :
         val novelCode = obj["novel-code"]?.jsonPrimitive?.longOrNull
         val authorNameValue = obj["author-name"]?.jsonPrimitive?.content
 
-        url = "/novel/$slug"
+        url = mangaPathTemplate.slug("/novel/$slug")
         title = cleanHtml(titleRendered)
         author = authorNameValue
 
@@ -286,41 +261,52 @@ class MVLEMPYR :
             ?: formatDescription(excerptRendered.ifBlank { contentRendered })
     }
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        val doc = Jsoup.parse(response.body.string())
+    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
 
-        return SManga.create().apply {
-            title = doc.selectFirst("h1.novel-title")?.text() ?: "Untitled"
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        // Details and the chapter list both live on the same novel page - fetch it once.
+        val doc = Jsoup.parse(client.newCall(buildMangaDetailsRequest(manga)).execute().body.string())
 
-            val associatedNamesText = doc.select("div.additionalinfo.tm10 > div.textwrapper")
-                .find { it.selectFirst("span")?.text()?.contains("Associated Names", ignoreCase = true) == true }
-                ?.selectFirst("span:last-child, a")?.text()?.trim()
+        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
 
-            description = doc.selectFirst("div.synopsis.w-richtext")?.formattedText()?.trim() ?: ""
-            if (!associatedNamesText.isNullOrBlank()) {
-                val altTitles = associatedNamesText.split(",", ";", "/", "|")
-                    .mapNotNull { it.trim().takeIf { s -> s.isNotBlank() && s != title } }
-                    .distinct()
-                if (altTitles.isNotEmpty()) {
-                    setAltTitles(altTitles)
-                }
-            }
-            author = doc.select("div.additionalinfo.tm10 > div.textwrapper")
-                .find { it.selectFirst("span")?.text()?.contains("Author") == true }
-                ?.selectFirst("a, span:last-child")?.text() ?: ""
-            genre = doc.select(".genre-tags").map { it.text() }.joinToString(", ")
-            status = when {
-                doc.selectFirst(".novelstatustextlarge")?.text()?.contains("Ongoing", ignoreCase = true) == true -> SManga.ONGOING
-                doc.selectFirst(".novelstatustextlarge")?.text()?.contains("Completed", ignoreCase = true) == true -> SManga.COMPLETED
-                else -> SManga.UNKNOWN
-            }
-            thumbnail_url = doc.selectFirst("img.novel-image")?.attr("src")
-        }
+        return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val doc = Jsoup.parse(response.body.string())
+    private fun parseMangaDetails(doc: org.jsoup.nodes.Document): SManga = SManga.create().apply {
+        title = doc.selectFirst("h1.novel-title")?.text() ?: "Untitled"
 
+        val associatedNamesText = doc.select("div.additionalinfo.tm10 > div.textwrapper")
+            .find { it.selectFirst("span")?.text()?.contains("Associated Names", ignoreCase = true) == true }
+            ?.selectFirst("span:last-child, a")?.text()?.trim()
+
+        description = doc.selectFirst("div.synopsis.w-richtext")?.formattedText()?.trim() ?: ""
+        if (!associatedNamesText.isNullOrBlank()) {
+            val altTitles = associatedNamesText.split(",", ";", "/", "|")
+                .mapNotNull { it.trim().takeIf { s -> s.isNotBlank() && s != title } }
+                .distinct()
+            if (altTitles.isNotEmpty()) {
+                setAltTitles(altTitles)
+            }
+        }
+        author = doc.select("div.additionalinfo.tm10 > div.textwrapper")
+            .find { it.selectFirst("span")?.text()?.contains("Author") == true }
+            ?.selectFirst("a, span:last-child")?.text() ?: ""
+        genre = doc.select(".genre-tags").map { it.text() }.joinToString(", ")
+        status = when {
+            doc.selectFirst(".novelstatustextlarge")?.text()?.contains("Ongoing", ignoreCase = true) == true -> SManga.ONGOING
+            doc.selectFirst(".novelstatustextlarge")?.text()?.contains("Completed", ignoreCase = true) == true -> SManga.COMPLETED
+            else -> SManga.UNKNOWN
+        }
+        thumbnail_url = doc.selectFirst("img.novel-image")?.attr("src")
+    }
+
+    private fun parseChapterList(doc: org.jsoup.nodes.Document): List<SChapter> {
         val novelCode = doc.selectFirst("#novel-code")?.text()?.toLongOrNull() ?: return emptyList()
         val convertedId = convertNovelId(BigInteger.valueOf(novelCode))
 
@@ -372,10 +358,9 @@ class MVLEMPYR :
         return chapters.sortedByDescending { it.chapter_number }
     }
 
-    override fun pageListParse(response: Response): List<Page> {
-        val chapterUrl = response.request.url.toString()
-        return listOf(Page(0, chapterUrl))
-    }
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
         // Chapter text is served from the main site (the WP host is Cloudflare-blocked). The text
@@ -391,9 +376,7 @@ class MVLEMPYR :
         return content.html()
     }
 
-    override fun imageUrlParse(response: Response): String = ""
-
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         Filter.Header("Filters (all local)"),
         SortFilter(),
         Filter.Header("Include/Exclude Genres (Tap to toggle)"),
