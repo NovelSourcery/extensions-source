@@ -15,6 +15,7 @@ import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import okhttp3.Request
 import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 
 @Source
 abstract class RewayahFans :
@@ -33,6 +34,16 @@ abstract class RewayahFans :
         else -> "/$this"
     }
 
+    private fun Element.thumbnailUrl(): String = selectFirst("img")?.let { img ->
+        img.attr("data-orig-file")
+            .takeIf { it.isNotEmpty() }
+            ?: img.attr("data-large-file")
+                .takeIf { it.isNotEmpty() }
+            ?: img.attr("src")
+                .takeIf { it.isNotEmpty() }
+            ?: ""
+    } ?: ""
+
     private fun parseNovelList(document: Document): List<SManga> {
         return document.select("figure.wp-block-image").mapNotNull { figure ->
             val captionLink = figure.selectFirst("figcaption a[href]")
@@ -46,7 +57,7 @@ abstract class RewayahFans :
                 SManga.create().apply {
                     url = mangaPathTemplate.slug(relativeUrl)
                     this.title = title
-                    thumbnail_url = imgElement?.attr("src") ?: ""
+                    thumbnail_url = figure.thumbnailUrl()
                 }
             } else {
                 null
@@ -67,7 +78,8 @@ abstract class RewayahFans :
         val response = client.newCall(buildPopularMangaRequest(page)).execute()
         val document = response.asJsoup()
         val novels = parseNovelList(document)
-        return MangasPage(novels, false)
+        val hasNextPage = document.selectFirst(".page-links a.post-page-numbers") != null
+        return MangasPage(novels, hasNextPage)
     }
 
     private fun buildLatestUpdatesRequest(page: Int): Request {
@@ -83,7 +95,8 @@ abstract class RewayahFans :
         val response = client.newCall(buildLatestUpdatesRequest(page)).execute()
         val document = response.asJsoup()
         val novels = parseNovelList(document)
-        return MangasPage(novels, false)
+        val hasNextPage = document.selectFirst(".page-links a.post-page-numbers") != null
+        return MangasPage(novels, hasNextPage)
     }
 
     private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request = GET("$baseUrl/?s=$query", headers)
@@ -102,13 +115,17 @@ abstract class RewayahFans :
                 SManga.create().apply {
                     url = mangaPathTemplate.slug(relativeUrl)
                     this.title = title
-                    thumbnail_url = imgElement?.attr("src") ?: ""
+                    thumbnail_url = imgElement?.attr("data-orig-file")
+                        ?: imgElement?.attr("data-large-file")
+                        ?: imgElement?.attr("src")
+                        ?: ""
                 }
             } else {
                 null
             }
         }.distinctBy { it.url }
-        return MangasPage(novels, false)
+        val hasNextPage = document.selectFirst(".page-links a.post-page-numbers") != null
+        return MangasPage(novels, hasNextPage)
     }
 
     private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
@@ -182,10 +199,7 @@ abstract class RewayahFans :
         return chapters.reversed()
     }
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
-        return listOf(Page(0, response.request.url.encodedPath))
-    }
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET(baseUrl + page.url, headers)).execute()

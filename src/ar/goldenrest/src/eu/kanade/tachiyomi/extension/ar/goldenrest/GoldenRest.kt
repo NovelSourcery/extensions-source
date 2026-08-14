@@ -97,10 +97,9 @@ abstract class GoldenRest :
         return MangasPage(mangas, mangas.isNotEmpty())
     }
 
-    private fun buildMangaDetailsRequest(manga: SManga): Request {
-        val id = mangaPathTemplate.resolve(manga.url).substringAfterLast("/")
-        return GET("$baseUrl/api/mangas/$id", headers)
-    }
+    private fun mangaId(manga: SManga): String = mangaPathTemplate.resolve(manga.url).removePrefix("/mangas/").substringBefore("/")
+
+    private fun buildMangaDetailsRequest(manga: SManga): Request = GET("$baseUrl/api/mangas/${mangaId(manga)}", headers)
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
@@ -124,8 +123,7 @@ abstract class GoldenRest :
     }
 
     private fun loadChapterList(manga: SManga): List<SChapter> {
-        val id = mangaPathTemplate.resolve(manga.url).substringAfterLast("/")
-        val response = client.newCall(GET("$baseUrl/api/mangas/$id/releases?page=1", headers)).execute()
+        val response = client.newCall(GET("$baseUrl/api/mangas/${mangaId(manga)}/releases?page=1", headers)).execute()
         val data = json.decodeFromString<ReleasesResponse>(response.body.string())
         val seen = mutableSetOf<Float>()
 
@@ -215,10 +213,10 @@ abstract class GoldenRest :
             arrayOf("الكل", "مانها", "مانهوا", "مانغا", "ويبتون"),
         )
 
-    private val coverUrl = "https://dilar.tube"
+    private val coverUrl = "https://golden.rest"
 
     private fun MangaDto.toSManga(): SManga = SManga.create().apply {
-        url = mangaPathTemplate.slug("/mangas/$id")
+        url = mangaPathTemplate.slug("/mangas/$id/${this@toSManga.title.toSlug()}")
         title = arabic_title?.takeIf { it.isNotBlank() } ?: this@toSManga.title
         thumbnail_url = if (cover.isNotBlank()) {
             "$coverUrl/manga/cover/$id/medium_$cover"
@@ -235,6 +233,14 @@ abstract class GoldenRest :
             else -> SManga.UNKNOWN
         }
     }
+
+    private fun String.toSlug(): String = this
+        .lowercase()
+        .trim()
+        .replace("[^a-z0-9\\s-]".toRegex(), "")
+        .replace("\\s+".toRegex(), "-")
+        .replace("-+".toRegex(), "-")
+        .trim('-')
 
     private fun parseDate(dateStr: String): Long = try {
         val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)

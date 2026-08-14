@@ -6,17 +6,16 @@ plugins {
 
 keiyoushi {
     name = "Azora"
-    versionCode = 2
+    versionCode = 3
     contentWarning = ContentWarning.SAFE
-    theme = "madaranovel"
 
     source {
         lang = "ar"
-        baseUrl = "https://azoramoon.com"
+        baseUrl = "https://azorafly.com"
     }
 
     deeplink {
-        host("azoramoon.com")
-        path("/novel/..*")
+        host("azorafly.com")
+        path("/series/..*")
     }
 }
