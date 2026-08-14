@@ -25,7 +25,7 @@ abstract class FUCKNOVELPIA :
     KeiSource(),
     NovelSource {
 
-    override val supportsLatest = true
+    override val supportsLatest = false
 
     private var cachedTotalPages: Int = 0
 
@@ -47,8 +47,6 @@ abstract class FUCKNOVELPIA :
 
         return MangasPage(novels, hasNextPage)
     }
-
-    // ======================== Latest ========================
 
     override suspend fun getLatestUpdates(page: Int): MangasPage = getPopularManga(page)
 
