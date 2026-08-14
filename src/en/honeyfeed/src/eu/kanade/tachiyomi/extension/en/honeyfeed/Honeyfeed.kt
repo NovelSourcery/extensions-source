@@ -8,35 +8,42 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.serialization.json.JsonElement
+import okhttp3.Headers
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 
-class Honeyfeed :
-    HttpSource(),
+@Source
+abstract class Honeyfeed :
+    KeiSource(),
     NovelSource {
 
-    override val name = "Honeyfeed"
-    override val baseUrl = "https://www.honeyfeed.fm"
-    override val lang = "en"
     override val supportsLatest = true
 
-    override val client = network.cloudflareClient
-
-    override fun headersBuilder() = super.headersBuilder()
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = this
         .add("Accept", "text/html, application/xhtml+xml")
         .add("Turbolinks-Referrer", baseUrl)
 
     private val logoUrl = "https://www.honeyfeed.fm/assets/main/pages/home/logo-honey-bomon-70595250eae88d365db99bd83ecdc51c917f32478fa535a6b3b6cffb9357c1b4.png"
 
+    /** [SManga.url] is stored as the bare id under `/novels/`; a stored value starting with
+     * "/" is a pre-existing full-path entry and is resolved unchanged. */
+    private val mangaPath = SlugPath("/novels/")
+
     // region Popular
 
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/ranking/monthly?page=$page", headers)
+    private fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/ranking/monthly?page=$page", headers)
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        val doc = response.asJsoup()
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val doc = client.newCall(buildPopularMangaRequest(page)).execute().asJsoup()
         val mangas = parseNovelList(doc)
         return MangasPage(mangas, mangas.isNotEmpty())
     }
@@ -45,15 +52,19 @@ class Honeyfeed :
 
     // region Latest
 
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/novels?page=$page", headers)
+    private fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/novels?page=$page", headers)
 
-    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val doc = client.newCall(buildLatestUpdatesRequest(page)).execute().asJsoup()
+        val mangas = parseNovelList(doc)
+        return MangasPage(mangas, mangas.isNotEmpty())
+    }
 
     // endregion
 
     // region Search
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (query.isNotBlank()) {
             return GET("$baseUrl/search/novel_title?k=$query&page=$page", headers)
         }
@@ -85,13 +96,41 @@ class Honeyfeed :
         return GET(url, headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val doc = client.newCall(buildSearchMangaRequest(page, query, filters)).execute().asJsoup()
+        val mangas = parseNovelList(doc)
+        return MangasPage(mangas, mangas.isNotEmpty())
+    }
 
     // endregion
 
-    // region Details
+    // region Details + Chapters
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate = coroutineScope {
+        // Details and chapters live on different pages - fire both concurrently when both are needed.
+        val detailsDeferred = if (fetchDetails) {
+            async { parseMangaDetails(client.newCall(GET(baseUrl + mangaPath.resolve(manga.url), headers)).execute()) }
+        } else {
+            null
+        }
+        val chaptersDeferred = if (fetchChapters) {
+            async { parseChapterList(client.newCall(GET(baseUrl + mangaPath.resolve(manga.url) + "/chapters", headers)).execute()) }
+        } else {
+            null
+        }
+
+        SMangaUpdate(
+            manga = detailsDeferred?.await() ?: manga,
+            chapters = chaptersDeferred?.await() ?: chapters,
+        )
+    }
+
+    private fun parseMangaDetails(response: Response): SManga {
         val doc = response.asJsoup()
         doc.select("#wrap-button-remove-blur").remove()
 
@@ -110,13 +149,7 @@ class Honeyfeed :
         }
     }
 
-    // endregion
-
-    // region Chapters
-
-    override fun chapterListRequest(manga: SManga): Request = GET("$baseUrl${manga.url}/chapters", headers)
-
-    override fun chapterListParse(response: Response): List<SChapter> {
+    private fun parseChapterList(response: Response): List<SChapter> {
         val doc = response.asJsoup()
         return doc.select("#wrap-chapter .list-chapter .list-group-item a").mapIndexed { index, el ->
             SChapter.create().apply {
@@ -129,11 +162,16 @@ class Honeyfeed :
         }.reversed()
     }
 
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
     // endregion
 
     // region Pages
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.newCall(GET(if (chapter.url.startsWith("http")) chapter.url else baseUrl + chapter.url, headers)).execute()
+        return listOf(Page(0, response.request.url.toString()))
+    }
 
     override suspend fun fetchPageText(page: Page): String {
         val doc = client.newCall(GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)).execute().asJsoup()
@@ -146,8 +184,6 @@ class Honeyfeed :
 
     // endregion
 
-    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
-
     // region Helpers
 
     private fun parseNovelList(doc: Document): List<SManga> {
@@ -156,8 +192,9 @@ class Honeyfeed :
             SManga.create().apply {
                 title = el.selectFirst("h3")?.text() ?: ""
                 thumbnail_url = el.selectFirst("img")?.attr("src") ?: logoUrl
-                url = el.selectFirst(".wrap-novel-links a")?.attr("href")
+                val href = el.selectFirst(".wrap-novel-links a")?.attr("href")
                     ?.removePrefix(baseUrl) ?: ""
+                url = mangaPath.slug(href)
             }
         }
     }
@@ -168,7 +205,7 @@ class Honeyfeed :
 
     // region Filters
 
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         GenreFilter(),
         SortByFilter(),
         AdultFilter(),
