@@ -18,5 +18,6 @@ keiyoushi {
     deeplink {
         host("kuupress.com")
         path("/read/..*")
+        path("/novel/..*")
     }
 }

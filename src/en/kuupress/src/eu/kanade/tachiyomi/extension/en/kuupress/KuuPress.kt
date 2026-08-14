@@ -100,7 +100,7 @@ abstract class KuuPress :
             if (resolvedSlug.isBlank()) return null
             SManga.create().apply {
                 title = cleanHtml(data.str("title").orEmpty())
-                this.url = "/read/$resolvedSlug"
+                this.url = resolvedSlug
                 thumbnail_url = coverUrlFrom(data)
             }
         } catch (_: Exception) {
@@ -185,7 +185,7 @@ abstract class KuuPress :
 
         SManga.create().apply {
             title = cleanHtml(data.str("title").orEmpty())
-            this.url = "/read/${data.str("slug").orEmpty()}"
+            this.url = data.str("slug").orEmpty()
             author = authorName
             thumbnail_url = coverUrlFrom(data)
             status = when (data.str("novel_status")?.lowercase()) {
@@ -446,7 +446,7 @@ abstract class KuuPress :
 
             SManga.create().apply {
                 this.title = title
-                this.url = "/read/$slug"
+                this.url = slug
                 this.thumbnail_url = coverUrlFrom(obj)
                 this.author = obj.str("author_name")?.takeIf { it.isNotBlank() }
                     ?: obj["author"]?.jsonObject?.str("name")
