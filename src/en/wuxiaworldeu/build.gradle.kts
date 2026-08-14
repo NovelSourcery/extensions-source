@@ -19,5 +19,6 @@ keiyoushi {
         host("wuxiaworld.eu")
         host("www.wuxiaworld.eu")
         path("/novel/..*")
+        path("/..*")
     }
 }
