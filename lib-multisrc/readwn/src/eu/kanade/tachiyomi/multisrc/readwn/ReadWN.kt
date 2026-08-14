@@ -298,10 +298,9 @@ abstract class ReadWN :
 
     // ======================== Pages ========================
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
-        return listOf(Page(0, response.request.url.encodedPath))
-    }
+    // Novel: single text page fetched once in fetchPageText. The app's getPageList short-circuit
+    // returns the stub without calling this, so it never double-fetches.
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, baseUrl + chapter.url))
 
     // ======================== Novel Content ========================
 
