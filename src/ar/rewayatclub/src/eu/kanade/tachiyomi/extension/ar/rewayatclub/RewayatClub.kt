@@ -8,26 +8,26 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import okhttp3.Request
 import okhttp3.Response
 import java.text.SimpleDateFormat
 import java.util.Locale
 
-class RewayatClub :
-    HttpSource(),
+@Source
+abstract class RewayatClub :
+    KeiSource(),
     NovelSource {
 
-    override val name = "Rewayat Club"
-    override val baseUrl = "https://rewayat.club"
-    override val lang = "ar"
     override val supportsLatest = true
-    override val isNovelSource = true
-    override val client = network.client
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -35,58 +35,74 @@ class RewayatClub :
     }
     private val apiUrl = "https://api.rewayat.club"
 
-    private var currentNovelSlug = ""
     private var cachedTranslators: List<String> = emptyList()
     private var currentFilterList: FilterList = FilterList()
 
-    override fun popularMangaRequest(page: Int): Request = GET("$apiUrl/api/novels?page=$page", headers)
+    /** [SManga.url] stored as a bare slug via [mangaPathTemplate]. */
+    private val mangaPathTemplate = SlugPath("/novel/")
 
-    override fun popularMangaParse(response: Response): MangasPage {
+    private fun buildPopularMangaRequest(page: Int): Request = GET("$apiUrl/api/novels?page=$page", headers)
+
+    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelsResponse(client.newCall(buildPopularMangaRequest(page)).execute())
+
+    private fun buildLatestUpdatesRequest(page: Int): Request = GET("$apiUrl/api/novels?page=$page", headers)
+
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelsResponse(client.newCall(buildLatestUpdatesRequest(page)).execute())
+
+    private fun parseNovelsResponse(response: Response): MangasPage {
         val body = json.decodeFromString<NovelsResponse>(response.body.string())
         val novels = body.results.map { it.toSManga() }
         return MangasPage(novels, body.next != null)
     }
 
-    override fun latestUpdatesRequest(page: Int): Request = GET("$apiUrl/api/novels?page=$page", headers)
-
-    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
-
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val q = java.net.URLEncoder.encode(query, "UTF-8")
         return GET("$apiUrl/api/novels?page=$page&search=$q", headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseNovelsResponse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
 
-    override fun mangaDetailsRequest(manga: SManga): Request {
-        val slug = manga.url.substringAfterLast("/")
+    private fun buildMangaDetailsRequest(manga: SManga): Request {
+        val slug = mangaPathTemplate.resolve(manga.url).substringAfterLast("/")
         return GET("$apiUrl/api/novels/$slug", headers)
     }
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        val bodyStr = response.body.string()
-        val item = json.decodeFromString<NovelItem>(bodyStr)
-        currentNovelSlug = item.slug
-        cachedTranslators = item.contributors.map { it.username }.filter { it.isNotBlank() }.distinct().sorted()
-        return SManga.create().apply {
-            url = "/novel/${item.slug}"
-            title = item.arabic
-            thumbnail_url = "$apiUrl${item.poster_url}"
-            description = item.about
-            genre = item.genre.joinToString { it.arabic }
-            status = when (item.get_novel_status) {
-                "مكتملة" -> SManga.COMPLETED
-                "مستمرة" -> SManga.ONGOING
-                else -> SManga.UNKNOWN
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val slug = mangaPathTemplate.resolve(manga.url).substringAfterLast("/")
+
+        val updatedManga = if (fetchDetails) {
+            val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+            val item = json.decodeFromString<NovelItem>(response.body.string())
+            cachedTranslators = item.contributors.map { it.username }.filter { it.isNotBlank() }.distinct().sorted()
+            SManga.create().apply {
+                url = mangaPathTemplate.slug("/novel/${item.slug}")
+                title = item.arabic
+                thumbnail_url = "$apiUrl${item.poster_url}"
+                description = item.about
+                genre = item.genre.joinToString { it.arabic }
+                status = when (item.get_novel_status) {
+                    "مكتملة" -> SManga.COMPLETED
+                    "مستمرة" -> SManga.ONGOING
+                    else -> SManga.UNKNOWN
+                }
             }
+        } else {
+            manga
         }
+
+        val updatedChapters = if (fetchChapters) fetchChapterList(slug) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    override fun getFilterList(): FilterList {
-        if (cachedTranslators.isEmpty() && currentNovelSlug.isNotEmpty()) {
-            fetchTranslators(currentNovelSlug)
-        }
-
+    override fun getFilterList(data: JsonElement?): FilterList {
         if (cachedTranslators.isEmpty()) {
             currentFilterList = FilterList(
                 Filter.Header("جاري تحميل المساهمين..."),
@@ -104,24 +120,7 @@ class RewayatClub :
         return currentFilterList
     }
 
-    private fun fetchTranslators(slug: String) {
-        try {
-            val resp = client.newCall(GET("$apiUrl/api/novels/$slug", headers)).execute()
-            val item = json.decodeFromString<NovelItem>(resp.body.string())
-            currentNovelSlug = item.slug
-            cachedTranslators = item.contributors.map { it.username }.filter { it.isNotBlank() }.distinct().sorted()
-        } catch (_: Exception) {
-        }
-    }
-
-    override fun chapterListRequest(manga: SManga): Request {
-        if (currentNovelSlug.isEmpty()) {
-            currentNovelSlug = manga.url.substringAfterLast("/")
-        }
-        return GET("$apiUrl/api/chapters/$currentNovelSlug/?ordering=-number&page=1&page_size=500", headers)
-    }
-
-    override fun chapterListParse(response: Response): List<SChapter> {
+    private fun fetchChapterList(novelSlug: String): List<SChapter> {
         val blocked = currentFilterList.filterIsInstance<TranslatorBlockGroup>()
             .firstOrNull()?.state
             ?.filterIsInstance<TranslatorCheckBox>()
@@ -131,12 +130,8 @@ class RewayatClub :
             ?: emptySet()
 
         val allChapters = mutableListOf<ChapterItem>()
-        val novelSlug = response.request.url.encodedPath.substringAfter("/api/chapters/").trimEnd('/')
 
-        val firstBody = json.decodeFromString<ChaptersResponse>(response.body.string())
-        allChapters.addAll(firstBody.results)
-        var nextUrl = firstBody.next
-
+        var nextUrl: String? = "$apiUrl/api/chapters/$novelSlug/?ordering=-number&page=1&page_size=500"
         while (nextUrl != null) {
             val pageResp = client.newCall(GET(nextUrl, headers)).execute()
             val body = json.decodeFromString<ChaptersResponse>(pageResp.body.string())
@@ -162,8 +157,8 @@ class RewayatClub :
         }.sortedByDescending { it.chapter_number }
     }
 
-    override fun pageListParse(response: Response): List<Page> {
-        val url = response.request.url.encodedPath
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val url = "$baseUrl${chapter.url}"
         return listOf(Page(0, url))
     }
 
@@ -251,7 +246,7 @@ class RewayatClub :
                             i += 2
                         }
                         '0' -> {
-                            sb.append('\u0000')
+                            sb.append(' ')
                             i += 2
                         }
                         else -> {
@@ -290,10 +285,8 @@ class RewayatClub :
         return raw
     }
 
-    override fun imageUrlParse(response: Response): String = ""
-
     private fun NovelItem.toSManga() = SManga.create().apply {
-        url = "/novel/$slug"
+        url = mangaPathTemplate.slug("/novel/$slug")
         title = arabic
         thumbnail_url = "$apiUrl${poster_url}"
         genre = this@toSManga.genre.joinToString { it.arabic }
