@@ -12,7 +12,10 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.formattedText
 import keiyoushi.utils.stripChapterNumberPrefix
 import kotlinx.serialization.Serializable
@@ -28,17 +31,13 @@ import uy.kohesive.injekt.injectLazy
 import java.text.SimpleDateFormat
 import java.util.Locale
 
-class CrimsonScrolls :
-    HttpSource(),
+@Source
+abstract class CrimsonScrolls :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
-    override val name = "Crimson Scrolls"
-    override val baseUrl = "https://crimsonscrolls.net"
-    override val lang = "en"
     override val supportsLatest = false
-    override val isNovelSource = true
-    override val client = network.cloudflareClient
 
     private val json: Json by injectLazy()
 
@@ -47,6 +46,13 @@ class CrimsonScrolls :
     }
 
     private val dateFormat = SimpleDateFormat("MMMM d, yyyy", Locale.US)
+
+    /** [SManga.url] stored as bare slug under "/novel/"; a stored value starting with "/" is a
+     * pre-existing full-path entry and is resolved unchanged. */
+    private val mangaPath = SlugPath("/novel/")
+
+    /** Stores [SManga.url] as a bare slug via [mangaPath]. */
+    private fun SManga.setSlugUrl(href: String) = setSlugUrl(mangaPath, href)
 
     // Highest tier to include; the API returns each tier separately, so we request every tier
     // from free up to (and including) the selected one and merge the results.
@@ -62,7 +68,7 @@ class CrimsonScrolls :
                 ?: return@mapNotNull null
             val href = link.attr("abs:href").ifBlank { return@mapNotNull null }
             SManga.create().apply {
-                setUrlWithoutDomain(href)
+                setSlugUrl(href)
                 title = card.selectFirst(".cs-browse-card__body h2 a")?.let { it.attr("title").ifBlank { it.text() } }
                     ?.trim().orEmpty()
                 thumbnail_url = card.selectFirst(".cs-browse-card__cover img")?.let {
@@ -75,23 +81,37 @@ class CrimsonScrolls :
         return MangasPage(mangas, hasNextPage = false)
     }
 
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/novels/recently-updated/", headers)
-    override fun popularMangaParse(response: Response): MangasPage = parseBrowse(response)
+    override suspend fun getPopularManga(page: Int): MangasPage = parseBrowse(client.newCall(GET("$baseUrl/novels/recently-updated/", headers)).execute())
 
-    override fun latestUpdatesRequest(page: Int): Request = popularMangaRequest(page)
-    override fun latestUpdatesParse(response: Response): MangasPage = parseBrowse(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = getPopularManga(page)
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val url = "$baseUrl/novels/".toHttpUrl().newBuilder()
             .addQueryParameter("s", query)
             .build()
-        return GET(url, headers)
+        return parseBrowse(client.newCall(GET(url, headers)).execute())
     }
-    override fun searchMangaParse(response: Response): MangasPage = parseBrowse(response)
 
-    // Details
+    // Details + Chapters
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPath.resolve(manga.url), headers)
+
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        // Details and the chapter list both live on the same novel page - fetch it once.
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+
+        val updatedManga = if (fetchDetails) parseMangaDetails(response) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(response) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    private fun parseMangaDetails(response: Response): SManga {
         val doc = Jsoup.parse(response.body.string(), baseUrl)
         return SManga.create().apply {
             title = doc.selectFirst("h1")?.text()?.trim().orEmpty()
@@ -113,8 +133,6 @@ class CrimsonScrolls :
         }
     }
 
-    // Chapters
-
     @Serializable
     private class ChapterPage(
         val items: List<ChapterItem> = emptyList(),
@@ -130,7 +148,7 @@ class CrimsonScrolls :
         val date: String = "",
     )
 
-    override fun chapterListParse(response: Response): List<SChapter> {
+    private fun parseChapterList(response: Response): List<SChapter> {
         val doc = Jsoup.parse(response.body.string(), baseUrl)
         val novelId = doc.selectFirst("[data-novel-chapters]")?.attr("data-novel-chapters")
             ?.takeIf { it.isNotBlank() } ?: return emptyList()
@@ -171,11 +189,14 @@ class CrimsonScrolls :
         }.sortedByDescending { it.chapter_number }
     }
 
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
     // Pages / Content
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
-
-    override fun imageUrlParse(response: Response): String = ""
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        return listOf(Page(0, response.request.url.encodedPath))
+    }
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
