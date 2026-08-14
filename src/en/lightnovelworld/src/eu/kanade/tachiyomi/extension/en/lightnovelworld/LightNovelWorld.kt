@@ -15,6 +15,7 @@ import keiyoushi.annotation.Source
 import keiyoushi.lib.chapterutils.paginatedChapterList
 import keiyoushi.lib.chapterutils.shouldReturnExisting
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.parseAs
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -38,6 +39,8 @@ abstract class LightNovelWorld :
     NovelSource {
 
     override val isNovelSource = true
+
+    private val mangaPath = SlugPath("/novel/")
 
     init {
         migrateDeleteLegacyChapterCache()
@@ -87,7 +90,7 @@ abstract class LightNovelWorld :
             val novels = result.novels.map { novel ->
                 SManga.create().apply {
                     title = novel.title
-                    this.url = "/novel/${novel.slug}/"
+                    this.url = novel.slug
                     thumbnail_url = novel.coverPath.toAbsoluteUrl()
                     author = novel.author
                 }
@@ -152,7 +155,7 @@ abstract class LightNovelWorld :
 
             SManga.create().apply {
                 this.title = title
-                url = link.attr("href").removePrefix(baseUrl)
+                url = mangaPath.slug(link.attr("href").removePrefix(baseUrl)).trimEnd('/')
                 thumbnail_url = card.selectFirst(".card-cover img")?.attr("src").toAbsoluteUrl()
             }
         }
@@ -236,7 +239,7 @@ abstract class LightNovelWorld :
     // ======================== Chapters ========================
 
     private fun buildChapterListRequest(manga: SManga): Request {
-        val path = manga.url.trimEnd('/')
+        val path = mangaPath.resolve(manga.url).trimEnd('/')
         return GET("$baseUrl$path/chapters/", headers)
     }
 
@@ -248,7 +251,7 @@ abstract class LightNovelWorld :
     ): SMangaUpdate = coroutineScope {
         // Manga details and the chapter list live on different pages - fire both requests
         // concurrently when both are needed, rather than awaiting them sequentially.
-        val detailsDeferred = if (fetchDetails) async { parseMangaDetails(client.newCall(GET(baseUrl + manga.url, headers)).execute()) } else null
+        val detailsDeferred = if (fetchDetails) async { parseMangaDetails(client.newCall(GET(baseUrl + mangaPath.resolve(manga.url), headers)).execute()) } else null
         val chaptersDeferred = if (fetchChapters) async { fetchLightNovelWorldChapterList(manga, chapters) } else null
         SMangaUpdate(
             manga = detailsDeferred?.await() ?: manga,
@@ -330,6 +333,8 @@ abstract class LightNovelWorld :
     }
 
     // ======================== Chapter Content ========================
+
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
