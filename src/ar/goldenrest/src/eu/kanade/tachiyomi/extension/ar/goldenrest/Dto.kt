@@ -4,12 +4,12 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class ReleasesResponse(
+class ReleasesResponse(
     val releases: List<ReleaseDto> = emptyList(),
 )
 
 @Serializable
-data class ReleaseDto(
+class ReleaseDto(
     val id: Long = 0,
     val manga_id: Long = 0,
     val chapter: Float = 0f,
@@ -23,17 +23,17 @@ data class ReleaseDto(
 )
 
 @Serializable
-data class MangaResponse(
+class MangaResponse(
     val mangaData: MangaDto? = null,
 )
 
 @Serializable
-data class MangaSearchResponse(
+class MangaSearchResponse(
     val results: List<MangaDto> = emptyList(),
 )
 
 @Serializable
-data class MangaDto(
+class MangaDto(
     val id: Long = 0,
     val title: String = "",
     val summary: String? = null,
@@ -49,18 +49,18 @@ data class MangaDto(
 )
 
 @Serializable
-data class AuthorDto(
+class AuthorDto(
     val name: String = "",
     val role: String = "",
 )
 
 @Serializable
-data class CategoryDto(
+class CategoryDto(
     val id: Long = 0,
     val name: String = "",
 )
 
 @Serializable
-data class TypeDto(
+class TypeDto(
     val name: String = "",
 )

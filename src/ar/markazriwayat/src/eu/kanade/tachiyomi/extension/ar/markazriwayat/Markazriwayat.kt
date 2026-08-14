@@ -235,7 +235,7 @@ abstract class Markazriwayat :
     }
 
     @Serializable
-    private data class LibraryResponse(
+    private class LibraryResponse(
         val page: Int = 0,
         @SerialName("per_page") val perPage: Int = 0,
         val total: Int = 0,
@@ -244,7 +244,7 @@ abstract class Markazriwayat :
     )
 
     @Serializable
-    private data class LibraryItem(
+    private class LibraryItem(
         val id: Int = 0,
         val title: String = "",
         val link: String = "",
@@ -255,24 +255,24 @@ abstract class Markazriwayat :
     )
 
     @Serializable
-    private data class StatusInfo(
+    private class StatusInfo(
         val key: String = "",
         val label: String = "",
     )
 
     @Serializable
-    private data class GenreInfo(
+    private class GenreInfo(
         val name: String = "",
     )
 
     @Serializable
-    private data class SearchResponse(
+    private class SearchResponse(
         val items: List<SearchItem> = emptyList(),
         @SerialName("has_more") val hasMore: Boolean = false,
     )
 
     @Serializable
-    private data class SearchItem(
+    private class SearchItem(
         val title: String = "",
         val link: String = "",
         val cover: String = "",
@@ -280,13 +280,13 @@ abstract class Markazriwayat :
     )
 
     @Serializable
-    private data class ChaptersResponse(
+    private class ChaptersResponse(
         val items: List<ChapterItem> = emptyList(),
         @SerialName("has_more") val hasMore: Boolean = false,
     )
 
     @Serializable
-    private data class ChapterItem(
+    private class ChapterItem(
         val label: String = "",
         val url: String = "",
         val num: String = "",
