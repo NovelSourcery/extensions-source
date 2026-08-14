@@ -449,7 +449,7 @@ abstract class ReadNovelMtl :
     // ======================== Data Classes ========================
 
     @Serializable
-    data class SchemaBook(
+    class SchemaBook(
         val name: String,
         val description: String? = null,
         val author: String? = null,

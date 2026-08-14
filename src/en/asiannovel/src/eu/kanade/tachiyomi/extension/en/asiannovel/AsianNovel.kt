@@ -520,7 +520,7 @@ abstract class AsianNovel :
     // ======================== Data Classes ========================
 
     @Serializable
-    data class SchemaBook(
+    class SchemaBook(
         val name: String,
         val description: String? = null,
         val author: SchemaAuthor? = null,
@@ -529,7 +529,7 @@ abstract class AsianNovel :
     )
 
     @Serializable
-    data class SchemaAuthor(
+    class SchemaAuthor(
         val name: String,
     )
 }

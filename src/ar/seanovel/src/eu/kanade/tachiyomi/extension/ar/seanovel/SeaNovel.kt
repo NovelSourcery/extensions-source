@@ -259,7 +259,7 @@ abstract class SeaNovel :
     }
 
     @Serializable
-    data class NovelDto(
+    class NovelDto(
         val slug: String = "",
         @SerialName("title_ar") val titleAr: String = "",
         @SerialName("title_original") val titleOriginal: String = "",
@@ -272,14 +272,14 @@ abstract class SeaNovel :
     )
 
     @Serializable
-    data class ChapterResponse(
+    class ChapterResponse(
         val chapters: List<ChapterDto> = emptyList(),
         val total: Int = 0,
         @SerialName("hasMore") val hasMore: Boolean = false,
     )
 
     @Serializable
-    data class ChapterDto(
+    class ChapterDto(
         val id: Double = 0.0,
         val title: String = "",
         val date: String = "",

@@ -189,7 +189,7 @@ abstract class RoyalRoad :
     protected open fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/fictions/search?page=$page&orderBy=popularity", headers)
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val doc = Jsoup.parse(client.newCall(buildPopularMangaRequest(page)).execute().body.string())
+        val doc = client.newCall(buildPopularMangaRequest(page)).execute().asJsoup()
         return parseNovelsFromSearch(doc)
     }
 
@@ -197,7 +197,7 @@ abstract class RoyalRoad :
     protected open fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/fictions/search?page=$page&orderBy=last_update", headers)
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val doc = Jsoup.parse(client.newCall(buildLatestUpdatesRequest(page)).execute().body.string())
+        val doc = client.newCall(buildLatestUpdatesRequest(page)).execute().asJsoup()
         return parseNovelsFromSearch(doc)
     }
 
@@ -317,7 +317,7 @@ abstract class RoyalRoad :
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val doc = Jsoup.parse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute().body.string())
+        val doc = client.newCall(buildSearchMangaRequest(page, query, filters)).execute().asJsoup()
         return parseNovelsFromSearch(doc)
     }
 
@@ -386,7 +386,7 @@ abstract class RoyalRoad :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list script both live on the same fiction page - fetch it once.
-        val doc = Jsoup.parse(client.newCall(buildMangaDetailsRequest(manga)).execute().body.string())
+        val doc = client.newCall(buildMangaDetailsRequest(manga)).execute().asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
@@ -695,7 +695,7 @@ abstract class RoyalRoad :
 
 // Data classes for JSON parsing
 @Serializable
-private data class ChapterEntry(
+private class ChapterEntry(
     val id: Int,
     val volumeId: Int? = null,
     val title: String,
@@ -710,7 +710,7 @@ private data class ChapterEntry(
 )
 
 @Serializable
-private data class VolumeEntry(
+private class VolumeEntry(
     val id: Int,
     val title: String,
     val cover: String,

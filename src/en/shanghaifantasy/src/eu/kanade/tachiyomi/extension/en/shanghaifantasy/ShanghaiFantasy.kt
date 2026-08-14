@@ -237,14 +237,14 @@ abstract class ShanghaiFantasy :
     // region Data classes
 
     @Serializable
-    data class ShanghaiNovel(
+    class ShanghaiNovel(
         val title: String = "",
         val permalink: String = "",
         val novelImage: String = "",
     )
 
     @Serializable
-    data class ShanghaiChapter(
+    class ShanghaiChapter(
         val title: String = "",
         val permalink: String = "",
         val locked: Boolean = false,

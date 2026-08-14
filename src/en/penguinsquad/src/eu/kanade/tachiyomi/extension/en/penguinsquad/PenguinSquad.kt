@@ -159,13 +159,13 @@ abstract class PenguinSquad :
     // ---- Chapters ----
 
     @Serializable
-    private data class ChapterListDto(
+    private class ChapterListDto(
         val novelSlug: String,
         val chapters: List<ChapterDto>,
     )
 
     @Serializable
-    private data class ChapterDto(
+    private class ChapterDto(
         val title: String,
         val slug: String,
         @SerialName("chapter_number") val chapterNumber: Float,

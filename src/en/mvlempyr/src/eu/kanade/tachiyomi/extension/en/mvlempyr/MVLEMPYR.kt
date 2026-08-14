@@ -81,7 +81,7 @@ abstract class MVLEMPYR :
 
     // WordPress API Response structure
     @Serializable
-    private data class WpNovel(
+    private class WpNovel(
         val id: Int = 0,
         val date: String? = null,
         val slug: String = "",
@@ -97,12 +97,12 @@ abstract class MVLEMPYR :
     )
 
     @Serializable
-    private data class WpRendered(
+    private class WpRendered(
         val rendered: String = "",
     )
 
     @Serializable
-    private data class ChapterPost(
+    private class ChapterPost(
         val id: Int = 0,
         val date: String? = null,
         val link: String? = null,
@@ -111,7 +111,7 @@ abstract class MVLEMPYR :
     )
 
     @Serializable
-    private data class ChapterAcf(
+    private class ChapterAcf(
         @SerialName("ch_name") val chName: String? = null,
         @SerialName("novel_code") val novelCode: JsonElement? = null,
         @SerialName("chapter_number") val chapterNumber: JsonElement? = null,
@@ -271,7 +271,7 @@ abstract class MVLEMPYR :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list both live on the same novel page - fetch it once.
-        val doc = Jsoup.parse(client.newCall(buildMangaDetailsRequest(manga)).execute().body.string())
+        val doc = client.newCall(buildMangaDetailsRequest(manga)).execute().asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
