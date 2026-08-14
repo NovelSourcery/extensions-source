@@ -23,6 +23,7 @@ import keiyoushi.lib.chapterutils.paginatedChapterList
 import keiyoushi.lib.chapterutils.shouldReturnExisting
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.toJsonString
 import keiyoushi.utils.tryParse
@@ -197,9 +198,14 @@ abstract class NovelFire :
         return baseUrl.trimEnd('/') + "/" + migratedPath
     }
 
+    // New entries store the bare slug; resolve() reconstructs "/novel/<slug>" for those, while
+    // legacy full-path entries (old "/book/..." or "/novel/...") pass through unchanged here and
+    // get their book->novel rewrite from absoluteUrl() itself.
+    private val mangaPath = SlugPath("/novel/")
+
     // The rebrand means urls stored before the move still point at /book/ - route WebView/share
     // links through absoluteUrl() too, or they'd 404 on the new domain.
-    override fun getMangaUrl(manga: SManga): String = absoluteUrl(manga.url)
+    override fun getMangaUrl(manga: SManga): String = absoluteUrl(mangaPath.resolve(manga.url))
 
     override fun getChapterUrl(chapter: SChapter): String = absoluteUrl(chapter.url)
 
@@ -330,7 +336,7 @@ abstract class NovelFire :
 
                 SManga.create().apply {
                     this.title = title
-                    this.url = novelUrl.toNovelPath()
+                    this.url = mangaPath.slug(novelUrl.toNovelPath())
                     // Default cover fallback
                     thumbnail_url = when {
                         coverUrl.isNullOrEmpty() -> "$baseUrl/images/no-cover.jpg"
@@ -363,7 +369,7 @@ abstract class NovelFire :
         if (!response.isSuccessful) return null
         val doc = Jsoup.parse(response.body.string())
         checkCloudflare(doc)
-        return mangaDetailsParse(doc).apply { this.url = path }
+        return mangaDetailsParse(doc).apply { this.url = mangaPath.slug(path) }
     }
 
     private fun mangaDetailsParse(doc: Document): SManga = SManga.create().apply {
@@ -430,7 +436,7 @@ abstract class NovelFire :
     ): SMangaUpdate {
         // Manga details and the chapter list both live on the same novel page - fetch it once
         // regardless of which flag(s) are set, rather than issuing the request twice.
-        val response = client.newCall(GET(absoluteUrl(manga.url), headers)).execute()
+        val response = client.newCall(GET(absoluteUrl(mangaPath.resolve(manga.url)), headers)).execute()
         val doc = Jsoup.parse(response.body.string())
         checkCloudflare(doc)
 
