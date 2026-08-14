@@ -12,30 +12,29 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
-import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
-class RoyalRoad :
-    HttpSource(),
+@Source
+abstract class RoyalRoad :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
-    override val name = "Royal Road"
-    override val baseUrl = "https://www.royalroad.com"
-    override val lang = "en"
     override val supportsLatest = true
-
-    override val client = network.cloudflareClient
 
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
@@ -45,6 +44,11 @@ class RoyalRoad :
         ignoreUnknownKeys = true
         isLenient = true
     }
+
+    /** [SManga.url] is stored as the bare slug under "/fiction/" (e.g. "137985/some-slug" or
+     * just an id); a stored value starting with "/" is a pre-existing full-path entry and is
+     * resolved unchanged. */
+    private val mangaPath = SlugPath("/fiction/")
 
     // Novel source implementation
     override suspend fun fetchPageText(page: Page): String {
@@ -182,23 +186,23 @@ class RoyalRoad :
     }
 
     // Popular novels
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/fictions/search?page=$page&orderBy=popularity", headers)
+    protected open fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/fictions/search?page=$page&orderBy=popularity", headers)
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        val doc = Jsoup.parse(response.body.string())
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val doc = Jsoup.parse(client.newCall(buildPopularMangaRequest(page)).execute().body.string())
         return parseNovelsFromSearch(doc)
     }
 
     // Latest updates
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/fictions/search?page=$page&orderBy=last_update", headers)
+    protected open fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/fictions/search?page=$page&orderBy=last_update", headers)
 
-    override fun latestUpdatesParse(response: Response): MangasPage {
-        val doc = Jsoup.parse(response.body.string())
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val doc = Jsoup.parse(client.newCall(buildLatestUpdatesRequest(page)).execute().body.string())
         return parseNovelsFromSearch(doc)
     }
 
     // Search
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    protected open fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val params = mutableMapOf<String, String>()
         params["page"] = page.toString()
 
@@ -312,8 +316,8 @@ class RoyalRoad :
         this[key] = if (current.isNullOrEmpty()) value else "$current,$value"
     }
 
-    override fun searchMangaParse(response: Response): MangasPage {
-        val doc = Jsoup.parse(response.body.string())
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val doc = Jsoup.parse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute().body.string())
         return parseNovelsFromSearch(doc)
     }
 
@@ -337,7 +341,7 @@ class RoyalRoad :
                 thumbnail_url = imgElement?.attr("src")?.let { src ->
                     absoluteUrl(src)
                 } ?: ""
-                url = if (fictionPath.startsWith("/")) fictionPath else "/$fictionPath"
+                url = mangaPath.slug(if (fictionPath.startsWith("/")) fictionPath else "/$fictionPath")
             }
         }
 
@@ -372,12 +376,25 @@ class RoyalRoad :
         return ""
     }
 
-    // Manga details
-    override fun mangaDetailsRequest(manga: SManga): Request = GET(absoluteUrl(manga.url), headers)
+    // Manga details + Chapters
+    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPath.resolve(manga.url), headers)
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        val doc = Jsoup.parse(response.body.string())
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        // Details and the chapter list script both live on the same fiction page - fetch it once.
+        val doc = Jsoup.parse(client.newCall(buildMangaDetailsRequest(manga)).execute().body.string())
 
+        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    private fun parseMangaDetails(doc: Document): SManga {
         val title = doc.selectFirst("h1[property=name]")?.text()
             ?: doc.selectFirst("h1")?.text() ?: ""
         val author = doc.selectFirst("h4[property=author] a")?.text()
@@ -414,15 +431,7 @@ class RoyalRoad :
         }
     }
 
-    // Chapter list
-    override fun chapterListRequest(manga: SManga): Request {
-        // We already have the data from manga details
-        return GET(absoluteUrl(manga.url), headers)
-    }
-
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val doc = Jsoup.parse(response.body.string())
-
+    private fun parseChapterList(doc: Document): List<SChapter> {
         // Extract chapters and volumes from script content
         val scriptContent = doc.select("script").joinToString("\n") { it.html() }
 
@@ -470,17 +479,16 @@ class RoyalRoad :
     }
 
     // Page list - return single page with the chapter URL
-    override fun pageListRequest(chapter: SChapter): Request {
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
         // chapter.url already contains 'fiction/' prefix, e.g., 'fiction/137985/chapter/12345678'
-        return GET(absoluteUrl(chapter.url), headers)
+        val response = client.newCall(GET(absoluteUrl(chapter.url), headers)).execute()
+        return listOf(Page(0, response.request.url.toString(), null))
     }
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString(), null))
-    override fun getMangaUrl(manga: SManga): String = absoluteUrl(manga.url)
-    override fun imageUrlParse(response: Response) = ""
+    override fun getMangaUrl(manga: SManga): String = absoluteUrl(mangaPath.resolve(manga.url))
 
     // Filters
-    override fun getFilterList() = FilterList(
+    override fun getFilterList(data: JsonElement?) = FilterList(
         Filter.Header("Search Filters"),
         Filter.Separator(),
         KeywordFilter(),
