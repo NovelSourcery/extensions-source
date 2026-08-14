@@ -14,6 +14,7 @@ import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.formattedText
 import okhttp3.FormBody
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -135,6 +136,13 @@ abstract class LightNovelTranslation :
     }.distinctBy { it.url }.reversed()
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val manga = SManga.create().apply { this.url = mangaPath.slug(url.encodedPath) }
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        if (!response.isSuccessful) return null
+        return parseMangaDetails(response.asJsoup(), response).apply { this.url = manga.url }
+    }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
         val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()

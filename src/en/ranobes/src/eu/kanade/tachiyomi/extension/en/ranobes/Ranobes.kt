@@ -20,6 +20,7 @@ import keiyoushi.utils.SlugPath
 import keiyoushi.utils.getPreferencesLazy
 import kotlinx.serialization.json.JsonElement
 import okhttp3.FormBody
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -469,6 +470,12 @@ abstract class Ranobes :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val response = client.newCall(GET(url, headers)).execute()
+        if (!response.isSuccessful) return null
+        return parseMangaDetails(response).apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
+    }
 
     // ======================== Pages ========================
 

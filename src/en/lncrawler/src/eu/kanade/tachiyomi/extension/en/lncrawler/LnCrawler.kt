@@ -23,6 +23,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -291,6 +292,14 @@ abstract class LnCrawler :
 
     // Return web URL for the manga (used by app webview)
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val manga = SManga.create().apply { this.url = mangaPath.slug(url.encodedPath) }
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        if (!response.isSuccessful) return null
+        // parseMangaDetails already sets .url from the DTO's own slug/sourceSlug fields.
+        return parseMangaDetails(response)
+    }
 
     // Return web URL for the chapter (used by app webview)
     override fun getChapterUrl(chapter: SChapter): String = baseUrl + (if (chapter.url.startsWith("/")) chapter.url else "/${chapter.url}")

@@ -16,6 +16,7 @@ import keiyoushi.utils.stripChapterNumberPrefix
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import org.jsoup.Jsoup
@@ -107,21 +108,27 @@ abstract class NovelHi :
         // Details and the chapter list's bookId both live on the same novel page - fetch it once.
         val doc = Jsoup.parse(client.newCall(buildMangaDetailsRequest(manga)).execute().body.string(), baseUrl)
 
-        val updatedManga = if (fetchDetails) {
-            SManga.create().apply {
-                title = doc.selectFirst("b.layui-icon")?.text()?.trim().orEmpty()
-                    .ifBlank { doc.selectFirst(".tit h1")?.text()?.trim().orEmpty() }
-                thumbnail_url = doc.selectFirst(".cover, .decorate-img")?.attr("abs:src")
-                author = doc.selectFirst("a[href*=author], .author a")?.text()?.trim()
-                description = doc.selectFirst(".desc, .book-desc, #bookIntro")?.text()?.trim()
-            }
-        } else {
-            manga
-        }
+        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
 
         val updatedChapters = if (fetchChapters) parseChaptersForManga(manga, doc) else chapters
 
         return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    private fun parseMangaDetails(doc: org.jsoup.nodes.Document): SManga = SManga.create().apply {
+        title = doc.selectFirst("b.layui-icon")?.text()?.trim().orEmpty()
+            .ifBlank { doc.selectFirst(".tit h1")?.text()?.trim().orEmpty() }
+        thumbnail_url = doc.selectFirst(".cover, .decorate-img")?.attr("abs:src")
+        author = doc.selectFirst("a[href*=author], .author a")?.text()?.trim()
+        description = doc.selectFirst(".desc, .book-desc, #bookIntro")?.text()?.trim()
+    }
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val slug = mangaPathTemplate.slug(url.encodedPath)
+        val response = client.newCall(GET(baseUrl + mangaPathTemplate.resolve(slug), headers)).execute()
+        if (!response.isSuccessful) return null
+        val doc = Jsoup.parse(response.body.string(), baseUrl)
+        return parseMangaDetails(doc).apply { this.url = slug }
     }
 
     @Serializable

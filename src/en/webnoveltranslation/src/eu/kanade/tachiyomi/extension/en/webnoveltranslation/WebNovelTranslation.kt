@@ -23,6 +23,7 @@ import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import uy.kohesive.injekt.Injekt
@@ -122,6 +123,18 @@ abstract class WebNovelTranslation :
     }
 
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/series/${manga.novelId()}"
+
+    // The API returns the full catalogue in one call, so resolving a pasted /series/<id> URL
+    // just means matching the id against that catalogue - same as fetchMangaUpdate's details path.
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val id = url.encodedPath.trimStart('/').removePrefix("series/").substringBefore('/')
+        val response = client.newCall(buildPopularMangaRequest(1)).execute()
+        if (!response.isSuccessful) return null
+        val novel = response.parseNovelsArray().firstOrNull { it.id == id } ?: return null
+        return novel.toSManga().apply {
+            if (novel.altTitles.isNotEmpty()) setAltTitles(novel.altTitles)
+        }
+    }
 
     private fun loadChapterList(manga: SManga): List<SChapter> {
         val response = client.newCall(GET("$baseUrl/api/chapters/${manga.novelId()}", headers)).execute()

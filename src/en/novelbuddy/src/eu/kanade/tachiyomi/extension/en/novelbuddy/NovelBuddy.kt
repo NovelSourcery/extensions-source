@@ -19,6 +19,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -123,6 +124,14 @@ abstract class NovelBuddy :
     // Details + Chapters
 
     private fun buildMangaDetailsRequest(manga: SManga): Request = GET(buildUrl(manga.url), headers)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val path = url.encodedPath.trimStart('/')
+        val tempManga = SManga.create().apply { this.url = path }
+        val response = client.newCall(buildMangaDetailsRequest(tempManga)).execute()
+        if (!response.isSuccessful) return null
+        return parseMangaDetails(response).apply { this.url = path }
+    }
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,

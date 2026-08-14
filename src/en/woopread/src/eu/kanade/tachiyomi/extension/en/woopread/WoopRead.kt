@@ -16,6 +16,7 @@ import keiyoushi.utils.parseAs
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -87,6 +88,13 @@ abstract class WoopRead :
     }
 
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/series/${extractSlug(manga.url)}"
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val slug = extractSlug(url.encodedPath)
+        val response = client.newCall(GET("$baseUrl/series/$slug", headers)).execute()
+        if (!response.isSuccessful) return null
+        return fetchNovelDetails(SManga.create().apply { this.url = slug })
+    }
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,

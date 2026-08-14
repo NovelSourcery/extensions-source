@@ -19,6 +19,7 @@ import keiyoushi.utils.SlugPath
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.setAltTitles
 import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -91,6 +92,13 @@ abstract class WuxiaDreams :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val response = client.newCall(GET(url, headers)).execute()
+        if (!response.isSuccessful) return null
+        val doc = response.asJsoup()
+        return parseMangaDetails(doc).apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
+    }
 
     private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
         title = doc.selectFirst("h1")?.text().orEmpty()

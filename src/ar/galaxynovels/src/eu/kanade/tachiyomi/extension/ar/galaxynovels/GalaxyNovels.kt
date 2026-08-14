@@ -15,6 +15,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
@@ -177,6 +178,14 @@ abstract class GalaxyNovels :
     }
 
     // ======================== Novel Details + Chapters ========================
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val path = url.encodedPath
+        val response = client.newCall(GET(url, headers)).execute()
+        if (!response.isSuccessful) return null
+        val doc = Jsoup.parse(response.body.string())
+        return parseMangaDetails(doc).apply { this.url = path }
+    }
 
     private fun parseMangaDetails(doc: org.jsoup.nodes.Document): SManga = SManga.create().apply {
         title = doc.selectFirst("h1")?.text()?.trim() ?: "No Title"

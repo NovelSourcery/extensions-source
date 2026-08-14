@@ -489,6 +489,13 @@ abstract class Lnori :
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        if (!response.isSuccessful) return null
+        return parseMangaDetails(Jsoup.parse(response.body.string())).apply { this.url = manga.url }
+    }
+
     private fun parseMangaDetails(document: Document): SManga = SManga.create().apply {
         // Title: try multiple selectors
         title = document.selectFirst(

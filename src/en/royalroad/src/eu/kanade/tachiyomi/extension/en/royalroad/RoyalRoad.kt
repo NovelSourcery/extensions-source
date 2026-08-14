@@ -20,6 +20,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import org.jsoup.Jsoup
@@ -486,6 +487,13 @@ abstract class RoyalRoad :
     }
 
     override fun getMangaUrl(manga: SManga): String = absoluteUrl(mangaPath.resolve(manga.url))
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val response = client.newCall(GET(url, headers)).execute()
+        if (!response.isSuccessful) return null
+        val doc = Jsoup.parse(response.body.string())
+        return parseMangaDetails(doc).apply { this.url = mangaPath.slug(url.encodedPath) }
+    }
 
     // Filters
     override fun getFilterList(data: JsonElement?) = FilterList(

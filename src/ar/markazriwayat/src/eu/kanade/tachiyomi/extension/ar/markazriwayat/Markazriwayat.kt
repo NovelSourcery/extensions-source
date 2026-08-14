@@ -14,6 +14,7 @@ import keiyoushi.utils.tryParse
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -82,6 +83,15 @@ abstract class Markazriwayat :
     }
 
     private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val path = url.encodedPath
+        val response = client.newCall(GET(url, headers)).execute()
+        if (!response.isSuccessful) return null
+        val doc = response.asJsoup()
+        checkCaptcha(doc)
+        return parseMangaDetails(doc).apply { this.url = path }
+    }
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,

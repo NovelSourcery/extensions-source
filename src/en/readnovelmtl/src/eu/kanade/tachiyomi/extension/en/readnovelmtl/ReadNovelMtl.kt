@@ -21,6 +21,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.Request
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
@@ -216,6 +217,14 @@ abstract class ReadNovelMtl :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val response = client.newCall(GET(url, headers)).execute()
+        if (!response.isSuccessful) return null
+        val document = Jsoup.parse(response.body.string())
+        return parseMangaDetails(document, url.encodedPath)
+    }
+
     // ======================== Pages ========================
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {

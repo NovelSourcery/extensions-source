@@ -21,6 +21,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonElement
 import okhttp3.Headers
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -415,6 +416,12 @@ abstract class WebNovelNovels :
 
     // Pages - novel content - return single page with chapter URL for text fetching
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val response = client.newCall(GET(url.toString(), headers)).execute()
+        if (!response.isSuccessful) return null
+        return parseMangaDetails(response).apply { setSlugUrl(url.encodedPath) }
+    }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 

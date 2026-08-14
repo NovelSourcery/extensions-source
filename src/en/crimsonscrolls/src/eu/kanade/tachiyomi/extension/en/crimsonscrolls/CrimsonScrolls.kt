@@ -20,6 +20,7 @@ import keiyoushi.utils.formattedText
 import keiyoushi.utils.stripChapterNumberPrefix
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -190,6 +191,13 @@ abstract class CrimsonScrolls :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val path = url.encodedPath
+        val response = client.newCall(GET(baseUrl + path, headers)).execute()
+        if (!response.isSuccessful) return null
+        return parseMangaDetails(response).apply { setSlugUrl(mangaPath, path) }
+    }
 
     // Pages / Content
 

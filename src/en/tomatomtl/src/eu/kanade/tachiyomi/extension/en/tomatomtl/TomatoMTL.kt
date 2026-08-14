@@ -38,6 +38,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -793,6 +794,15 @@ abstract class TomatoMTL :
     // ======================== Details ========================
 
     private fun buildMangaDetailsRequest(manga: SManga): Request = GET("$baseUrl${manga.url}", headers)
+
+    // Garden novels aren't real browsable pages on the site (require login), so only regular
+    // /book/ pages can be resolved directly from a pasted URL.
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val path = url.encodedPath
+        val response = client.newCall(GET(url.toString(), headers)).execute()
+        if (!response.isSuccessful) return null
+        return parseMangaDetailsHtml(response).apply { this.url = path }
+    }
 
     /**
      * Garden novels: details come from the garden-stats API instead of HTML (garden novel pages

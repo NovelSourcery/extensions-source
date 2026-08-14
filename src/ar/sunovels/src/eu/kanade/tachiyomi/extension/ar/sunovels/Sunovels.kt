@@ -13,6 +13,7 @@ import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -313,6 +314,14 @@ abstract class Sunovels :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val path = mangaPath.slug(url.encodedPath)
+        val manga = SManga.create().apply { this.url = path }
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        if (!response.isSuccessful) return null
+        return parseMangaDetails(response).apply { this.url = path }
+    }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
         val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()

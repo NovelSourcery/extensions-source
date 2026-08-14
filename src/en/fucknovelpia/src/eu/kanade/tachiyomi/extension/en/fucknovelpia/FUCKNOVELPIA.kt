@@ -13,6 +13,7 @@ import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.Request
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
@@ -193,6 +194,14 @@ abstract class FUCKNOVELPIA :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val path = url.encodedPath
+        val response = client.newCall(GET(baseUrl + path, headers)).execute()
+        if (!response.isSuccessful) return null
+        val document = Jsoup.parse(response.body.string())
+        return parseMangaDetails(document).apply { this.url = mangaPath.slug(path) }
+    }
 
     // ======================== Pages ========================
 

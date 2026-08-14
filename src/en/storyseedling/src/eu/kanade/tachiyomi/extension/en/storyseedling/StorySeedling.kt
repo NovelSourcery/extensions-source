@@ -20,6 +20,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.FormBody
 import okhttp3.Headers
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -393,6 +394,14 @@ abstract class StorySeedling :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val response = client.newCall(GET(url, headers)).execute()
+        if (!response.isSuccessful) return null
+        val doc = Jsoup.parse(response.body.string())
+        checkTurnstile(doc)
+        return parseMangaDetails(doc).apply { this.url = mangaPath.slug(url.encodedPath) }
+    }
 
     // ======================== Pages ========================
 

@@ -25,6 +25,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import okhttp3.Headers
+import okhttp3.HttpUrl
 import okhttp3.Request
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
@@ -163,6 +164,25 @@ abstract class Calibre :
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val path = mangaPathTemplate.slug(url.encodedPath)
+        val manga = SManga.create().apply { this.url = path }
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        if (!response.isSuccessful) return null
+        val id = bookId(mangaPathTemplate.resolve(manga.url))
+        val book = json.decodeFromString<BookMetadata>(response.body.string())
+        return bookMetadataToManga(id, book).apply { this.url = path }
+    }
+
+    private fun bookMetadataToManga(id: String, book: BookMetadata): SManga = SManga.create().apply {
+        title = book.title
+        thumbnail_url = "$baseUrl/get/cover/$id"
+        author = book.authors.joinToString()
+        genre = book.tags.joinToString()
+        description = book.comments?.let { stripHtml(it) }
+        status = SManga.UNKNOWN
+    }
+
     override suspend fun fetchMangaUpdate(
         manga: SManga,
         chapters: List<SChapter>,
@@ -173,18 +193,7 @@ abstract class Calibre :
         val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
         val book = json.decodeFromString<BookMetadata>(response.body.string())
 
-        val updatedManga = if (fetchDetails) {
-            SManga.create().apply {
-                title = book.title
-                thumbnail_url = "$baseUrl/get/cover/$id"
-                author = book.authors.joinToString()
-                genre = book.tags.joinToString()
-                description = book.comments?.let { stripHtml(it) }
-                status = SManga.UNKNOWN
-            }
-        } else {
-            manga
-        }
+        val updatedManga = if (fetchDetails) bookMetadataToManga(id, book) else manga
 
         val updatedChapters = if (fetchChapters) fetchChapterList(id, book) else chapters
 

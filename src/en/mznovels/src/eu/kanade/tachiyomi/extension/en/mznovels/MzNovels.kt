@@ -17,6 +17,7 @@ import keiyoushi.utils.SlugPath
 import keiyoushi.utils.formattedText
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -294,6 +295,14 @@ abstract class MzNovels :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val slug = mangaPathTemplate.slug(url.encodedPath)
+        val tempManga = SManga.create().apply { this.url = slug }
+        val response = client.newCall(buildMangaDetailsRequest(tempManga)).execute()
+        if (!response.isSuccessful) return null
+        return parseMangaDetails(Jsoup.parse(response.body.string())).apply { this.url = slug }
+    }
 
     // ======================== Chapter Content ========================
 

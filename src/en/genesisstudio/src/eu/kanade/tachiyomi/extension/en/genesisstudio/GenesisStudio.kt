@@ -24,6 +24,7 @@ import kotlinx.serialization.json.double
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -113,6 +114,19 @@ abstract class GenesisStudio :
     // ======================== Details + Chapters ========================
 
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/novels/${manga.url.split('|').getOrElse(2) { manga.url }}"
+
+    // The site path only carries the slug, but manga details are fetched by abbreviation (see
+    // class kdoc), so first look the slug up in the catalog to recover the packed manga.url.
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val slug = url.encodedPath.substringAfter("/novels/", "").trim('/').takeIf { it.isNotBlank() } ?: return null
+        val listResponse = client.newCall(novelsListRequest()).execute()
+        if (!listResponse.isSuccessful) return null
+        val matched = parseNovelsList(listResponse, null).mangas
+            .firstOrNull { it.url.split('|').getOrNull(2) == slug } ?: return null
+        val response = client.newCall(buildMangaDetailsRequest(matched)).execute()
+        if (!response.isSuccessful) return null
+        return parseMangaDetails(response)
+    }
 
     private fun buildMangaDetailsRequest(manga: SManga): Request {
         val abbreviation = manga.url.substringBefore('|')

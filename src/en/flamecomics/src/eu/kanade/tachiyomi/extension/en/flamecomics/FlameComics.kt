@@ -17,6 +17,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
@@ -143,6 +144,14 @@ abstract class FlameComics :
     // ======================== Details ========================
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        if (!response.isSuccessful) return null
+        val data = json.decodeFromString<NovelDetailsPageData>(response.body.string()).pageProps
+        return parseMangaDetails(data.novels).apply { this.url = manga.url }
+    }
 
     private fun novelIdOf(manga: SManga): String = mangaPathTemplate.resolve(manga.url).substringAfterLast('/')
 

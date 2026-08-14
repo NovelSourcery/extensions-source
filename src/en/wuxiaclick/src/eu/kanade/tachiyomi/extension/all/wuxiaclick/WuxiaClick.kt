@@ -30,6 +30,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import uy.kohesive.injekt.Injekt
@@ -335,6 +336,15 @@ abstract class WuxiaClick :
     override fun getMangaUrl(manga: SManga): String {
         val slug = extractNovelSlug(manga.url)
         return "$baseUrl/novel/$slug"
+    }
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val slug = extractNovelSlug(url.encodedPath)
+        return try {
+            fetchMangaDetails(slug)
+        } catch (e: Exception) {
+            null
+        }
     }
 
     override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapter.url

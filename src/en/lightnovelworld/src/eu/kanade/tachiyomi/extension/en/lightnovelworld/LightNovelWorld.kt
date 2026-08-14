@@ -22,6 +22,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -335,6 +336,13 @@ abstract class LightNovelWorld :
     // ======================== Chapter Content ========================
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val manga = SManga.create().apply { this.url = mangaPath.slug(url.encodedPath) }
+        val response = client.newCall(GET(baseUrl + mangaPath.resolve(manga.url), headers)).execute()
+        if (!response.isSuccessful) return null
+        return parseMangaDetails(response).apply { this.url = manga.url }
+    }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 

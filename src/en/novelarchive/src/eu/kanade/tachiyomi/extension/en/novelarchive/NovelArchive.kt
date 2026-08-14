@@ -13,6 +13,7 @@ import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.parseAs
 import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 
@@ -91,6 +92,41 @@ abstract class NovelArchive :
 
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.url}"
 
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val id = url.encodedPath.removePrefix("/novel/").trim('/')
+        if (id.isBlank()) return null
+        val response = client.newCall(GET("$baseUrl/api/novels/$id", headers)).execute()
+        if (!response.isSuccessful) return null
+        return response.parseAs<NovelDetailResponse>().novel.toSManga()
+    }
+
+    private fun NovelDetailDto.toSManga() = SManga.create().apply {
+        title = this@toSManga.title
+        url = id
+        author = this@toSManga.author
+        thumbnail_url = absoluteCover(coverUrl)
+        genre = cleanGenres(genres)
+        status = when {
+            releaseStatus?.contains("complete", ignoreCase = true) == true -> SManga.COMPLETED
+            ongoing.equals("ongoing", ignoreCase = true) -> SManga.ONGOING
+            else -> SManga.UNKNOWN
+        }
+        description = buildString {
+            rating?.takeIf { it > 0 }?.let {
+                append("Rating: $it")
+                ratingCount?.let { c -> append(" ($c)") }
+                append("\n")
+            }
+            views?.takeIf { it.isNotBlank() }?.let { append("Views: $it\n") }
+            totalChapters?.let { append("Chapters: $it\n") }
+            val desc = this@toSManga.description?.trim()
+            if (!desc.isNullOrBlank()) {
+                if (isNotEmpty()) append("\n")
+                append(desc)
+            }
+        }.trim()
+    }
+
     private fun buildMangaDetailsRequest(manga: SManga): Request = GET("$baseUrl/api/novels/${manga.url}", headers)
 
     override suspend fun fetchMangaUpdate(
@@ -102,36 +138,7 @@ abstract class NovelArchive :
         // Details and the chapter list both live in the same API response - fetch it once.
         val dto = client.newCall(buildMangaDetailsRequest(manga)).execute().parseAs<NovelDetailResponse>().novel
 
-        val updatedManga = if (fetchDetails) {
-            SManga.create().apply {
-                title = dto.title
-                url = dto.id
-                author = dto.author
-                thumbnail_url = absoluteCover(dto.coverUrl)
-                genre = cleanGenres(dto.genres)
-                status = when {
-                    dto.releaseStatus?.contains("complete", ignoreCase = true) == true -> SManga.COMPLETED
-                    dto.ongoing.equals("ongoing", ignoreCase = true) -> SManga.ONGOING
-                    else -> SManga.UNKNOWN
-                }
-                description = buildString {
-                    dto.rating?.takeIf { it > 0 }?.let {
-                        append("Rating: $it")
-                        dto.ratingCount?.let { c -> append(" ($c)") }
-                        append("\n")
-                    }
-                    dto.views?.takeIf { it.isNotBlank() }?.let { append("Views: $it\n") }
-                    dto.totalChapters?.let { append("Chapters: $it\n") }
-                    val desc = dto.description?.trim()
-                    if (!desc.isNullOrBlank()) {
-                        if (isNotEmpty()) append("\n")
-                        append(desc)
-                    }
-                }.trim()
-            }
-        } else {
-            manga
-        }
+        val updatedManga = if (fetchDetails) dto.toSManga() else manga
 
         val updatedChapters = if (fetchChapters) {
             val novelId = dto.id

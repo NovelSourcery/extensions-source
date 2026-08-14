@@ -38,6 +38,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import okhttp3.HttpUrl
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -353,6 +354,15 @@ abstract class FictionZone :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + manga.url
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val path = url.encodedPath
+        // Omniportal entries are proxied external sources with no direct site page to paste.
+        if (!path.startsWith("/novel/")) return null
+        val response = client.newCall(buildMangaDetailsRequest(SManga.create().apply { this.url = path })).execute()
+        if (!response.isSuccessful) return null
+        return parseMangaDetails(response).apply { this.url = path }
+    }
 
     private fun buildMangaDetailsRequest(manga: SManga): Request {
         if (manga.url.startsWith("/omniportal/")) {

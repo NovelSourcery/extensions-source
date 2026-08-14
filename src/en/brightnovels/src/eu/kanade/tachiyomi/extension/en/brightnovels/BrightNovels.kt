@@ -26,6 +26,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import okhttp3.Headers
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -295,6 +296,14 @@ abstract class BrightNovels :
     }
 
     override fun getMangaUrl(manga: SManga): String = dotSafePath("$baseUrl/series/${encodePathSegment(slugOf(manga))}")
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val slug = url.pathSegments.lastOrNull { it.isNotBlank() }?.let(::decodePathSegment) ?: return null
+        val manga = SManga.create().apply { this.url = encodePathSegment(slug) }
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        if (!response.isSuccessful) return null
+        return parseMangaDetails(response)
+    }
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         val showPremiumPref = SwitchPreferenceCompat(screen.context).apply {

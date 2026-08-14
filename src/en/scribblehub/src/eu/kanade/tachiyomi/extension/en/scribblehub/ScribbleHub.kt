@@ -20,6 +20,7 @@ import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.JsonElement
 import okhttp3.FormBody
 import okhttp3.Headers
+import okhttp3.HttpUrl
 import okhttp3.Request
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
@@ -250,6 +251,13 @@ abstract class ScribbleHub :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val response = client.newCall(GET(url, headers)).execute()
+        if (!response.isSuccessful) return null
+        val doc = Jsoup.parse(response.body.string())
+        return parseMangaDetails(doc).apply { this.url = mangaPath.slug(url.encodedPath) }
+    }
 
     // Page list
     override suspend fun getPageList(chapter: SChapter): List<Page> {

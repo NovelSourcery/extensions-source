@@ -20,6 +20,7 @@ import keiyoushi.utils.SlugPath
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import uy.kohesive.injekt.Injekt
@@ -102,6 +103,14 @@ abstract class Wattpad :
     // Details/chapters come from the api/v3 endpoint, but "open in browser" must point at the
     // human story/part page, not the API URL that getMangaUrl/getChapterUrl default to.
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val path = url.encodedPath
+        val response = client.newCall(storyInfoRequest(path)).execute()
+        if (!response.isSuccessful) return null
+        val story = json.decodeFromString<StoryDetails>(response.body.string())
+        return parseMangaDetails(story).apply { this.url = mangaPath.slug(path) }
+    }
 
     override fun getChapterUrl(chapter: SChapter): String {
         val partId = PART_ID_REGEX.find(chapter.url)?.groupValues?.get(1)

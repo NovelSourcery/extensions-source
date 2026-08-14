@@ -15,6 +15,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Headers
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -103,6 +104,13 @@ abstract class BakaTsuki :
     }
 
     override fun getMangaUrl(manga: SManga): String = pagePrefix + manga.url
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val title = url.queryParameter("title")?.replace(" ", "_") ?: return null
+        val response = client.newCall(parseRequest(title)).execute()
+        if (!response.isSuccessful) return null
+        return parseMangaDetails(response).apply { this.url = title }
+    }
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,

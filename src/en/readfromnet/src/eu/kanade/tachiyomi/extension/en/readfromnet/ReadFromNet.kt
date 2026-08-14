@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -110,6 +111,13 @@ abstract class ReadFromNet :
         val updatedChapters = if (fetchChapters) parseChapterList(doc, novelPath) else chapters
 
         return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val mangaUrl = url.encodedPath.removePrefix("/")
+        val response = client.newCall(GET(url, headers)).execute()
+        if (!response.isSuccessful) return null
+        return parseMangaDetails(response.asJsoup()).apply { this.url = mangaUrl }
     }
 
     private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {

@@ -30,6 +30,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Headers
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.jsoup.Jsoup
 import uy.kohesive.injekt.Injekt
@@ -564,6 +565,15 @@ abstract class NovelDex :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val path = url.encodedPath
+        val response = client.newCall(GET(baseUrl + path, rscHeaders())).execute()
+        if (!response.isSuccessful) return null
+        val manga = parseMangaDetails(response.body.string())
+        if (manga.url.isBlank()) manga.url = mangaPath.slug(path)
+        return manga
+    }
 
     // ======================== Pages ========================
 

@@ -22,6 +22,7 @@ import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.JsonElement
 import novelsourcery.lib.siteparsers.SiteParserRegistry
 import okhttp3.FormBody
+import okhttp3.HttpUrl
 import okhttp3.Request
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
@@ -418,6 +419,14 @@ abstract class NovelUpdates :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val response = client.newCall(GET(url.toString(), headers)).execute()
+        if (!response.isSuccessful) return null
+        val requestPath = response.request.url.encodedPath
+        val doc = Jsoup.parse(response.body.string())
+        return parseMangaDetails(doc, requestPath).apply { this.url = mangaPathTemplate.slug(requestPath) }
+    }
 
     private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
 

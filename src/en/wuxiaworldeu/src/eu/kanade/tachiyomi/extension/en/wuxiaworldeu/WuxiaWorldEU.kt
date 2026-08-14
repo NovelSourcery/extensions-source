@@ -18,6 +18,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -83,6 +84,15 @@ abstract class WuxiaWorldEU :
     // ======================== Details ========================
 
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.url}"
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val slug = url.encodedPath.removePrefix("/novel/").trim('/')
+        val tempManga = SManga.create().apply { this.url = slug }
+        val response = client.newCall(buildMangaDetailsRequest(tempManga)).execute()
+        if (!response.isSuccessful) return null
+        val data = json.parseToJsonElement(response.body.string()).jsonObject
+        return parseMangaDetails(data).apply { this.url = slug }
+    }
 
     private fun buildMangaDetailsRequest(manga: SManga): Request = GET("$baseUrl/api/novels/${manga.url}/", headers)
 

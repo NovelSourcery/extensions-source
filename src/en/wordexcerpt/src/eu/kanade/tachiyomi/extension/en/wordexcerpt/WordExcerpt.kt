@@ -16,6 +16,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.Headers
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -132,6 +133,14 @@ abstract class WordExcerpt :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val slug = url.encodedPath.trim('/')
+        val response = client.newCall(novelBySlugRequest(slug)).execute()
+        if (!response.isSuccessful) return null
+        val novel = json.decodeFromString<List<Novel>>(response.body.string()).firstOrNull() ?: return null
+        return novel.toSManga()
+    }
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,

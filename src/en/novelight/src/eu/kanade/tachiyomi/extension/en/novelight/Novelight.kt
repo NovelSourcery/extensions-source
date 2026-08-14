@@ -23,6 +23,7 @@ import keiyoushi.utils.setVolume
 import keiyoushi.utils.stripChapterNumberPrefix
 import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -230,6 +231,14 @@ abstract class Novelight :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val path = url.encodedPath
+        val response = client.newCall(GET(url, headers)).execute()
+        if (!response.isSuccessful) return null
+        val doc = Jsoup.parse(response.body.string(), baseUrl)
+        return parseMangaDetails(doc).apply { this.url = mangaPath.slug(path) }
+    }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, "$baseUrl${chapter.url}"))
 

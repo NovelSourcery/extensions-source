@@ -39,6 +39,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -637,6 +638,14 @@ abstract class WtrLab :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val slug = mangaPath.slug(url.encodedPath)
+        val tempManga = SManga.create().apply { this.url = slug }
+        val response = client.newCall(buildMangaDetailsRequest(tempManga)).execute()
+        if (!response.isSuccessful) return null
+        return parseMangaDetailsJson(response).apply { this.url = slug }
+    }
 
     private fun parseMangaDetailsJson(response: Response): SManga {
         val manga = SManga.create()

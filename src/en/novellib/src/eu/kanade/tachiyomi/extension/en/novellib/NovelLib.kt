@@ -20,6 +20,7 @@ import keiyoushi.utils.getPreferencesLazy
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -211,6 +212,14 @@ abstract class NovelLib :
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val tempManga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
+        val response = client.newCall(buildMangaDetailsRequest(tempManga)).execute()
+        if (!response.isSuccessful) return null
+        val doc = Jsoup.parse(response.body.string())
+        return parseMangaDetails(doc).apply { this.url = tempManga.url }
+    }
 
     // ======================== Chapter Content ========================
 
