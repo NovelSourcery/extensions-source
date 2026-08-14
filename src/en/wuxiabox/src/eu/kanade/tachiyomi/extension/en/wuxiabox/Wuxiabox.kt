@@ -2,17 +2,19 @@ package eu.kanade.tachiyomi.novelextension.en.wuxiabox
 
 import eu.kanade.tachiyomi.multisrc.readwn.ReadWN
 import eu.kanade.tachiyomi.network.GET
+import keiyoushi.annotation.Source
 import okhttp3.Request
 
-class Wuxiabox : ReadWN("Wuxiabox", "https://wuxiabox.com", "en") {
+@Source
+abstract class Wuxiabox : ReadWN() {
     // Wuxiabox uses the "all-onclick" pagination for popular (sort by Popular)
-    override fun popularMangaRequest(page: Int): Request {
+    override fun buildPopularMangaRequest(page: Int): Request {
         val idx = page - 1
         return GET("$baseUrl/list/all/all-onclick-$idx.html", headers)
     }
 
     // Latest/Updates use the lastdotime sort
-    override fun latestUpdatesRequest(page: Int): Request {
+    override fun buildLatestUpdatesRequest(page: Int): Request {
         val idx = page - 1
         return GET("$baseUrl/list/all/all-lastdotime-$idx.html", headers)
     }
