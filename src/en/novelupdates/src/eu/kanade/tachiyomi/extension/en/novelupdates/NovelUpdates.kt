@@ -15,28 +15,35 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
+import kotlinx.serialization.json.JsonElement
 import novelsourcery.lib.siteparsers.SiteParserRegistry
 import okhttp3.FormBody
 import okhttp3.Request
-import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
-class NovelUpdates :
-    HttpSource(),
+@Source
+abstract class NovelUpdates :
+    KeiSource(),
     NovelSource,
     ConfigurableSource,
     SourceTracker {
 
-    override val name = "Novel Updates"
-    override val baseUrl = "https://www.novelupdates.com"
-    override val lang = "en"
     override val supportsLatest = true
 
-    override val client = network.cloudflareClient
+    /**
+     * The site's novel detail URL shape, as `/series/<slug>`. [SManga.url] is stored as the bare
+     * slug (see [SlugPath]); a stored value starting with "/" is a pre-existing full-path entry
+     * from before this source adopted slug storage, and is resolved unchanged regardless of
+     * this template.
+     */
+    private val mangaPathTemplate = SlugPath("/series/")
 
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
@@ -165,7 +172,7 @@ class NovelUpdates :
             ?: return
 
         if (preferences.getBoolean(PREF_PROTECT_HIGHEST, true)) {
-            val cached = highestTrackedNumber(cacheKey(manga.url))
+            val cached = highestTrackedNumber(cacheKey(mangaPathTemplate.resolve(manga.url)))
             if (cached != null && target.chapter_number <= cached) return
         }
 
@@ -183,7 +190,7 @@ class NovelUpdates :
         }
 
         if (anySuccess) {
-            recordHighestTracked(cacheKey(manga.url), target.chapter_number)
+            recordHighestTracked(cacheKey(mangaPathTemplate.resolve(manga.url)), target.chapter_number)
         }
     }
 
@@ -204,7 +211,7 @@ class NovelUpdates :
 
         if (preferences.getBoolean(PREF_TRACK_LAST_READ, true)) {
             if (syncChapter(novelId, target, checked = "no")) {
-                forgetHighestTracked(cacheKey(manga.url))
+                forgetHighestTracked(cacheKey(mangaPathTemplate.resolve(manga.url)))
             }
         }
     }
@@ -258,13 +265,14 @@ class NovelUpdates :
     }
 
     private fun resolveNovelId(manga: SManga): String? {
-        val key = cacheKey(manga.url)
+        val resolvedPath = mangaPathTemplate.resolve(manga.url)
+        val key = cacheKey(resolvedPath)
         loadNovelIdCache()[key]?.let { return it }
         synchronized(novelIdCache) {
             novelIdCache[key]?.let { return it }
         }
 
-        val url = if (manga.url.startsWith("http")) manga.url else baseUrl + manga.url
+        val url = if (resolvedPath.startsWith("http")) resolvedPath else baseUrl + resolvedPath
         val resolved: String? = try {
             val response = client.newCall(GET(url)).execute()
             val doc = Jsoup.parse(response.use { it.body.string() }, url)
@@ -360,21 +368,21 @@ class NovelUpdates :
         private const val PREF_HIGHEST_CACHE = "pref_highest_tracked_cache"
     }
 
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/series-ranking/?rank=popmonth&pg=$page", headers)
+    private fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/series-ranking/?rank=popmonth&pg=$page", headers)
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        val doc = Jsoup.parse(response.body.string())
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val doc = Jsoup.parse(client.newCall(buildPopularMangaRequest(page)).execute().body.string())
         return parseNovelsFromSearch(doc)
     }
 
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/series-finder/?sf=1&sort=sdate&order=desc&pg=$page", headers)
+    private fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/series-finder/?sf=1&sort=sdate&order=desc&pg=$page", headers)
 
-    override fun latestUpdatesParse(response: Response): MangasPage {
-        val doc = Jsoup.parse(response.body.string())
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val doc = Jsoup.parse(client.newCall(buildLatestUpdatesRequest(page)).execute().body.string())
         return parseNovelsFromSearch(doc)
     }
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val url = if (query.isNotEmpty()) {
             // Split on '*' and use the longest segment, matching TS behaviour
             val longestTerm = query.split("*").maxByOrNull { it.length } ?: query
@@ -386,8 +394,8 @@ class NovelUpdates :
         return GET(url, headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage {
-        val doc = Jsoup.parse(response.body.string())
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val doc = Jsoup.parse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute().body.string())
         return parseNovelsFromSearch(doc)
     }
 
@@ -399,7 +407,7 @@ class NovelUpdates :
             SManga.create().apply {
                 title = titleElement.text()
                 thumbnail_url = element.select("img").attr("src")
-                url = novelUrl.removePrefix(baseUrl)
+                url = mangaPathTemplate.slug(novelUrl.removePrefix(baseUrl))
             }
         }
 
@@ -409,13 +417,30 @@ class NovelUpdates :
         return MangasPage(novels, hasNextPage)
     }
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
+
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        // Details and the chapter list both live on the same novel page - fetch it once.
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val requestPath = response.request.url.encodedPath
         val doc = Jsoup.parse(response.body.string())
 
+        val updatedManga = if (fetchDetails) parseMangaDetails(doc, requestPath) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(doc, requestPath) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    private fun parseMangaDetails(doc: Document, requestPath: String): SManga {
         runCatching {
-            val mangaPath = cacheKey(response.request.url.encodedPath)
+            val mangaPath = cacheKey(requestPath)
             val shortlink = doc.select("link[rel=shortlink]").attr("href")
             val novelId = Regex("\\?p=(\\d+)").find(shortlink)?.groupValues?.get(1)
                 ?: doc.select("input#mypostid").attr("value").takeIf { it.isNotEmpty() }
@@ -460,16 +485,12 @@ class NovelUpdates :
         }
     }
 
-    override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
-
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val doc = Jsoup.parse(response.body.string())
-
+    private fun parseChapterList(doc: Document, requestPath: String): List<SChapter> {
         val novelId = doc.select("input#mypostid").attr("value")
         if (novelId.isEmpty()) return emptyList()
 
         runCatching {
-            persistNovelId(cacheKey(response.request.url.encodedPath), novelId)
+            persistNovelId(cacheKey(requestPath), novelId)
         }
 
         val formBody = FormBody.Builder()
@@ -510,13 +531,12 @@ class NovelUpdates :
         }
     }
 
-    override fun pageListRequest(chapter: SChapter): Request = GET(chapter.url, headers)
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.newCall(GET(chapter.url, headers)).execute()
+        return listOf(Page(0, response.request.url.toString()))
+    }
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString(), null))
-
-    override fun imageUrlParse(response: Response) = ""
-
-    override fun getFilterList() = FilterList(
+    override fun getFilterList(data: JsonElement?) = FilterList(
         Filter.Header("NOTE: Filters are ignored if using text search!"),
         Filter.Separator(),
         SortFilter(),
