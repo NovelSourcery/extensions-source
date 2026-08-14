@@ -22,6 +22,7 @@ import keiyoushi.annotation.Source
 import keiyoushi.lib.chapterutils.mergeChapters
 import keiyoushi.lib.chapterutils.shouldReturnExisting
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.jsonInstance
 import keiyoushi.utils.setAltTitles
 import kotlinx.coroutines.async
@@ -85,6 +86,11 @@ abstract class WtrLab :
 
     private val json = jsonInstance
     private val preferences = Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+
+    /** [SManga.url] is stored as bare "<rawId>/<slug>"; a stored value starting with "/" is a
+     * pre-existing full-path entry (either "/en/novel/<id>/<slug>" or the legacy
+     * "/en/serie-<id>/<slug>") and is resolved unchanged. */
+    private val mangaPath = SlugPath("/en/novel/")
 
     private val apiHeaders by lazy {
         headersBuilder()
@@ -485,7 +491,7 @@ abstract class WtrLab :
             SManga.create().apply {
                 title = data?.get("title")?.jsonPrimitive?.contentOrNull ?: ""
                 thumbnail_url = transformImageUrl(data?.get("image")?.jsonPrimitive?.contentOrNull)
-                url = "/en/novel/$rawId/$slug"
+                url = "$rawId/$slug"
             }
         }
 
@@ -513,7 +519,7 @@ abstract class WtrLab :
             SManga.create().apply {
                 title = serieData?.get("title")?.jsonPrimitive?.contentOrNull ?: ""
                 thumbnail_url = transformImageUrl(serieData?.get("image")?.jsonPrimitive?.contentOrNull)
-                url = "/en/novel/$rawId/$slug"
+                url = "$rawId/$slug"
             }
         }
 
@@ -622,7 +628,7 @@ abstract class WtrLab :
         // url shape: /en/novel/<raw_id>/<slug> (legacy: /en/serie-<raw_id>/<slug>). The _next/data
         // JSON route 308s straight to the plain HTML page for legacy paths, so always request the
         // canonical novel/ path here.
-        val match = Regex("""(?:novel/|serie-)(\d+)/([^/?#]+)""").find(manga.url)
+        val match = Regex("""(?:novel/|serie-)(\d+)/([^/?#]+)""").find(mangaPath.resolve(manga.url))
         val rawId = match?.groupValues?.get(1) ?: ""
         val slug = match?.groupValues?.get(2) ?: ""
         val url = "$baseUrl/_next/data/$buildId/en/novel/$rawId/$slug.json" +
@@ -630,7 +636,7 @@ abstract class WtrLab :
         return GET(url, headers)
     }
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl${manga.url}"
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
     private fun parseMangaDetailsJson(response: Response): SManga {
         val manga = SManga.create()
@@ -759,7 +765,7 @@ abstract class WtrLab :
         return manga
     }
 
-    private fun buildChapterListRequest(manga: SManga): Request = GET("$baseUrl${manga.url}", headers)
+    private fun buildChapterListRequest(manga: SManga): Request = GET(baseUrl + mangaPath.resolve(manga.url), headers)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -939,7 +945,7 @@ abstract class WtrLab :
     private fun rawIdOf(url: String): Int? = Regex("""novel/(\d+)/""").find(url)?.groupValues?.get(1)?.toIntOrNull()
 
     private fun serieIds(manga: SManga): SerieIds? {
-        val rawId = rawIdOf(manga.url) ?: return null
+        val rawId = rawIdOf(mangaPath.resolve(manga.url)) ?: return null
         val cached = serieIdCache[rawId] ?: preferences.getInt("$SID_PREFIX$rawId", -1).takeIf { it > 0 }
         val sid = cached ?: fetchSerieId(manga, rawId) ?: return null
         return SerieIds(sid, rawId)
