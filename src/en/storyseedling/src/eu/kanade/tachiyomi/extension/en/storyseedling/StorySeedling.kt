@@ -9,8 +9,12 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -27,19 +31,19 @@ import uy.kohesive.injekt.injectLazy
  * @see https://github.com/LNReader/lnreader-plugins StorySeedling.ts
  * Uses AJAX API with FormData for chapter list (series_toc action)
  */
-class StorySeedling :
-    HttpSource(),
+@Source
+abstract class StorySeedling :
+    KeiSource(),
     NovelSource {
 
-    override val name = "StorySeedling"
-    override val baseUrl = "https://storyseedling.com"
-    override val lang = "en"
     override val supportsLatest = true
-
-    override val client = network.cloudflareClient
     private val json: Json by injectLazy()
 
-    override fun headersBuilder(): Headers.Builder = super.headersBuilder()
+    /** [SManga.url] is stored as the bare slug under "/series/"; a stored value starting with
+     * "/" is a pre-existing full-path entry and is resolved unchanged. */
+    private val mangaPath = SlugPath("/series/")
+
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = this
         .add("X-Requested-With", "XMLHttpRequest")
         .add("Referer", "$baseUrl/")
 
@@ -85,7 +89,7 @@ class StorySeedling :
 
     // ======================== Popular/Browse ========================
 
-    override fun popularMangaRequest(page: Int): Request {
+    protected open fun buildPopularMangaRequest(page: Int): Request {
         // LN Reader: Uses browse() post value from page, with fetch_browse action
         // NOTE: This is called for both "Popular" and when filters are used without search text
         // Filters should be handled here too, not just in search
@@ -103,7 +107,9 @@ class StorySeedling :
         )
     }
 
-    override fun popularMangaParse(response: Response): MangasPage {
+    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.newCall(buildPopularMangaRequest(page)).execute())
+
+    private fun parseMangaListResponse(response: Response): MangasPage {
         val responseBody = response.body.string()
         if (responseBody.isBlank()) return MangasPage(emptyList(), false)
 
@@ -126,7 +132,7 @@ class StorySeedling :
                     SManga.create().apply {
                         this.title = title
                         thumbnail_url = cover
-                        url = permalink.replace(baseUrl, "")
+                        url = mangaPath.slug(permalink.replace(baseUrl, ""))
                     }
                 } catch (e: Exception) {
                     null
@@ -141,11 +147,11 @@ class StorySeedling :
         }
     }
 
-    override fun latestUpdatesRequest(page: Int): Request = popularMangaRequest(page)
+    protected open fun buildLatestUpdatesRequest(page: Int): Request = buildPopularMangaRequest(page)
 
-    override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(client.newCall(buildLatestUpdatesRequest(page)).execute())
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    protected open fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         var orderBy = "recent"
         var status = ""
         val includeGenres = mutableListOf<String>()
@@ -204,61 +210,72 @@ class StorySeedling :
         return POST("$baseUrl/ajax", headers, body.build())
     }
 
-    override fun searchMangaParse(response: Response) = popularMangaParse(response)
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseMangaListResponse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
 
-    // ======================== Details ========================
+    // ======================== Details + Chapters ========================
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        val doc = Jsoup.parse(response.body.string())
+    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPath.resolve(manga.url), headers)
 
-        // Check for Turnstile
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        // Details and the chapter list toc data both live on the same story page.
+        val doc = Jsoup.parse(client.newCall(buildMangaDetailsRequest(manga)).execute().body.string())
         checkTurnstile(doc)
 
-        return SManga.create().apply {
-            title = doc.selectFirst("h1")?.text()?.trim() ?: ""
+        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
 
-            // LN Reader: img[x-ref="art"].w-full.rounded.shadow-md
-            val coverUrl = doc.selectFirst("img[x-ref=\"art\"].w-full.rounded.shadow-md")?.attr("src")
-            if (coverUrl != null) {
-                thumbnail_url = if (coverUrl.startsWith("http")) coverUrl else "$baseUrl$coverUrl"
-            }
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
 
-            // Get author from "Written by" section
-            // Format: <div class="mb-1 leading-7"><span>Written by</span><a href="...">AuthorName</a></div>
-            author = doc.selectFirst("div.mb-1.leading-7:has(span:contains(Written by)) a")?.text()?.trim()
+    private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
+        title = doc.selectFirst("h1")?.text()?.trim() ?: ""
 
-            // Get genres from both main genre section and additional tags
-            val mainGenres = doc.select(
-                "section[x-data=\"{ tab: location.hash.substr(1) || 'chapters' }\"].relative > div > div > div.flex.flex-wrap > a",
-            ).map { it.text().trim() }
+        // LN Reader: img[x-ref="art"].w-full.rounded.shadow-md
+        val coverUrl = doc.selectFirst("img[x-ref=\"art\"].w-full.rounded.shadow-md")?.attr("src")
+        if (coverUrl != null) {
+            thumbnail_url = if (coverUrl.startsWith("http")) coverUrl else "$baseUrl$coverUrl"
+        }
 
-            // Additional tags from order-3 section with tag links
-            // Format: <a href="https://storyseedling.com/browse/?includeTags%5B%5D=XXX" class="...">#+TagName</a>
-            val additionalTags = doc.select("div.order-3 div.flex.flex-wrap a[href*=includeTags]")
-                .map { it.text().replace("#", "").trim() }
+        // Get author from "Written by" section
+        // Format: <div class="mb-1 leading-7"><span>Written by</span><a href="...">AuthorName</a></div>
+        author = doc.selectFirst("div.mb-1.leading-7:has(span:contains(Written by)) a")?.text()?.trim()
 
-            genre = (mainGenres + additionalTags).distinct().filter { it.isNotBlank() }.joinToString(", ")
+        // Get genres from both main genre section and additional tags
+        val mainGenres = doc.select(
+            "section[x-data=\"{ tab: location.hash.substr(1) || 'chapters' }\"].relative > div > div > div.flex.flex-wrap > a",
+        ).map { it.text().trim() }
 
-            // Description from the order-3 lg:grid-in-content section
-            // Format: <div class="order-3 lg:grid-in-content"><div x-data="{ expanded: false }">...<p>...</p></div>
-            val descContainer = doc.selectFirst("div.order-3.lg\\:grid-in-content div[x-data*=expanded] div.mb-4.order-2")
-                ?: doc.selectFirst("div.order-3.lg\\:grid-in-content div[x-data] div.grid div.mb-4")
-                ?: doc.selectFirst("div.order-3 div[x-data] div.mb-4.order-2")
+        // Additional tags from order-3 section with tag links
+        // Format: <a href="https://storyseedling.com/browse/?includeTags%5B%5D=XXX" class="...">#+TagName</a>
+        val additionalTags = doc.select("div.order-3 div.flex.flex-wrap a[href*=includeTags]")
+            .map { it.text().replace("#", "").trim() }
 
-            description = descContainer?.let { container ->
-                container.select("p").joinToString("\n\n") { it.text().trim() }
-            }?.ifEmpty {
-                doc.select("div.mb-4.text-base p, div.synopsis p")
-                    .joinToString("\n\n") { it.text().trim() }
-            } ?: doc.select("div.mb-4.text-base p, div.synopsis p")
+        genre = (mainGenres + additionalTags).distinct().filter { it.isNotBlank() }.joinToString(", ")
+
+        // Description from the order-3 lg:grid-in-content section
+        // Format: <div class="order-3 lg:grid-in-content"><div x-data="{ expanded: false }">...<p>...</p></div>
+        val descContainer = doc.selectFirst("div.order-3.lg\\:grid-in-content div[x-data*=expanded] div.mb-4.order-2")
+            ?: doc.selectFirst("div.order-3.lg\\:grid-in-content div[x-data] div.grid div.mb-4")
+            ?: doc.selectFirst("div.order-3 div[x-data] div.mb-4.order-2")
+
+        description = descContainer?.let { container ->
+            container.select("p").joinToString("\n\n") { it.text().trim() }
+        }?.ifEmpty {
+            doc.select("div.mb-4.text-base p, div.synopsis p")
                 .joinToString("\n\n") { it.text().trim() }
-                .ifEmpty { doc.selectFirst(".prose, .description")?.text()?.trim() }
+        } ?: doc.select("div.mb-4.text-base p, div.synopsis p")
+            .joinToString("\n\n") { it.text().trim() }
+            .ifEmpty { doc.selectFirst(".prose, .description")?.text()?.trim() }
 
-            status = when {
-                doc.text().contains("Completed", ignoreCase = true) -> SManga.COMPLETED
-                doc.text().contains("Ongoing", ignoreCase = true) -> SManga.ONGOING
-                else -> SManga.UNKNOWN
-            }
+        status = when {
+            doc.text().contains("Completed", ignoreCase = true) -> SManga.COMPLETED
+            doc.text().contains("Ongoing", ignoreCase = true) -> SManga.ONGOING
+            else -> SManga.UNKNOWN
         }
     }
 
@@ -268,12 +285,7 @@ class StorySeedling :
      * LN Reader: Extracts toc data from x-data attribute
      * Format: toc('dataNovelId', 'dataNovelN') - e.g., toc('000000', 'xxxxxxxxxx')
      */
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val doc = Jsoup.parse(response.body.string())
-
-        // Check for Turnstile
-        checkTurnstile(doc)
-
+    private fun parseChapterList(doc: Document): List<SChapter> {
         // LN Reader: Extract toc data from x-data attribute - div[ax-load][x-data*=toc]
         // Format: toc('dataNovelId', 'dataNovelN')
         val xData = doc.selectFirst("div[ax-load][x-data*=toc]")?.attr("x-data")
@@ -380,11 +392,13 @@ class StorySeedling :
         }.distinctBy { it.url }.reversed()
     }
 
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
     // ======================== Pages ========================
 
-    override fun pageListParse(response: Response): List<Page> {
-        val chapterUrl = response.request.url.toString().removePrefix(baseUrl)
-        return listOf(Page(0, chapterUrl))
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        return listOf(Page(0, response.request.url.encodedPath))
     }
 
     // ======================== Novel Content ========================
@@ -437,10 +451,7 @@ class StorySeedling :
         return cleanedDoc.html()
     }
 
-    // Image URL - not used for novels
-    override fun imageUrlParse(response: Response): String = ""
-
-    override fun getFilterList() = FilterList(
+    override fun getFilterList(data: JsonElement?) = FilterList(
         SortFilter(),
         StatusFilter(),
         Filter.Header("Genres (tap to include, tap again to exclude)"),
