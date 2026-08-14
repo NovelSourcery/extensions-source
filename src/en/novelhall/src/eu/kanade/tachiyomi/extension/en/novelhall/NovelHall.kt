@@ -8,31 +8,39 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
+import kotlinx.serialization.json.JsonElement
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 
-class NovelHall :
-    HttpSource(),
+@Source
+abstract class NovelHall :
+    KeiSource(),
     NovelSource {
 
-    override val name = "NovelHall"
-    override val baseUrl = "https://novelhall.com"
-    override val lang = "en"
     override val supportsLatest = true
-    override val isNovelSource = true
 
-    override val client = network.cloudflareClient
+    /**
+     * The site's novel detail URL shape is a bare root-level path (no fixed prefix/suffix).
+     * [SManga.url] is stored as the bare slug (see [SlugPath]); a stored value starting with
+     * "/" is a pre-existing full-path entry from before this source adopted slug storage, and
+     * is resolved unchanged regardless of this template.
+     */
+    protected open val mangaPathTemplate: SlugPath = SlugPath("/")
 
     // Auto-detected genre slug from page 1 pagination links
     // e.g. /genre/action/ shows pagination with /genre/action3/2/ → slug = "action3"
     private var lastGenreSlug: String? = null
     private var lastGenreName: String? = null
 
-    override fun popularMangaRequest(page: Int): Request = GET(if (page <= 1) "$baseUrl/all2022.html" else "$baseUrl/all2022-$page.html", headers)
+    protected open fun buildPopularMangaRequest(page: Int): Request = GET(if (page <= 1) "$baseUrl/all2022.html" else "$baseUrl/all2022-$page.html", headers)
 
-    override fun popularMangaParse(response: Response): MangasPage {
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val response = client.newCall(buildPopularMangaRequest(page)).execute()
         val document = Jsoup.parse(response.body.string())
         return parseNovelList(document, response.request.url.toString())
     }
@@ -45,7 +53,7 @@ class NovelHall :
             if (href.isBlank()) return@mapNotNull null
 
             SManga.create().apply {
-                url = href
+                url = mangaPathTemplate.slug(href)
                 title = element.text().trim()
                 thumbnail_url = null // No cover in list view
             }
@@ -59,7 +67,7 @@ class NovelHall :
                 if (href.isBlank() || !href.contains("/")) return@mapNotNull null
 
                 SManga.create().apply {
-                    url = href
+                    url = mangaPathTemplate.slug(href)
                     title = link.text().trim()
                     thumbnail_url = null
                 }
@@ -82,15 +90,16 @@ class NovelHall :
         return MangasPage(novels, hasNextPage)
     }
 
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/lastupdate.html", headers)
+    protected open fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/lastupdate.html", headers)
 
     // lastupdate.html is a single static page with no pagination.
-    override fun latestUpdatesParse(response: Response): MangasPage {
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val response = client.newCall(buildLatestUpdatesRequest(page)).execute()
         val document = Jsoup.parse(response.body.string())
         return MangasPage(parseNovelList(document).mangas, false)
     }
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    protected open fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (query.isNotBlank()) {
             val url = "$baseUrl/index.php?s=so&module=book&keyword=${java.net.URLEncoder.encode(query, "UTF-8")}"
             return GET(url, headers)
@@ -120,16 +129,19 @@ class NovelHall :
             }
         }
 
-        return popularMangaRequest(page)
+        return buildPopularMangaRequest(page)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage {
-        val requestUrl = response.request.url.toString()
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val request = buildSearchMangaRequest(page, query, filters)
+        val requestUrl = request.url.toString()
+        val response = client.newCall(request).execute()
 
         if (requestUrl.contains("/genre/") || requestUrl.contains("/type/") ||
             requestUrl.contains("/lastupdate") || requestUrl.contains("all2022")
         ) {
-            return popularMangaParse(response)
+            val document = Jsoup.parse(response.body.string())
+            return parseNovelList(document, requestUrl)
         }
 
         val document = Jsoup.parse(response.body.string())
@@ -145,7 +157,7 @@ class NovelHall :
                 ?.trim() ?: return@mapNotNull null
 
             SManga.create().apply {
-                url = href
+                url = mangaPathTemplate.slug(href)
                 title = name
                 thumbnail_url = null
             }
@@ -154,64 +166,70 @@ class NovelHall :
         return MangasPage(novels, false)
     }
 
-    override fun mangaDetailsRequest(manga: SManga): Request {
-        val url = if (manga.url.startsWith("http")) manga.url else baseUrl + manga.url
+    protected open fun buildMangaDetailsRequest(manga: SManga): Request {
+        val resolved = mangaPathTemplate.resolve(manga.url)
+        val url = if (resolved.startsWith("http")) resolved else baseUrl + resolved
         return GET(url, headers)
     }
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        // Details and the chapter list both live on the same novel page - fetch it once.
+        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
         val document = Jsoup.parse(response.body.string())
 
-        return SManga.create().apply {
-            url = response.request.url.encodedPath
+        val updatedManga = if (fetchDetails) parseMangaDetails(document, response) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(document) else chapters
 
-            title = document.selectFirst(".book-info > h1")?.text() ?: "Untitled"
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
 
-            thumbnail_url = document.selectFirst("meta[property=og:image]")?.attr("content")
+    private fun parseMangaDetails(document: org.jsoup.nodes.Document, response: Response): SManga = SManga.create().apply {
+        url = mangaPathTemplate.slug(response.request.url.encodedPath)
 
-            // The full untruncated synopsis lives in the hidden js-close-wrap span
-            description = (
-                document.selectFirst("span.js-close-wrap")
-                    ?: document.selectFirst(".intro")
-                )?.let { el ->
-                el.select("br").forEach { it.after("\\n") }
-                el.select("p").forEach { it.after("\\n\\n") }
-                el.text()
-                    .replace("\\n", "\n")
-                    .replace(Regex(" *\n *"), "\n")
-                    .replace(Regex("\n{3,}"), "\n\n")
-                    .trim()
-            }
+        title = document.selectFirst(".book-info > h1")?.text() ?: "Untitled"
 
-            // Parse author - remove "Author：" prefix
-            val totalSection = document.selectFirst(".total")
-            totalSection?.select("p")?.remove() // Remove p elements that might interfere
+        thumbnail_url = document.selectFirst("meta[property=og:image]")?.attr("content")
 
-            author = totalSection?.select("span")?.find { it.text().contains("Author") }?.text()?.replace("Author：", "")?.trim()
-
-            // Parse status
-            val statusText = totalSection?.select("span")?.find { it.text().contains("Status") }?.text()?.replace("Status：", "")?.replace("Active", "Ongoing")?.trim()?.lowercase() ?: ""
-
-            status = when {
-                statusText.contains("ongoing") -> SManga.ONGOING
-                statusText.contains("completed") -> SManga.COMPLETED
-                statusText.contains("hiatus") -> SManga.ON_HIATUS
-                else -> SManga.UNKNOWN
-            }
-
-            // Parse genres
-            genre = totalSection?.select("a")?.map { it.text() }?.joinToString(", ")
+        // The full untruncated synopsis lives in the hidden js-close-wrap span
+        description = (
+            document.selectFirst("span.js-close-wrap")
+                ?: document.selectFirst(".intro")
+            )?.let { el ->
+            el.select("br").forEach { it.after("\\n") }
+            el.select("p").forEach { it.after("\\n\\n") }
+            el.text()
+                .replace("\\n", "\n")
+                .replace(Regex(" *\n *"), "\n")
+                .replace(Regex("\n{3,}"), "\n\n")
+                .trim()
         }
+
+        // Parse author - remove "Author：" prefix
+        val totalSection = document.selectFirst(".total")
+        totalSection?.select("p")?.remove() // Remove p elements that might interfere
+
+        author = totalSection?.select("span")?.find { it.text().contains("Author") }?.text()?.replace("Author：", "")?.trim()
+
+        // Parse status
+        val statusText = totalSection?.select("span")?.find { it.text().contains("Status") }?.text()?.replace("Status：", "")?.replace("Active", "Ongoing")?.trim()?.lowercase() ?: ""
+
+        status = when {
+            statusText.contains("ongoing") -> SManga.ONGOING
+            statusText.contains("completed") -> SManga.COMPLETED
+            statusText.contains("hiatus") -> SManga.ON_HIATUS
+            else -> SManga.UNKNOWN
+        }
+
+        // Parse genres
+        genre = totalSection?.select("a")?.map { it.text() }?.joinToString(", ")
     }
 
-    override fun chapterListRequest(manga: SManga): Request {
-        val url = if (manga.url.startsWith("http")) manga.url else baseUrl + manga.url
-        return GET(url, headers)
-    }
-
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val document = Jsoup.parse(response.body.string())
-
+    private fun parseChapterList(document: org.jsoup.nodes.Document): List<SChapter> {
         val chapters = document.select("#morelist ul > li").mapNotNull { element ->
             val link = element.selectFirst("a") ?: return@mapNotNull null
             val href = link.attr("href")
@@ -228,12 +246,13 @@ class NovelHall :
         return chapters.reversed()
     }
 
-    override fun pageListRequest(chapter: SChapter): Request {
-        val url = if (chapter.url.startsWith("http")) chapter.url else baseUrl + chapter.url
-        return GET(url, headers)
-    }
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val url = if (chapter.url.startsWith("http")) chapter.url else baseUrl + chapter.url
+        val response = client.newCall(GET(url, headers)).execute()
+        return listOf(Page(0, response.request.url.toString()))
+    }
 
     override suspend fun fetchPageText(page: Page): String {
         val request = GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
@@ -292,9 +311,7 @@ class NovelHall :
         return content.toString()
     }
 
-    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
-
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         Filter.Header("Note: Sort, Genre, and Search are mutually exclusive"),
         Filter.Separator(),
         SortFilter(),
