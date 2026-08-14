@@ -4,27 +4,20 @@ import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.SManga
-import okhttp3.Request
-import okhttp3.Response
+import keiyoushi.annotation.Source
+import okhttp3.Headers
 import org.jsoup.Jsoup
 
-class SystemTranslation :
-    LightNovelWPNovel(
-        baseUrl = "https://systemtranslation.com",
-        name = "System Translation",
-        lang = "en",
-    ) {
-    override fun headersBuilder() = super.headersBuilder()
+@Source
+abstract class SystemTranslation : LightNovelWPNovel() {
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = this
         .add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .add("Referer", baseUrl)
 
     // Latest updates from homepage
-    override fun latestUpdatesRequest(page: Int): Request {
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
         val url = if (page == 1) baseUrl else "$baseUrl/page/$page/"
-        return GET(url, headers)
-    }
-
-    override fun latestUpdatesParse(response: Response): MangasPage {
+        val response = client.newCall(GET(url, headers)).execute()
         val doc = Jsoup.parse(response.body.string())
 
         // Parse latest novels from homepage using div.listupd article.bs structure
@@ -45,7 +38,7 @@ class SystemTranslation :
 
                 SManga.create().apply {
                     this.title = title.trim()
-                    this.url = when {
+                    val relativeUrl = when {
                         url.startsWith(baseUrl) -> url.removePrefix(baseUrl)
 
                         url.startsWith("http://") || url.startsWith("https://") -> {
@@ -60,6 +53,7 @@ class SystemTranslation :
 
                         else -> "/$url"
                     }
+                    this.url = mangaPathTemplate.slug(relativeUrl)
                     thumbnail_url = cover
                 }
             } catch (e: Exception) {

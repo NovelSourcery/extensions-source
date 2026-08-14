@@ -1,10 +1,7 @@
-﻿package eu.kanade.tachiyomi.novelextension.en.universalnovel
+package eu.kanade.tachiyomi.novelextension.en.universalnovel
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
+import keiyoushi.annotation.Source
 
-class UniversalNovel :
-    LightNovelWPNovel(
-        baseUrl = "https://universalnovel.com",
-        name = "UniversalNovel",
-        lang = "en",
-    )
+@Source
+abstract class UniversalNovel : LightNovelWPNovel()

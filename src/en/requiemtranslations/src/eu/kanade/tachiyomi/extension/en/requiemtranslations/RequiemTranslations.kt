@@ -1,19 +1,16 @@
-﻿package eu.kanade.tachiyomi.novelextension.en.requiemtranslations
+package eu.kanade.tachiyomi.novelextension.en.requiemtranslations
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Page
+import keiyoushi.annotation.Source
 
 /**
  * Requiem Translations extension.
  * Uses LightNovelWP template with custom content decryption.
  */
-class RequiemTranslations :
-    LightNovelWPNovel(
-        baseUrl = "https://requiemtls.com",
-        name = "Requiem Translations",
-        lang = "en",
-    ) {
+@Source
+abstract class RequiemTranslations : LightNovelWPNovel() {
 
     /**
      * Decodes obfuscated text from Requiem Translations.

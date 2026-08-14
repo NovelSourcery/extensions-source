@@ -3,17 +3,14 @@ package eu.kanade.tachiyomi.novelextension.ar.kolnovel
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Page
+import keiyoushi.annotation.Source
 
 /**
  * Kol Novel uses CSS style-based obfuscation to hide spam paragraphs.
  * The article > style block defines classes whose matching paragraphs should be removed.
  */
-class KolNovel :
-    LightNovelWPNovel(
-        baseUrl = "https://kolnovel.com",
-        name = "Kol Novel",
-        lang = "ar",
-    ) {
+@Source
+abstract class KolNovel : LightNovelWPNovel() {
     override val reverseChapters = true
 
     override suspend fun fetchPageText(page: Page): String {
@@ -67,7 +64,7 @@ class KolNovel :
             }
 
             // Remove paragraphs that are mostly English (spam)
-            val arabicCount = text.count { it in '\u0600'..'\u06FF' || it in '\u0750'..'\u077F' || it in '\uFB50'..'\uFDFF' || it in '\uFE70'..'\uFEFF' }
+            val arabicCount = text.count { it in '؀'..'ۿ' || it in 'ݐ'..'ݿ' || it in 'ﭐ'..'﷿' || it in 'ﹰ'..'﻿' }
             val totalCount = text.replace("\\s".toRegex(), "").length
             if (totalCount > 0 && arabicCount.toFloat() / totalCount < 0.2f) {
                 p.remove()

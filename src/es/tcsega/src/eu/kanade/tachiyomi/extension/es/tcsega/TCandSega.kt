@@ -1,12 +1,9 @@
-﻿package eu.kanade.tachiyomi.novelextension.es.tcsega
+package eu.kanade.tachiyomi.novelextension.es.tcsega
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
+import keiyoushi.annotation.Source
 
-class TCandSega :
-    LightNovelWPNovel(
-        baseUrl = "https://teamchmantranslations.com",
-        name = "TCandSega",
-        lang = "es",
-    ) {
+@Source
+abstract class TCandSega : LightNovelWPNovel() {
     override val reverseChapters = true
 }

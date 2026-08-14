@@ -3,16 +3,13 @@ package eu.kanade.tachiyomi.novelextension.ar.freekolnovel
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Page
+import keiyoushi.annotation.Source
 
 /**
  * Free Kol Novel uses the same CSS obfuscation as Kol Novel.
  */
-class FreeKolNovel :
-    LightNovelWPNovel(
-        baseUrl = "https://free.kolnovel.com",
-        name = "Free Kol Novel",
-        lang = "ar",
-    ) {
+@Source
+abstract class FreeKolNovel : LightNovelWPNovel() {
     override val reverseChapters = true
 
     override suspend fun fetchPageText(page: Page): String {

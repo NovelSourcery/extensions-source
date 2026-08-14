@@ -1,12 +1,9 @@
-﻿package eu.kanade.tachiyomi.novelextension.fr.lightnovelfr
+package eu.kanade.tachiyomi.novelextension.fr.lightnovelfr
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
+import keiyoushi.annotation.Source
 
-class LightNovelFR :
-    LightNovelWPNovel(
-        baseUrl = "https://lightnovelfr.com",
-        name = "LightNovelFR",
-        lang = "fr",
-    ) {
+@Source
+abstract class LightNovelFR : LightNovelWPNovel() {
     override val reverseChapters = true
 }
