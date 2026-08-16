@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.novelextension.ar.azora
+package eu.kanade.tachiyomi.novelextension.ar.azora
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
@@ -9,11 +9,20 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.nodes.Document
-import java.text.SimpleDateFormat
-import java.util.Locale
+import org.jsoup.Jsoup
+import org.jsoup.parser.Parser
 
 class Azora :
     HttpSource(),
@@ -26,131 +35,155 @@ class Azora :
     override val isNovelSource = true
     override val client = network.client
 
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/novels?page=$page", headers)
+    private val apiUrl = "https://api.azorafly.com"
+    private val perPage = 39
 
-    override fun popularMangaParse(response: Response): MangasPage = parseNovelsPage(response)
+    private val json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+    }
 
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/novels?page=$page", headers)
+    private val postIdCache = mutableMapOf<String, Int>()
+    private var currentNovelSlug = ""
 
-    override fun latestUpdatesParse(response: Response): MangasPage = parseNovelsPage(response)
+    override fun popularMangaRequest(page: Int): Request = GET("$apiUrl/api/posts?page=$page&perPage=$perPage&searchTerm=&isNovel=true&tag=hot", headers)
+
+    override fun popularMangaParse(response: Response): MangasPage = parseMangasPage(response)
+
+    override fun latestUpdatesRequest(page: Int): Request = GET("$apiUrl/api/posts?page=$page&perPage=$perPage&searchTerm=&isNovel=true&tag=new", headers)
+
+    override fun latestUpdatesParse(response: Response): MangasPage = parseMangasPage(response)
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val term = java.net.URLEncoder.encode(query, "UTF-8")
-        return GET("$baseUrl/novels?search=$term&page=$page", headers)
+        val q = java.net.URLEncoder.encode(query, "UTF-8")
+        return GET("$apiUrl/api/posts?page=$page&perPage=$perPage&searchTerm=$q&isNovel=true&tag=new", headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage = parseNovelsPage(response)
+    override fun searchMangaParse(response: Response): MangasPage = parseMangasPage(response)
 
-    private fun parseNovelsPage(response: Response): MangasPage {
-        val doc = response.asJsoup()
-        val items = doc.select("a[href*='/series/']").map { el ->
-            SManga.create().apply {
-                title = el.selectFirst("h3, .title, h2, .novel-title")?.text()?.trim().orEmpty()
-                url = el.attr("href").toRelative()
-                thumbnail_url = el.selectFirst("img")?.absCover()
-            }
-        }
-        val hasNext = doc.select("a[rel=next], .pagination a.next, .next-page").isNotEmpty()
-        return MangasPage(items.distinctBy { it.url }.filter { it.url.isNotBlank() }, hasNext)
+    private fun parseMangasPage(response: Response): MangasPage {
+        val body = json.decodeFromString<PostsResponse>(response.body.string())
+        val page = response.request.url.queryParameter("page")?.toIntOrNull() ?: 1
+        return MangasPage(body.novelPosts.map { it.toSManga() }, body.novelTotalCount > page * perPage)
     }
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+    override fun mangaDetailsRequest(manga: SManga): Request = GET("$baseUrl${manga.url}", headers)
 
     override fun mangaDetailsParse(response: Response): SManga {
-        val doc = response.asJsoup()
+        val body = response.body.string()
+        val doc = Jsoup.parse(body)
+
+        val post = extractPost(body)
+
+        if (post != null) {
+            postIdCache[post.slug] = post.id
+        }
+
         return SManga.create().apply {
-            title = doc.selectFirst("h1")?.text()?.trim().orEmpty()
-            thumbnail_url = doc.selectFirst(".cover img, .poster img")?.absCover()
-            author = doc.selectFirst(".author, .novel-author")?.text()?.trim().orEmpty()
-            description = doc.selectFirst(".description, .synopsis, .novel-description")?.text()?.trim().orEmpty()
-            genre = doc.select(".genre, .tag, .pill").joinToString { it.text().trim() }
-            status = when (doc.selectFirst(".status, .novel-status")?.text()?.trim()?.lowercase()) {
-                "completed", "مكتملة" -> SManga.COMPLETED
-                "ongoing", "مستمرة" -> SManga.ONGOING
-                "hiatus", "متوقفة" -> SManga.ON_HIATUS
+            url = response.request.url.encodedPath
+            title = post?.postTitle
+                ?: doc.selectFirst("h1[itemProp=name]")?.text()
+                ?: doc.selectFirst("meta[property=og:title]")?.attr("content")
+                ?: ""
+            thumbnail_url = post?.featuredImage
+                ?: doc.selectFirst("img[itemProp=image]")?.attr("abs:src")
+                ?: doc.selectFirst("meta[property=og:image]")?.attr("content")
+            description = post?.postContent
+                ?.let { Jsoup.parseBodyFragment(it).text() }
+                ?: doc.selectFirst("meta[name=description]")?.attr("content")
+            genre = post?.genres?.joinToString { it.name }
+                ?: doc.select("a[itemProp=genre]").joinToString { it.text() }
+            status = when (post?.seriesStatus?.lowercase() ?: "") {
+                "ongoing" -> SManga.ONGOING
+                "completed" -> SManga.COMPLETED
                 else -> SManga.UNKNOWN
             }
+            author = post?.alternativeTitles?.trim()
         }
+    }
+
+    override suspend fun getChapterList(manga: SManga): List<SChapter> {
+        val slug = manga.url.removePrefix("/series/").removeSuffix("/")
+        currentNovelSlug = slug
+        val postId = resolvePostId(slug) ?: return emptyList()
+        val body = client.newCall(GET("$apiUrl/api/chapters?postId=$postId&skip=0&take=all&order=desc", headers))
+            .execute()
+            .use { it.body.string() }
+        return parseChapters(body, slug)
     }
 
     override fun chapterListParse(response: Response): List<SChapter> {
-        val doc = response.asJsoup()
-        return parseChaptersFromHtml(doc).sortedByDescending { it.chapter_number }
+        val body = response.body.string()
+        return parseChapters(body, currentNovelSlug.ifEmpty { "/" })
     }
 
-    private fun parseChaptersFromHtml(doc: Document): List<SChapter> {
-        val chapters = mutableListOf<SChapter>()
-        val rows = doc.select(".ch-row, .chapter-row, .chapter-list a")
-        for (row in rows) {
-            val link = row.selectFirst("a[href]")?.attr("href")?.ifBlank { null } ?: continue
-            val name = row.selectFirst(".ch-title, .chapter-title, .title")?.text()?.trim() ?: row.text().trim()
-            val numText = row.selectFirst(".ch-num, .chapter-num, .num")?.text() ?: name
-            val dateText = row.selectFirst(".ch-date, .chapter-date, .date")?.text() ?: ""
-            chapters.add(
-                SChapter.create().apply {
-                    this.name = name
-                    this.url = link.toRelative()
-                    chapter_number = numText.toChapterNumber()
-                    date_upload = runCatching { DATE_FORMAT.parse(dateText)?.time }?.getOrNull() ?: 0L
-                },
-            )
-        }
-        return chapters.distinctBy { it.url }
+    private fun parseChapters(body: String, slug: String): List<SChapter> = json.decodeFromString<ChaptersResponse>(body).post.chapters
+        .filter { it.isAccessible && !it.isLocked && !it.isPermanentlyLocked && it.price <= 0 }
+        .map { it.toSChapter(slug) }
+        .sortedByDescending { it.chapter_number }
+
+    private fun resolvePostId(slug: String): Int? {
+        postIdCache[slug]?.let { return it }
+        val post = runCatching {
+            val html = client.newCall(GET("$baseUrl/series/$slug", headers)).execute().use { it.body.string() }
+            extractPost(html)
+        }.getOrNull() ?: return null
+        postIdCache[slug] = post.id
+        return post.id
     }
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
+    private fun extractPost(body: String): PostDto? = extractSeriesPanelProps(body)?.let { props ->
+        runCatching {
+            val decoded = decodeAstroProps(props)
+            (decoded["post"] as? JsonObject)?.let { json.decodeFromJsonElement<PostDto>(it) }
+        }.getOrNull()
+    }
+
+    override fun pageListParse(response: Response): List<Page> {
+        val url = response.request.url.encodedPath
+        return listOf(Page(0, url))
+    }
 
     override suspend fun fetchPageText(page: Page): String {
-        val url = baseUrl + page.url
-        val response = client.newCall(GET(url, headers)).execute()
-        val doc = response.asJsoup()
-        val content = doc.selectFirst(".novel-reader-content, .reading-content, .chapter-content, article")
-            ?: doc.selectFirst("main")
-            ?: doc.body()
-
-        content.select(
-            "script, style, ins, .adsbygoogle, iframe, noscript, " +
-                "span.theam-chobf, span[data-theam-chobf], " +
-                "[style*=display:none], [style*=visibility:hidden], [aria-hidden=true], " +
-                "nav, .nav, .chapter-nav, .prev-next, .navigation, " +
-                ".share, .share-buttons, .social-share, " +
-                ".comments, .discussion, .comment-section, #comments, #discussion, " +
-                "footer, .footer, .site-footer, " +
-                ".reactions, .emoji-reactions, .reaction-buttons, " +
-                ".related-posts, .recommended, .suggested, " +
-                ".leaderboard, .top-readers, " +
-                "header, .header, .site-header, " +
-                "aside, .sidebar, " +
-                ".purchase, .premium, .unlock, " +
-                "form, .login-form, .signup-form",
-        ).remove()
-
-        return content.html().trim()
+        val doc = client.newCall(GET("$baseUrl${page.url}", headers)).execute().asJsoup()
+        val content = doc.selectFirst("div.novel-reader-content") ?: return ""
+        return content.select("p")
+            .mapNotNull { text -> text.text().takeIf { it.isNotBlank() } }
+            .dropWhile { it.all { c -> c == '*' || c.isWhitespace() } || it.startsWith("الفصل ") }
+            .joinToString("\n\n")
     }
 
-    override fun imageUrlParse(response: Response): String = ""
+    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
 
-    private fun String.toRelative(): String = when {
-        startsWith(baseUrl) -> removePrefix(baseUrl)
-        startsWith("/") -> this
-        else -> "/$this"
+    private val astroIslandRegex = Regex("""<astro-island\b([^>]*)>""")
+
+    private fun extractSeriesPanelProps(html: String): String? {
+        for (match in astroIslandRegex.findAll(html)) {
+            val attrs = match.groupValues[1]
+            if ("&quot;name&quot;:&quot;SeriesChaptersPanelIsland&quot;" in attrs) {
+                val props = Regex("""props="([^"]*)"""").find(attrs)?.groupValues?.get(1)
+                if (props != null) return Parser.unescapeEntities(props, false)
+            }
+        }
+        return null
     }
 
-    private fun org.jsoup.nodes.Element.absCover(): String? {
-        val raw = attr("data-src").ifBlank { null }
-            ?: attr("data-lazy-src").ifBlank { null }
-            ?: attr("src").ifBlank { null }
-            ?: return null
-        return if (raw.startsWith("http")) raw else "$baseUrl$raw"
+    private fun decodeAstroProps(rawProps: String): JsonObject {
+        val root = json.parseToJsonElement(rawProps).jsonObject
+        return JsonObject(root.mapValues { (_, value) -> decodeAstroNode(value) })
     }
 
-    private fun String?.toChapterNumber(): Float {
-        if (this.isNullOrBlank()) return -1f
-        return CHAPTER_NUM_REGEX.find(this)?.value?.toFloatOrNull() ?: -1f
-    }
-
-    companion object {
-        private val CHAPTER_NUM_REGEX = Regex("""\d+(\.\d+)?""")
-        private val DATE_FORMAT = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    private fun decodeAstroNode(node: JsonElement): JsonElement {
+        if (node !is JsonArray || node.size < 2) return node
+        val tag = node[0].jsonPrimitive.contentOrNull ?: return node
+        val payload = node[1]
+        return when (tag) {
+            "1" -> JsonArray(payload.jsonArray.map { decodeAstroNode(it) })
+            else -> when (payload) {
+                is JsonObject -> JsonObject(payload.mapValues { (_, value) -> decodeAstroNode(value) })
+                is JsonArray -> JsonArray(payload.jsonArray.map { decodeAstroNode(it) })
+                else -> payload
+            }
+        }
     }
 }
