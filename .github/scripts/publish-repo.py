@@ -117,6 +117,25 @@ all_extensions = [
     if not any(ext.packageName.endswith(f".{module}") for module in to_delete)
 ]
 all_extensions.extend(new_extensions)
+
+# Independently verify against the current source tree, not just the diff-derived to_delete
+# list: entries for modules removed before this pipeline could detect the deletion (squashed
+# history, missed CI run, pre-dating a schema field) would otherwise be carried forward forever
+# by the merge above.
+valid_modules = {
+    f"{lang_dir.name}.{ext_dir.name}"
+    for lang_dir in (SOURCE_DIR / "src").iterdir() if lang_dir.is_dir()
+    for ext_dir in lang_dir.iterdir() if ext_dir.is_dir()
+}
+orphaned = [
+    ext for ext in all_extensions
+    if not any(ext.packageName.endswith(f".{module}") for module in valid_modules)
+]
+if orphaned:
+    for ext in orphaned:
+        print(f"dropping orphaned index entry (no matching source module): {ext.packageName}")
+    all_extensions = [ext for ext in all_extensions if ext not in orphaned]
+
 all_extensions.sort(key=lambda ext: ext.packageName)
 
 index = index_pb2.Index(
