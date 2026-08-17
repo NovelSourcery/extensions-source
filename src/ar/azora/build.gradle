@@ -2,9 +2,19 @@ ext {
     libVersion = '1.4'
     extName = 'Azora'
     extClass = '.Azora'
-    extVersionCode = 4
+    extVersionCode = 5
     isNsfw = false
     isNovel = true
 }
 
 apply plugin: "ns.plugins.extension.legacy"
+
+android {
+    packaging {
+        resources.excludes.add("kotlin-tooling-metadata.json")
+    }
+}
+
+dependencies {
+    implementation(libs.kotlin.json)
+}
