@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "LibRead"
-    versionCode = 4
+    versionCode = 5
     contentWarning = ContentWarning.SAFE
     theme = "readnovelfull"
 

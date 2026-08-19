@@ -48,9 +48,12 @@ abstract class LibRead : ReadNovelFull() {
     override fun popularMangaSelector() = "div.ul-list1 div.li, ul.ul-list2 li"
 
     override fun popularMangaFromElement(element: Element): SManga = SManga.create().apply {
-        // title is a lateinit var; an element whose link selector doesn't match (ad slot, stray
-        // li, layout drift) must still leave title assigned or any later read of it crashes.
+        // title/url are lateinit vars; an element whose link selector doesn't match (ad slot,
+        // stray li, layout drift - seen on the search/genre listing pages) must still leave both
+        // assigned or any later read (e.g. dedup by manga.url) crashes with
+        // UninitializedPropertyAccessException.
         title = ""
+        url = ""
         val link = element.selectFirst("h3.tit a, a.tit, a.con")
         if (link != null) {
             title = link.attr("title").ifEmpty { link.text() }

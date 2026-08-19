@@ -9,5 +9,7 @@ abstract class SyosetuNovel18 :
     SyosetuBase(
         siteType = SiteType.NOVEL18,
         isAdult = true,
-        supportsRanking = true,
+        // Irrelevant for NOVEL18 - popular/latest/search always go through the JSON API
+        // (novel18.syosetu.com has no HTML ranking or search page at all).
+        supportsRanking = false,
     )

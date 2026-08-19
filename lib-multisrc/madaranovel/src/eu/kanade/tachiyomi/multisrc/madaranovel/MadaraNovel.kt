@@ -390,19 +390,36 @@ abstract class MadaraNovel :
             .firstOrNull { it > 0 } ?: 0
     }
 
-    private fun fetchChaptersHtml(mangaUrl: String, postId: String?, referer: String): String = if (useNewChapterEndpoint) {
-        val emptyBody = FormBody.Builder().build()
+    private fun fetchChaptersHtml(mangaUrl: String, postId: String?, referer: String): String {
         val newHeaders = headersBuilder().set("Referer", referer).build()
-        client.newCall(POST("$baseUrl${mangaUrl}ajax/chapters/", newHeaders, emptyBody))
-            .execute().body.string()
-    } else {
-        val formBody = FormBody.Builder()
-            .add("action", "manga_get_chapters")
-            .add("manga", postId ?: "")
-            .build()
-        val newHeaders = headersBuilder().set("Referer", referer).build()
-        client.newCall(POST("$baseUrl/wp-admin/admin-ajax.php", newHeaders, formBody))
-            .execute().body.string()
+        if (!useNewChapterEndpoint) {
+            val formBody = FormBody.Builder()
+                .add("action", "manga_get_chapters")
+                .add("manga", postId ?: "")
+                .build()
+            return client.newCall(POST("$baseUrl/wp-admin/admin-ajax.php", newHeaders, formBody))
+                .execute().body.string()
+        }
+
+        val ajaxUrl = "$baseUrl${mangaUrl}ajax/chapters/"
+        val firstHtml = client.newCall(POST(ajaxUrl, newHeaders, FormBody.Builder().build())).execute().body.string()
+        if (firstHtml == "0") return firstHtml
+
+        // Some Madara sites (e.g. novelnice/BoxNovel) paginate this endpoint at a fixed
+        // per-page count instead of returning the full chapter list in one call - follow the
+        // rest of the ".pagination" pages and merge their chapters in.
+        val pageLinks = Jsoup.parse(firstHtml).select(".pagination a[data-page]")
+        val maxPage = pageLinks.mapNotNull { it.attr("data-page").toIntOrNull() }.maxOrNull() ?: 1
+        if (maxPage <= 1) return firstHtml
+
+        val html = StringBuilder(firstHtml)
+        for (page in 2..maxPage) {
+            val query = pageLinks.firstOrNull { it.attr("data-page") == page.toString() }
+                ?.attr("href")?.substringAfter('?', "") ?: continue
+            val pageUrl = if (query.isEmpty()) ajaxUrl else "$ajaxUrl?$query"
+            html.append(client.newCall(POST(pageUrl, newHeaders, FormBody.Builder().build())).execute().body.string())
+        }
+        return html.toString()
     }
 
     private fun parseChaptersFromHtml(html: String): List<SChapter> {

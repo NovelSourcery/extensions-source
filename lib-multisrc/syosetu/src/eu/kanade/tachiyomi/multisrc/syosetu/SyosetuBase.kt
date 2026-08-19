@@ -15,6 +15,8 @@ import keiyoushi.network.get
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.parseAs
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import okhttp3.Headers
 import okhttp3.HttpUrl
@@ -26,7 +28,15 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
-import kotlin.math.ceil
+
+@Serializable
+class Novel18ApiEntry(
+    val allcount: Int? = null,
+    val title: String = "",
+    val ncode: String = "",
+    val writer: String = "",
+    val story: String = "",
+)
 
 enum class SiteType {
     NCODE, // ncode.syosetu.com
@@ -66,37 +76,69 @@ abstract class SyosetuBase(
     }
 
     // ---------- Popular / Latest ----------
-    // NOC/MNLT/MID have no ranking pages - only search is available on those sites
-    override suspend fun getPopularManga(page: Int): MangasPage = if (supportsRanking) {
-        fetchNovelList(buildRankingUrl(page, "total", "", "total"))
-    } else {
-        MangasPage(emptyList(), false)
+    // NOC/MNLT/MID have no ranking pages - only search is available on those sites.
+    // NOVEL18 has neither a ranking nor a search HTML page anymore (both 404 even with the
+    // age cookie) - it's browsed through the public novel18api JSON API instead.
+    override suspend fun getPopularManga(page: Int): MangasPage = when {
+        siteType == SiteType.NOVEL18 -> fetchNovel18ApiList(page, order = "hyoka")
+        supportsRanking -> fetchNovelList(buildRankingUrl(page, "total", "", "total"))
+        else -> MangasPage(emptyList(), false)
     }
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = if (supportsRanking) {
-        fetchNovelList(buildRankingUrl(page, "daily", "", "total"))
-    } else {
-        MangasPage(emptyList(), false)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = when {
+        siteType == SiteType.NOVEL18 -> fetchNovel18ApiList(page, order = "new")
+        supportsRanking -> fetchNovelList(buildRankingUrl(page, "daily", "", "total"))
+        else -> MangasPage(emptyList(), false)
     }
 
     // ---------- Search ----------
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = if (query.isNotBlank()) {
-        fetchNovelList(buildSearchUrl(page, query))
-    } else if (supportsRanking) {
-        fetchNovelList(buildFilteredSearchUrl(page, filters))
-    } else {
-        MangasPage(emptyList(), false)
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = when {
+        siteType == SiteType.NOVEL18 -> fetchNovel18ApiList(page, order = "hyoka", word = query.takeIf { it.isNotBlank() })
+        query.isNotBlank() -> fetchNovelList(buildSearchUrl(page, query))
+        supportsRanking -> fetchNovelList(buildFilteredSearchUrl(page, filters))
+        else -> MangasPage(emptyList(), false)
+    }
+
+    // ---------- NOVEL18 JSON API browsing ----------
+    private val novel18ApiUrl = "https://api.syosetu.com/novel18api/api/"
+    private val novel18PageSize = 20
+
+    private suspend fun fetchNovel18ApiList(page: Int, order: String, word: String? = null): MangasPage {
+        val apiUrl = novel18ApiUrl.toHttpUrl().newBuilder()
+            .addQueryParameter("out", "json")
+            .addQueryParameter("order", order)
+            .addQueryParameter("lim", novel18PageSize.toString())
+            .addQueryParameter("st", (((page - 1) * novel18PageSize) + 1).toString())
+            .apply { if (!word.isNullOrBlank()) addQueryParameter("word", word) }
+            .build()
+
+        val entries = client.get(apiUrl, headers).parseAs<List<Novel18ApiEntry>>()
+        val allCount = entries.firstOrNull()?.allcount ?: 0
+        val novels = entries.filter { it.ncode.isNotEmpty() }.map { entry ->
+            SManga.create().apply {
+                title = entry.title
+                author = entry.writer
+                description = entry.story
+                url = mangaPath.slug("/${entry.ncode.lowercase()}/")
+            }
+        }
+        return MangasPage(novels, page * novel18PageSize < allCount)
     }
 
     // ---------- URL builders ----------
+    // NCODE novel pages live on ncode.syosetu.com, but ranking/search for that catalog is only
+    // served from the separate yomou.syosetu.com host (ncode.syosetu.com/rank|search 404s).
+    // NOC/MNLT/MID serve both from their own host.
+    private val browseBaseUrl = if (siteType == SiteType.NCODE) "https://yomou.syosetu.com" else baseUrl
+
     protected open fun buildRankingUrl(page: Int, ranking: String, genre: String, modifier: String): String {
-        val base = "$baseUrl/rank/list/type/${ranking}_$modifier/"
+        val base = "$browseBaseUrl/rank/list/type/${ranking}_$modifier/"
         val url = if (genre.isEmpty()) {
             base
         } else {
             val genrePart = if (genre == "1" || genre == "2" || genre == "o") "isekailist" else "genrelist"
             val modifierPart = if (modifier == "total") "" else "_$modifier"
-            "$baseUrl/rank/$genrePart/type/${ranking}_${genre}$modifierPart/"
+            "$browseBaseUrl/rank/$genrePart/type/${ranking}_${genre}$modifierPart/"
         }
         return "$url?p=$page"
     }
@@ -107,7 +149,7 @@ abstract class SyosetuBase(
             SiteType.NCODE, SiteType.NOVEL18 -> "search.php"
             SiteType.NOC, SiteType.MNLT, SiteType.MID -> "search/search/search.php"
         }
-        return "$baseUrl/$searchPath?word=$encoded&p=$page"
+        return "$browseBaseUrl/$searchPath?word=$encoded&p=$page"
     }
 
     protected open fun buildFilteredSearchUrl(page: Int, filters: FilterList): String {
@@ -162,7 +204,11 @@ abstract class SyosetuBase(
         }
 
         val hasNextPage = when (siteType) {
-            SiteType.NCODE, SiteType.NOVEL18 -> doc.selectFirst("a.c-pager__item--next, a[rel=next]") != null
+            // yomou.syosetu.com's ranking pager has no distinct "next" class (title="次の50作品へ"
+            // on a plain .c-pager__item), and its search pager uses .nextlink - neither is
+            // "a.c-pager__item--next"/"a[rel=next]" (that pattern belongs to the chapter-list
+            // pager on ncode.syosetu.com detail pages, a different page entirely).
+            SiteType.NCODE, SiteType.NOVEL18 -> doc.selectFirst("a.nextlink, a.c-pager__item[title*=次]") != null
             SiteType.NOC, SiteType.MNLT, SiteType.MID -> doc.selectFirst("a.next, .pager a[href*='p=']") != null
         }
 
@@ -223,14 +269,9 @@ abstract class SyosetuBase(
 
     // ---------- Chapters ----------
     private suspend fun fetchChapterListFromDoc(mangaUrl: String, doc: Document): List<SChapter> {
-        val totalChapters = doc.selectFirst(".p-infotop-type__allep")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
-            ?: doc.selectFirst("#gotochapno")?.attr("max")?.toIntOrNull()
-            ?: 0
-
-        if (totalChapters == 0) {
-            val isOneShot = doc.selectFirst(".p-infotop-type__type")?.text()?.contains("短編") == true
-            if (!isOneShot) return emptyList()
-
+        // One-shots have no .p-eplist__sublist at all - the whole thing is read directly off
+        // the manga details page itself (.p-novel__body, same as fetchPageText's fallback).
+        if (doc.select(".p-eplist__sublist").isEmpty()) {
             val title = doc.selectFirst(".p-novel__title")?.text()?.trim() ?: "One-shot"
             return listOf(
                 SChapter.create().apply {
@@ -243,7 +284,12 @@ abstract class SyosetuBase(
         }
 
         val basePath = mangaPath.resolve(mangaUrl)
-        val pageCount = ceil(totalChapters / 100.0).toInt().coerceAtLeast(1)
+        // Chapter lists are paginated 100-per-page; the "last page" link in the pager (absent
+        // entirely when everything already fits on page 1) tells us how many pages to walk.
+        val pageCount = doc.selectFirst("a.c-pager__item--last")
+            ?.attr("href")
+            ?.let { Regex("""[?&]p=(\d+)""").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+            ?: 1
 
         val chapters = mutableListOf<SChapter>()
         var chapterNumber = 1f
@@ -295,14 +341,20 @@ abstract class SyosetuBase(
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     // ---------- Filters ----------
-    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
-        Filter.Header("Ranking"),
-        RankingFilter(),
-        Filter.Header("Genre"),
-        GenreFilter(),
-        Filter.Header("Modifier"),
-        ModifierFilter(),
-    )
+    // These only affect the no-query browse list (buildFilteredSearchUrl), which NOVEL18 never
+    // reaches - it's always browsed through the JSON API instead - so hide them there.
+    override fun getFilterList(data: JsonElement?): FilterList = if (supportsRanking && siteType != SiteType.NOVEL18) {
+        FilterList(
+            Filter.Header("Ranking"),
+            RankingFilter(),
+            Filter.Header("Genre"),
+            GenreFilter(),
+            Filter.Header("Modifier"),
+            ModifierFilter(),
+        )
+    } else {
+        FilterList()
+    }
 
     private class RankingFilter :
         Filter.Select<String>(
