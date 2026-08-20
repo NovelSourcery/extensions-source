@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.lib.chapterutils.paginatedChapterList
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -164,7 +165,12 @@ abstract class MzNovels :
             }
         }
 
-        val hasNextPage = doc.selectFirst(".pagination .next:not(.disabled)") != null
+        // The pagination bar has no "next" element at all (verified live) - it's numbered
+        // data-page links plus the current page as a bare <span class="active">. There's a next
+        // page iff some pagination link's data-page is greater than the current one.
+        val hasNextPage = doc.select(".pagination .pagination-link[data-page]").any {
+            (it.attr("data-page").toIntOrNull() ?: 0) > pageNo
+        }
         return MangasPage(novels, hasNextPage)
     }
     // ======================== Novel Details + Chapters ========================
@@ -185,7 +191,7 @@ abstract class MzNovels :
         val doc = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
-        val updatedChapters = if (fetchChapters) fetchAllChapters(response, doc) else chapters
+        val updatedChapters = if (fetchChapters) fetchAllChapters(response, doc, chapters) else chapters
 
         return SMangaUpdate(updatedManga, updatedChapters)
     }
@@ -252,46 +258,48 @@ abstract class MzNovels :
     }
     // ======================== Chapters ========================
 
-    private suspend fun fetchAllChapters(firstResponse: Response, doc: Document): List<SChapter> {
-        checkCaptcha(doc)
+    private suspend fun fetchAllChapters(firstResponse: Response, firstDoc: Document, existingChapters: List<SChapter>): List<SChapter> {
+        checkCaptcha(firstDoc)
 
-        val chapters = mutableListOf<SChapter>()
-        var pageNo = 1
-
-        val lastPageLink = doc.selectFirst("div#chapters .pagination")
-            ?.children()
-            ?.lastOrNull { it.tagName() == "a" }
-            ?.attr("href")
-        val maxPage = lastPageLink?.split("=")?.lastOrNull()?.toIntOrNull() ?: 1
-
-        var currentDoc = doc
-        while (pageNo <= maxPage) {
-            if (pageNo > 1) {
-                val pageUrl = "${firstResponse.request.url}?chapters_page=$pageNo"
-                val pageResponse = client.get(pageUrl, headers)
-                currentDoc = pageResponse.asJsoup()
+        // Chapter pages are newest-first (page 1 = latest, higher page = older) - the opposite
+        // of most paginated sites, but exactly what paginatedChapterList expects. This lets a
+        // manga with existing chapters probe straight to the right page instead of re-walking
+        // every page from 1 on every update.
+        suspend fun fetchPage(page: Int): Pair<List<SChapter>, Boolean> {
+            val doc = if (page == 1) {
+                firstDoc
+            } else {
+                // Verified live: the chapters pagination links are "?page=N" (not
+                // "?chapters_page=N"), which the site silently ignores.
+                client.get("${firstResponse.request.url}?page=$page", headers).asJsoup()
             }
 
-            currentDoc.select("ul.chapter-list > li.chapter-item").forEach { element ->
-                val chapterLink = element.selectFirst("a.chapter-link") ?: return@forEach
-                val chapterTitle = chapterLink.text()
-                val chapterUrl = chapterLink.attr("href")
-
-                chapters.add(
-                    SChapter.create().apply {
-                        name = chapterTitle
-                        url = chapterUrl.removePrefix(baseUrl)
-                        date_upload = 0L
-                    },
-                )
+            val pageChapters = doc.select("ul.chapter-list > li.chapter-item").mapNotNull { element ->
+                val chapterLink = element.selectFirst("a.chapter-link") ?: return@mapNotNull null
+                SChapter.create().apply {
+                    name = chapterLink.text()
+                    url = chapterLink.attr("href").removePrefix(baseUrl)
+                    date_upload = 0L
+                }
             }
 
-            pageNo++
+            val currentPage = doc.selectFirst("div#chapters .pagination > span.active")?.text()?.toIntOrNull() ?: page
+            val hasNext = doc.select("div#chapters .pagination > a").any {
+                it.attr("href").substringAfter("page=", "").toIntOrNull()?.let { p -> p > currentPage } == true
+            }
+            return Pair(pageChapters, hasNext)
         }
 
-        // Chapter list is newest-first on the site; keep that order and number descending.
-        return chapters.mapIndexed { index, chapter ->
-            chapter.apply { chapter_number = (chapters.size - index).toFloat() }
+        val merged = paginatedChapterList(
+            existingChapters = existingChapters,
+            siteTotal = 0, // not displayed anywhere on the page
+            assumedPageSize = 18,
+            sortChapters = { it }, // already newest-first per page in fetch order
+            fetchPage = ::fetchPage,
+        )
+
+        return merged.mapIndexed { index, chapter ->
+            chapter.apply { chapter_number = (merged.size - index).toFloat() }
         }
     }
 

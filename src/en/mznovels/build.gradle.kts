@@ -20,3 +20,7 @@ keiyoushi {
         path("/novel/..*")
     }
 }
+
+dependencies {
+    implementation(project(":lib:chapterutils"))
+}
