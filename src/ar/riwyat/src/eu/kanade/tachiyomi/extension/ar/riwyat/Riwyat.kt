@@ -12,7 +12,6 @@ import okhttp3.Headers
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import java.util.concurrent.TimeUnit
 
@@ -37,32 +36,7 @@ abstract class Riwyat : MadaraNovel() {
         chain.proceed(request)
     }
 
-    // Applies to every request made through [client] (popular/latest/search listings, manga
-    // details, chapter list and chapter text alike), so it replaces the old per-endpoint
-    // 403/503 + "Just a moment..."/"Attention Required!" checks that used to live in the
-    // now-absorbed popularMangaParse/latestUpdatesParse/searchMangaParse/mangaDetailsParse
-    // overrides.
-    private val cloudflareInterceptor = Interceptor { chain ->
-        val response = chain.proceed(chain.request())
-        val message = "Cloudflare Turnstile — افتح الصفحة في WebView لتجاوز التحدي."
-        if (response.code == 403 || response.code == 503) {
-            response.close()
-            throw Exception(message)
-        }
-        val title = try {
-            Jsoup.parse(response.peekBody(8192L).string()).title().trim()
-        } catch (e: Exception) {
-            ""
-        }
-        if (title == "Just a moment..." || title == "Attention Required!") {
-            response.close()
-            throw Exception(message)
-        }
-        response
-    }
-
     override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(mobileHeadersInterceptor)
-        .addInterceptor(cloudflareInterceptor)
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
 

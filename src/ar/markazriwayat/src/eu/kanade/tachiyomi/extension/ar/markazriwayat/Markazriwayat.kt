@@ -97,7 +97,6 @@ abstract class Markazriwayat :
         val response = client.get(url, headers)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
-        checkCaptcha(doc)
         return parseMangaDetails(doc).apply { this.url = path }
     }
 
@@ -109,7 +108,6 @@ abstract class Markazriwayat :
     ): SMangaUpdate {
         val request = buildMangaDetailsRequest(manga)
         val doc = client.get(request.url, request.headers).asJsoup()
-        checkCaptcha(doc)
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) fetchChapterList(doc) else chapters
@@ -200,7 +198,6 @@ abstract class Markazriwayat :
 
     override suspend fun fetchPageText(page: Page): String {
         val doc = client.get(baseUrl + page.url, headers).asJsoup()
-        checkCaptcha(doc)
         val content = doc.selectFirst(".reading-content .text-right")
             ?: doc.selectFirst(".reading-content")
             ?: return ""
@@ -213,13 +210,6 @@ abstract class Markazriwayat :
                 "[aria-hidden=\"true\"]",
         ).remove()
         return content.html().trim()
-    }
-
-    private fun checkCaptcha(doc: Document) {
-        val title = doc.title().trim()
-        if (title == "Bot Verification" || title == "Just a moment...") {
-            throw Exception("Captcha detected, please open in WebView")
-        }
     }
 
     private fun String.toRelative(): String = when {
