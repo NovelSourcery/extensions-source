@@ -15,6 +15,7 @@ import keiyoushi.network.get
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.formattedText
 import keiyoushi.utils.parseAs
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -258,8 +259,8 @@ abstract class SyosetuBase(
             ?: "No Title"
         author = doc.selectFirst(".p-novel__author a, .p-novel__author, .novel_author a")?.text()?.trim()
             ?.replace("作者：", "") ?: "Unknown"
-        description = doc.selectFirst("#novel_ex")?.html()?.trim()
-            ?: doc.selectFirst(".p-novel__synopsis")?.text()?.trim() ?: ""
+        description = doc.selectFirst("#novel_ex")?.formattedText()
+            ?: doc.selectFirst(".p-novel__synopsis")?.formattedText() ?: ""
 
         val cover = doc.selectFirst(".p-novel__cover img, .novel_img img, .book-cover img")
         thumbnail_url = cover?.attr("abs:data-src")?.takeIf { it.isNotBlank() }
@@ -346,7 +347,9 @@ abstract class SyosetuBase(
             }
         }
 
-        return chapters.sortedBy { it.chapter_number }
+        // Pages are walked oldest-first (page 1 = chapters 1-100, ...), but the app expects
+        // newest-first - reverse instead of sorting ascending.
+        return chapters.sortedByDescending { it.chapter_number }
     }
 
     private val dateRegex = Regex("""\d{4}/\d{2}/\d{2} \d{2}:\d{2}""")
