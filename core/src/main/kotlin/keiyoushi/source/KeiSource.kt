@@ -392,6 +392,12 @@ abstract class KeiSource : HttpSource() {
         url = slugPath.slug(url)
     }
 
+    /** Stores [SChapter.url] as a bare slug via [slugPath], reusing [setUrlWithoutDomain]'s domain-stripping for a raw href. */
+    protected fun SChapter.setSlugUrl(slugPath: SlugPath, href: String) {
+        setUrlWithoutDomain(href)
+        url = slugPath.slug(url)
+    }
+
     /**
      * Returns the absolute web URL for the provided manga.
      * Used for the WebView ("Open in WebView") and sharing features.
