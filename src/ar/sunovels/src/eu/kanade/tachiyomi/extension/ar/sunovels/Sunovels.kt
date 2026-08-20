@@ -1,6 +1,9 @@
 package eu.kanade.tachiyomi.novelextension.ar.sunovels
 
+import androidx.preference.PreferenceScreen
+import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -13,6 +16,7 @@ import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.getPreferencesLazy
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import okhttp3.HttpUrl
@@ -23,7 +27,10 @@ import org.jsoup.Jsoup
 @Source
 abstract class Sunovels :
     KeiSource(),
-    NovelSource {
+    NovelSource,
+    ConfigurableSource {
+
+    private val preferences by getPreferencesLazy()
 
     override val supportsLatest = true
 
@@ -221,7 +228,7 @@ abstract class Sunovels :
 
         // Extract total pages
         val totalPages = extractTotalPages(body)
-        if (totalPages <= 1) return chapters.sortedBy { it.chapter_number }
+        if (totalPages <= 1) return chapters.sortedByDescending { it.chapter_number }
 
         // Fetch remaining pages in parallel with retry
         val pagesToFetch = (1 until totalPages).toMutableList()
@@ -257,10 +264,12 @@ abstract class Sunovels :
             pagesToFetch.addAll(failedPages)
         }
 
-        return chapters.sortedBy { it.chapter_number }
+        return chapters.sortedByDescending { it.chapter_number }
     }
 
     private fun parseChaptersFromHtml(body: String, slug: String, chapters: MutableList<SChapter>, docUrl: String) {
+        val showLocked = preferences.getBoolean(PREF_SHOW_LOCKED, false)
+
         // Method 1: Plain HTML links
         val doc = Jsoup.parse(body, docUrl)
         doc.select("a[href*=/novel/$slug/]").forEach { link ->
@@ -269,30 +278,43 @@ abstract class Sunovels :
             val chapterNum = Regex("/novel/$slug/(\\d+)").find(href)
                 ?.groupValues?.get(1)?.toFloatOrNull() ?: return@forEach
             if (chapters.any { it.chapter_number == chapterNum }) return@forEach
+            val locked = link.selectFirst("svg[data-icon=lock]") != null
+            if (locked && !showLocked) return@forEach
             val title = link.selectFirst("span, strong")?.text()
                 ?: link.text()
             chapters.add(
                 SChapter.create().apply {
                     url = "/novel/$slug/${chapterNum.toInt()}"
-                    name = title.ifEmpty { "الفصل ${chapterNum.toInt()}" }
+                    name = (if (locked) "🔒 " else "") + title.ifEmpty { "الفصل ${chapterNum.toInt()}" }
                     chapter_number = chapterNum
                 },
             )
         }
-        // Method 2: Unescaped RSC data - find href patterns
-        val rscBody = extractRscBody(body)
-        val hrefPattern = Regex(""""href":"/novel/$slug/(\d+)"""")
-        val titlePattern = Regex(""""title":"(\d+ [^"]+)"""")
-        val hrefes = hrefPattern.findAll(rscBody).map { it.groupValues[1].toFloatOrNull() }.filterNotNull().toList()
-        val titles = titlePattern.findAll(rscBody).map { it.groupValues[1] }.toList()
+        // Method 2: Unescaped RSC data - each chapter block is
+        // "href":"/novel/<slug>/<n>","prefetch":...,"title":"<name>" ... a lock-status svg
+        // (data-icon "lock" or "lock-open") before the next chapter's href. The title itself
+        // isn't a fixed shape - early/untitled chapters use a bare "<n> <word>" placeholder,
+        // later ones a real "<word> <n> - <name>" title, so match any string value.
+        // Scoped to start at the chapters list itself - the page also has a "continue reading"
+        // widget referencing one arbitrary chapter earlier in the RSC body, which would otherwise
+        // steal the first real chapter's title/lock-icon match (its own href has no title/icon
+        // nearby, so the non-greedy match skips ahead into the real list to find one).
+        val rscBody = extractRscBody(body).let { it.substringAfter("chaptersList", it) }
+        val chapterBlockPattern = Regex(
+            """"href":"/novel/$slug/(\d+)"[^}]*?"title":"([^"]+)".*?"data-icon":"(lock(?:-open)?)"""",
+            RegexOption.DOT_MATCHES_ALL,
+        )
 
-        for ((i, num) in hrefes.withIndex()) {
+        for (match in chapterBlockPattern.findAll(rscBody)) {
+            val num = match.groupValues[1].toFloatOrNull() ?: continue
             if (chapters.any { it.chapter_number == num }) continue
-            val title = titles.getOrElse(i) { "" }
+            val locked = match.groupValues[3] == "lock"
+            if (locked && !showLocked) continue
+            val title = match.groupValues[2]
             chapters.add(
                 SChapter.create().apply {
                     url = "/novel/$slug/${num.toInt()}"
-                    name = title.ifEmpty { "الفصل ${num.toInt()}" }
+                    name = (if (locked) "🔒 " else "") + title.ifEmpty { "الفصل ${num.toInt()}" }
                     chapter_number = num
                 },
             )
@@ -345,10 +367,12 @@ abstract class Sunovels :
         ) ?: return ""
         // Remove hidden watermark elements (d-none class contains anti-scraping hashes)
         content.select("p.d-none, .d-none").remove()
-        // Remove ads, navigation, and other non-content elements
+        // Remove ads, navigation, and other non-content elements, plus the Play
+        // Store/App Store download badges the app embeds inline in the chapter body.
         content.select(
             "script, style, .ads, .navigation, .chapter-nav, " +
-                ".social-share, .comments, nav, footer",
+                ".social-share, .comments, nav, footer, " +
+                "a[href*=play.google.com], a[href*=apps.apple.com]",
         ).remove()
         return content.html().trim()
     }
@@ -385,5 +409,18 @@ abstract class Sunovels :
         )
         val srcMatch = Regex(""""src":"/uploads/([^"]+)"""").find(searchRange)
         return srcMatch?.groupValues?.get(1)?.let { "/uploads/$it" }
+    }
+
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        SwitchPreferenceCompat(screen.context).apply {
+            key = PREF_SHOW_LOCKED
+            title = "Show locked chapters"
+            summary = "Include premium/locked chapters in the chapter list."
+            setDefaultValue(false)
+        }.also(screen::addPreference)
+    }
+
+    companion object {
+        private const val PREF_SHOW_LOCKED = "pref_show_locked_chapters"
     }
 }
