@@ -162,7 +162,9 @@ abstract class SeaNovel :
             offset += limit
             hasMore = chapterResponse.hasMore
         } while (hasMore)
-        return allChapters
+        // Paginated ascending (oldest-first) to make offset/limit walk the full list correctly -
+        // the app expects newest-first, so flip the assembled result.
+        return allChapters.reversed()
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
@@ -246,7 +248,7 @@ abstract class SeaNovel :
         title = titleAr.ifEmpty { titleOriginal }
         author = this@toSManga.author
         description = this@toSManga.description
-        thumbnail_url = "$baseUrl/api/novel/$slug/cover?type=original&v=$coverVersion"
+        thumbnail_url = "$baseUrl/api/novel/$slug/cover?v=$coverVersion"
         genre = genres.joinToString()
         status = when (this@toSManga.status) {
             "ongoing" -> SManga.ONGOING
