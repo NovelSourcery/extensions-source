@@ -1,5 +1,8 @@
 package eu.kanade.tachiyomi.novelextension.en.storyseedling
 
+import androidx.preference.PreferenceScreen
+import androidx.preference.SwitchPreferenceCompat
+import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -14,6 +17,7 @@ import keiyoushi.network.get
 import keiyoushi.network.post
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.getPreferencesLazy
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonArray
@@ -35,10 +39,12 @@ import uy.kohesive.injekt.injectLazy
 @Source
 abstract class StorySeedling :
     KeiSource(),
-    NovelSource {
+    NovelSource,
+    ConfigurableSource {
 
     override val supportsLatest = true
     private val json: Json by injectLazy()
+    private val preferences by getPreferencesLazy()
 
     /** [SManga.url] is stored as the bare slug under "/series/"; a stored value starting with
      * "/" is a pre-existing full-path entry and is resolved unchanged. */
@@ -315,25 +321,30 @@ abstract class StorySeedling :
                     // LN Reader: Handle JSON array format [{title, url, date, slug, is_locked}, ...]
                     when {
                         chaptersData?.let { it is kotlinx.serialization.json.JsonArray } == true -> {
+                            val showLocked = preferences.getBoolean(PREF_SHOW_LOCKED, false)
+                            var counter = 0f
                             val chapters = chaptersData.jsonArray.mapNotNull { chapterJson ->
                                 try {
                                     val chapterObj = chapterJson.jsonObject
                                     val url = chapterObj["url"]?.jsonPrimitive?.content ?: return@mapNotNull null
                                     val title = chapterObj["title"]?.jsonPrimitive?.content ?: ""
-                                    val slug = chapterObj["slug"]?.jsonPrimitive?.content ?: ""
                                     val isLocked = chapterObj["is_locked"]?.jsonPrimitive?.content == "true"
+                                    if (isLocked && !showLocked) return@mapNotNull null
 
+                                    counter++
                                     SChapter.create().apply {
                                         this.url = url.replace(baseUrl, "")
                                         this.name = if (isLocked) "🔒 $title" else title
                                         date_upload = 0L
-                                        chapter_number = slug.toFloatOrNull() ?: 0f
+                                        // "slug" (e.g. "v1/2") isn't numeric - number by API order instead.
+                                        chapter_number = counter
                                     }
                                 } catch (e: Exception) {
                                     null
                                 }
                             }
-                            if (chapters.isNotEmpty()) return chapters
+                            // API returns oldest-first; the app expects newest-first.
+                            if (chapters.isNotEmpty()) return chapters.reversed()
                         }
 
                         // HTML string format (fallback)
@@ -413,17 +424,11 @@ abstract class StorySeedling :
         val response = client.get(baseUrl + page.url, headers)
         val doc = response.asJsoup()
 
-        // Check for Turnstile - StorySeedling uses loadChapter() with Turnstile
-        // The pattern is: x-data="loadChapter('sitekey', 'chapterId')"
-        val hasLoadChapter = doc.selectFirst("div[x-data*=loadChapter]") != null
-        if (hasLoadChapter) {
-            // Check for Turnstile first
-            checkTurnstile(doc)
-            // If no Turnstile detected but loadChapter exists, content requires JavaScript
-            throw Exception("Chapter content requires WebView (Turnstile protection). Please read in WebView.")
-        }
-
-        // Check for standard Turnstile
+        // Chapter pages always carry a loadChapter() Alpine component regardless of whether an
+        // actual Turnstile challenge is being shown - it only renders one behind
+        // `x-if="showCaptcha"`, a client-side flag this extension can't evaluate. Treating its
+        // mere presence as "Turnstile detected" threw on every single chapter. Only a genuine
+        // Turnstile signal (checked below) should block.
         checkTurnstile(doc)
 
         // LN Reader: div.justify-center > div.mb-4
@@ -449,7 +454,14 @@ abstract class StorySeedling :
             }
         }
 
-        return cleanedDoc.html()
+        val result = cleanedDoc.html()
+        if (result.isBlank() && doc.selectFirst("div[x-data*=loadChapter]") != null) {
+            // Confirmed live: the content div (x-html="content") ships genuinely empty in the
+            // server-rendered HTML - loadChapter() fetches it client-side, behind Turnstile, and
+            // there's no way to replicate that flow here.
+            throw Exception("Chapter content requires WebView (Turnstile-gated content load). Please read in WebView.")
+        }
+        return result
     }
 
     override fun getFilterList(data: JsonElement?) = FilterList(
@@ -672,4 +684,17 @@ abstract class StorySeedling :
                 Tag("World Travel", "1070"),
             ),
         )
+
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        SwitchPreferenceCompat(screen.context).apply {
+            key = PREF_SHOW_LOCKED
+            title = "Show locked chapters"
+            summary = "Include premium/locked chapters in the chapter list."
+            setDefaultValue(false)
+        }.also(screen::addPreference)
+    }
+
+    companion object {
+        private const val PREF_SHOW_LOCKED = "pref_show_locked_chapters"
+    }
 }
