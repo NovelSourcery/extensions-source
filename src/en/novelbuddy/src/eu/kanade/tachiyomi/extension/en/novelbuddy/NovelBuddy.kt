@@ -13,6 +13,7 @@ import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.formattedText
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -41,6 +42,10 @@ abstract class NovelBuddy :
     override val supportsLatest = true
 
     private val apiUrl = "https://api.novelbuddy.me"
+
+    // The API's own "url" field is a bare root-relative path (e.g. "/some-novel-slug"),
+    // confirmed live against api.novelbuddy.me/titles/search.
+    private val mangaPathTemplate: SlugPath = SlugPath("/")
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -122,7 +127,7 @@ abstract class NovelBuddy :
             val url = obj["url"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
             SManga.create().apply {
                 title = name
-                this.url = url.trimStart('/')
+                this.url = mangaPathTemplate.slug(url)
                 thumbnail_url = obj["cover"]?.jsonPrimitive?.contentOrNull
                     ?.let { if (it.startsWith("//")) "https:$it" else it }
             }
@@ -134,15 +139,17 @@ abstract class NovelBuddy :
 
     // Details + Chapters
 
-    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(buildUrl(manga.url), headers)
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(buildUrl(mangaPathTemplate.resolve(manga.url)), headers)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val path = url.encodedPath.trimStart('/')
-        val tempManga = SManga.create().apply { this.url = path }
+        val slug = mangaPathTemplate.slug(url.encodedPath)
+        val tempManga = SManga.create().apply { this.url = slug }
         val mangaDetailsRequest = buildMangaDetailsRequest(tempManga)
         val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
-        return parseMangaDetails(response).apply { this.url = path }
+        return parseMangaDetails(response).apply { this.url = slug }
     }
 
     override suspend fun fetchMangaUpdate(
@@ -151,21 +158,24 @@ abstract class NovelBuddy :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        // Details and the chapter list both come from the same novel page - fetch it once.
+        // Details and the chapter list both come from the same novel page - fetch and parse the
+        // body once, since the response can only be consumed once.
         val mangaDetailsRequest = buildMangaDetailsRequest(manga)
         val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers)
+        val initialManga = response.asJsoup().selectFirst("#__NEXT_DATA__")?.html()?.initialManga()
 
-        val updatedManga = if (fetchDetails) parseMangaDetails(response) else manga
-        val updatedChapters = if (fetchChapters) parseChapterList(response) else chapters
+        val updatedManga = if (fetchDetails) parseMangaDetails(initialManga) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(initialManga) else chapters
 
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private fun parseMangaDetails(response: Response): SManga {
-        val script = response.asJsoup().selectFirst("#__NEXT_DATA__")?.html()
-            ?: return SManga.create().apply { title = "Untitled" }
-        val initialManga = script.initialManga()
-            ?: return SManga.create().apply { title = "Untitled" }
+    private fun parseMangaDetails(response: Response): SManga = parseMangaDetails(
+        response.asJsoup().selectFirst("#__NEXT_DATA__")?.html()?.initialManga(),
+    )
+
+    private fun parseMangaDetails(initialManga: JsonObject?): SManga {
+        if (initialManga == null) return SManga.create().apply { title = "Untitled" }
 
         return SManga.create().apply {
             title = initialManga["name"]?.jsonPrimitive?.contentOrNull ?: "Untitled"
@@ -203,10 +213,8 @@ abstract class NovelBuddy :
     private fun JsonObject.names(key: String): String = this[key]?.jsonArray?.mapNotNull { it.jsonObject["name"]?.jsonPrimitive?.contentOrNull }
         ?.joinToString().orEmpty()
 
-    private suspend fun parseChapterList(response: Response): List<SChapter> {
-        val script = response.asJsoup().selectFirst("#__NEXT_DATA__")?.html()
-            ?: return emptyList()
-        val initialManga = script.initialManga() ?: return emptyList()
+    private suspend fun parseChapterList(initialManga: JsonObject?): List<SChapter> {
+        if (initialManga == null) return emptyList()
 
         val mangaId = initialManga["id"]?.jsonPrimitive?.contentOrNull ?: return emptyList()
         val cv = (initialManga["content_version"] ?: initialManga["cv"])?.jsonPrimitive?.contentOrNull

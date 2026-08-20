@@ -26,6 +26,7 @@ import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
+import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
@@ -105,35 +106,35 @@ abstract class CrimsonScrolls :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        // Details and the chapter list both live on the same novel page - fetch it once.
+        // Details and the chapter list both live on the same novel page - fetch and parse it
+        // once, since the response can only be consumed once.
         val detailsRequest = buildMangaDetailsRequest(manga)
-        val response = client.get(detailsRequest.url, detailsRequest.headers)
+        val doc = client.get(detailsRequest.url, detailsRequest.headers).asJsoup()
 
-        val updatedManga = if (fetchDetails) parseMangaDetails(response) else manga
-        val updatedChapters = if (fetchChapters) parseChapterList(response) else chapters
+        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
 
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private fun parseMangaDetails(response: Response): SManga {
-        val doc = response.asJsoup()
-        return SManga.create().apply {
-            title = doc.selectFirst("h1")?.text().orEmpty()
-            thumbnail_url = doc.selectFirst(".cs-cover img")?.let {
-                it.attr("abs:data-src").ifBlank { it.attr("abs:src") }
-            }
-            description = doc.selectFirst(".cs-about-synopsis .cs-prose, .cs-about-synopsis")?.formattedText()
-            author = doc.select(".cs-novel-details dl div, dl div")
-                .firstOrNull { it.selectFirst("dt")?.text()?.equals("Author", true) == true }
-                ?.selectFirst("dd")?.text()
-            genre = doc.select(".cs-detail-genres a").joinToString { it.text() }
-            status = when (doc.selectFirst(".cs-cover-status")?.text()?.lowercase()) {
-                "ongoing" -> SManga.ONGOING
-                "hiatus" -> SManga.ON_HIATUS
-                "dropped", "cancelled" -> SManga.CANCELLED
-                "completed" -> SManga.COMPLETED
-                else -> SManga.UNKNOWN
-            }
+    private fun parseMangaDetails(response: Response): SManga = parseMangaDetails(response.asJsoup())
+
+    private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
+        title = doc.selectFirst("h1")?.text().orEmpty()
+        thumbnail_url = doc.selectFirst(".cs-cover img")?.let {
+            it.attr("abs:data-src").ifBlank { it.attr("abs:src") }
+        }
+        description = doc.selectFirst(".cs-about-synopsis .cs-prose, .cs-about-synopsis")?.formattedText()
+        author = doc.select(".cs-novel-details dl div, dl div")
+            .firstOrNull { it.selectFirst("dt")?.text()?.equals("Author", true) == true }
+            ?.selectFirst("dd")?.text()
+        genre = doc.select(".cs-detail-genres a").joinToString { it.text() }
+        status = when (doc.selectFirst(".cs-cover-status")?.text()?.lowercase()) {
+            "ongoing" -> SManga.ONGOING
+            "hiatus" -> SManga.ON_HIATUS
+            "dropped", "cancelled" -> SManga.CANCELLED
+            "completed" -> SManga.COMPLETED
+            else -> SManga.UNKNOWN
         }
     }
 
@@ -152,8 +153,7 @@ abstract class CrimsonScrolls :
         val date: String = "",
     )
 
-    private suspend fun parseChapterList(response: Response): List<SChapter> {
-        val doc = response.asJsoup()
+    private suspend fun parseChapterList(doc: Document): List<SChapter> {
         val novelId = doc.selectFirst("[data-novel-chapters]")?.attr("data-novel-chapters")
             ?.takeIf { it.isNotBlank() } ?: return emptyList()
 

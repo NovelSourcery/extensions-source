@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.parseAs
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.jsonArray
@@ -29,6 +30,10 @@ abstract class BakaTsuki :
 
     private val apiUrl = "$baseUrl/project/api.php"
     private val pagePrefix = "$baseUrl/project/index.php?title="
+
+    // manga.url already stores the bare MediaWiki page title (no path prefix ever
+    // gets stored), so this only formalizes getMangaUrl's resolution, not the storage itself.
+    private val mangaPathTemplate = SlugPath("/project/index.php?title=")
 
     override val supportsLatest = true
 
@@ -110,7 +115,7 @@ abstract class BakaTsuki :
         return GET(url.build(), headers)
     }
 
-    override fun getMangaUrl(manga: SManga): String = pagePrefix + manga.url
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val title = url.queryParameter("title")?.replace(" ", "_") ?: return null
@@ -126,18 +131,23 @@ abstract class BakaTsuki :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        // Details and the chapter list both come from the same MediaWiki "parse" call.
+        // Details and the chapter list both come from the same MediaWiki "parse" call - parse the
+        // body once and share the result, since the response can only be consumed once.
         val request = parseRequest(manga.url)
         val response = client.get(request.url, request.headers)
+        val result = response.parseAs<ParseResponse>().orThrow(request.url.queryParameter("page").orEmpty())
 
-        val updatedManga = if (fetchDetails) parseMangaDetails(response) else manga
-        val updatedChapters = if (fetchChapters) parseChapterList(response) else chapters
+        val updatedManga = if (fetchDetails) parseMangaDetails(result) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(result) else chapters
 
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private fun parseMangaDetails(response: Response): SManga {
-        val result = response.parseAs<ParseResponse>().orThrow(response.request.url.queryParameter("page").orEmpty())
+    private fun parseMangaDetails(response: Response): SManga = parseMangaDetails(
+        response.parseAs<ParseResponse>().orThrow(response.request.url.queryParameter("page").orEmpty()),
+    )
+
+    private fun parseMangaDetails(result: ParseData): SManga {
         val doc = Jsoup.parse(result.text.content, "$baseUrl/project/")
         return SManga.create().apply {
             title = result.title
@@ -155,8 +165,7 @@ abstract class BakaTsuki :
         }
     }
 
-    private fun parseChapterList(response: Response): List<SChapter> {
-        val result = response.parseAs<ParseResponse>().orThrow(response.request.url.queryParameter("page").orEmpty())
+    private fun parseChapterList(result: ParseData): List<SChapter> {
         val projectTitle = result.title.replace(" ", "_")
         val doc = Jsoup.parse(result.text.content, "$baseUrl/project/")
 

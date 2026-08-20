@@ -194,19 +194,27 @@ abstract class BrightNovels :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        // Details and the chapter list both come from the same series page - fetch it once.
+        // Details and the chapter list both come from the same series page - fetch and parse the
+        // body once, since the response can only be consumed once.
         val request = buildMangaDetailsRequest(manga)
         val response = client.get(request.url, request.headers)
+        val fallbackSeriesSlug = response.request.url.pathSegments
+            .lastOrNull { it.isNotBlank() }
+            ?.let(::decodePathSegment)
+            .orEmpty()
+        val page = extractInertiaProps(response.body.string(), response.headers)
 
-        val updatedManga = if (fetchDetails) parseMangaDetails(response) else manga
-        val updatedChapters = if (fetchChapters) parseChapterList(response) else chapters
+        val updatedManga = if (fetchDetails) parseMangaDetails(page) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(page, fallbackSeriesSlug) else chapters
 
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private fun parseMangaDetails(response: Response): SManga {
-        val body = response.body.string()
-        val page = extractInertiaProps(body, response.headers)
+    private fun parseMangaDetails(response: Response): SManga = parseMangaDetails(
+        extractInertiaProps(response.body.string(), response.headers),
+    )
+
+    private fun parseMangaDetails(page: JsonObject): SManga {
         val series = page["series"].asObject() ?: JsonObject(emptyMap())
         cacheFilterMetadata(page, series)
 
@@ -233,13 +241,7 @@ abstract class BrightNovels :
         }
     }
 
-    private suspend fun parseChapterList(response: Response): List<SChapter> {
-        val fallbackSeriesSlug = response.request.url.pathSegments
-            .lastOrNull { it.isNotBlank() }
-            ?.let(::decodePathSegment)
-            .orEmpty()
-        val body = response.body.string()
-        val page = extractInertiaProps(body, response.headers)
+    private suspend fun parseChapterList(page: JsonObject, fallbackSeriesSlug: String): List<SChapter> {
         cacheFilterMetadata(page, page["series"].asObject())
         val series = page["series"].asObject() ?: JsonObject(emptyMap())
         val seriesSlug = series.string("slug")
