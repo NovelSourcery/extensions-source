@@ -34,10 +34,12 @@ abstract class HizoManga : MadaraNovel() {
     }
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(baseUrl + page.url, headers)
+        // page.url is already an absolute URL (see MadaraNovel.getPageList) - baseUrl must not be
+        // prepended again here, or the request resolves against a bogus "site+https" host.
+        val response = client.get(page.url, headers)
         val doc = response.asJsoup()
 
-        checkCaptcha(doc, baseUrl + page.url)
+        checkCaptcha(doc, page.url)
 
         doc.select(
             "div.ads, div.unlock-buttons, sub, script, ins, .adsbygoogle, .code-block, noscript, " +
