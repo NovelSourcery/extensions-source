@@ -4,6 +4,4 @@ import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 import keiyoushi.annotation.Source
 
 @Source
-abstract class TranslationWeaver : LightNovelWPNovel() {
-    override val reverseChapters = true
-}
+abstract class TranslationWeaver : LightNovelWPNovel()
