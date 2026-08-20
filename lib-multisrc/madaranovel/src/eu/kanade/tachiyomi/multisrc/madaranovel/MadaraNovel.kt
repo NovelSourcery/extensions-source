@@ -338,7 +338,6 @@ abstract class MadaraNovel :
         postId?.let { cachePostId(mangaUrl, it) }
 
         val siteTotal = extractChapterCount(doc)
-        Log.d(TAG, "getMangaUpdate: url=$mangaUrl existing=${chapters.size} siteTotal=$siteTotal")
 
         val updatedChapters = if (shouldReturnExisting(chapters.size, siteTotal)) {
             Log.d(TAG, "getMangaUpdate: count unchanged — returning existing")
