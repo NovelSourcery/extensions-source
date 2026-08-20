@@ -19,6 +19,7 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.stripChapterNumberPrefix
 import kotlinx.serialization.json.Json
@@ -50,6 +51,9 @@ abstract class Konkon :
 
     private val apiBase = "https://api-k.konkon.ink/api/public"
     private val mediaProxyBase = "https://api-k.konkon.ink"
+
+    // Current site chapter path is "/read/chapter/<id>/<slug>"; only the id/slug tail is stored.
+    private val chapterPath = SlugPath("/read/chapter/")
 
     private val preferences: SharedPreferences by getPreferencesLazy()
 
@@ -272,18 +276,27 @@ abstract class Konkon :
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        // "/read/chapter/<id>/<slug>" (current) or "/chapter/<id>" (legacy)
-        val chapterId = chapter.url.substringBefore('?').trim('/').split('/')
-            .firstOrNull { seg -> seg.isNotEmpty() && seg.all(Char::isDigit) }
-            ?: chapter.url.substringAfterLast('/')
+        val chapterId = extractChapterId(chapter.url)
         return listOf(Page(0, "$apiBase/chapters/$chapterId"))
     }
 
-    // chapter.url is the site path; route legacy "/chapter/<id>" entries through /read
-    override fun getChapterUrl(chapter: SChapter): String = if (chapter.url.startsWith("/read/")) {
-        baseUrl + chapter.url
-    } else {
-        "$baseUrl/read${chapter.url}"
+    /** "<id>/<slug>" (current, bare) or "/read/chapter/<id>/<slug>" or "/chapter/<id>" (legacy full paths). */
+    private fun extractChapterId(raw: String): String {
+        val path = chapterPath.resolve(raw)
+        return path.substringBefore('?').trim('/').split('/')
+            .firstOrNull { seg -> seg.isNotEmpty() && seg.all(Char::isDigit) }
+            ?: path.substringAfterLast('/')
+    }
+
+    // chapter.url may be a bare "<id>/<slug>" slug, a full "/read/chapter/..." path, or a
+    // super-legacy "/chapter/<id>" path that needs routing through /read.
+    override fun getChapterUrl(chapter: SChapter): String {
+        val stored = chapter.url
+        return when {
+            stored.startsWith("/read/") -> baseUrl + stored
+            stored.startsWith("/") -> "$baseUrl/read$stored"
+            else -> baseUrl + chapterPath.resolve(stored)
+        }
     }
 
     override suspend fun fetchPageText(page: Page): String {
@@ -292,10 +305,7 @@ abstract class Konkon :
         val contentUrl = if (page.url.contains("/api/public/chapters/")) {
             page.url
         } else {
-            val chapterId = page.url.substringBefore('?').trim('/').split('/')
-                .firstOrNull { seg -> seg.isNotEmpty() && seg.all(Char::isDigit) }
-                ?: page.url.substringAfterLast('/')
-            "$apiBase/chapters/$chapterId"
+            "$apiBase/chapters/${extractChapterId(page.url)}"
         }
         val response = client.get(contentUrl, headers, ensureSuccess = false)
         val body = response.body.string()
@@ -521,7 +531,7 @@ abstract class Konkon :
                             .replace(Regex("[^a-z0-9]+"), "-")
                             .trim('-')
                     }
-                    url = "/read/chapter/$chapterId/$chapterSlug"
+                    url = "$chapterId/$chapterSlug"
                     name = visibleTitle.stripChapterNumberPrefix().ifBlank { "Chapter $sortOrder" }
                     chapter_number = chapterNumber
                     date_upload = parseDate(chapter.str("scheduled_for") ?: chapter.str("created_at"))
