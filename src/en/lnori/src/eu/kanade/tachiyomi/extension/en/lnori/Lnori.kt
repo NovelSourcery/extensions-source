@@ -33,6 +33,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
@@ -77,6 +78,11 @@ abstract class Lnori :
     )
 
     // ======================== Helper: Resolve Image URL ========================
+
+    /** First usable image source on this element (srcset > data-src > src), or null. */
+    private fun Element.imageUrl(): String? = attr("srcset").split(",").firstOrNull()?.trim()?.split(" ")?.firstOrNull()?.takeIf { it.isNotEmpty() }
+        ?: attr("data-src").ifEmpty { null }
+        ?: attr("src").ifEmpty { null }
 
     private fun resolveImageUrl(url: String): String = when {
         url.isBlank() -> ""
@@ -506,15 +512,23 @@ abstract class Lnori :
             ?.text()
             ?.removePrefix("Author:")?.trim()
 
-        val imgEl = document.selectFirst(
-            "figure.cover-wrap img, figure img, picture img, " +
-                ".cover img, img[class*=cover], img[alt*=cover i], " +
-                ".series-cover img, header img",
+        // Selectors tried in priority order (not a single comma-list): a merged selector list
+        // returns jsoup's first DOM-order match across ALL of them, and this page's <header>
+        // (which appears before the cover in the DOM) has its own hidden, src-less
+        // `.user-avatar-img` that happens to match the "header img" fallback - so a single
+        // selectFirst grabs that empty avatar instead of the real cover.
+        val coverSelectors = listOf(
+            "figure.cover-wrap img",
+            ".cover img",
+            "img[class*=cover]",
+            "img[alt*=cover i]",
+            ".series-cover img",
+            "picture img",
+            "figure img",
+            "header img",
         )
-        thumbnail_url = imgEl?.let { img ->
-            img.attr("srcset").split(",").firstOrNull()?.trim()?.split(" ")?.firstOrNull()?.takeIf { it.isNotEmpty() }
-                ?: img.attr("data-src").ifEmpty { null }
-                ?: img.attr("src").ifEmpty { null }
+        thumbnail_url = coverSelectors.firstNotNullOfOrNull { selector ->
+            document.select(selector).firstNotNullOfOrNull { it.imageUrl() }
         }?.let { resolveImageUrl(it) }
 
         description = document.selectFirst(
@@ -580,12 +594,8 @@ abstract class Lnori :
             val href = card.selectFirst(".stretched-link, .card-cover a, .card-title a")?.attr("href")
                 ?: "/series/$id/"
 
-            val imgEl = card.selectFirst(".card-cover img, img")
-            val cover = imgEl?.let { img ->
-                img.attr("data-src").ifEmpty {
-                    img.attr("srcset").split(",").firstOrNull()?.trim()?.split(" ")?.firstOrNull()
-                        ?: img.attr("src")
-                }
+            val cover = listOf(".card-cover img", "img").firstNotNullOfOrNull { selector ->
+                card.select(selector).firstNotNullOfOrNull { it.imageUrl() }
             } ?: ""
 
             val desc = card.selectFirst(".popup-description")?.text() ?: ""
