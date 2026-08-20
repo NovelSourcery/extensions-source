@@ -9,5 +9,5 @@ abstract class SyosetuMoonlight :
     SyosetuBase(
         siteType = SiteType.MNLT,
         isAdult = true,
-        supportsRanking = false,
+        supportsRanking = true,
     )

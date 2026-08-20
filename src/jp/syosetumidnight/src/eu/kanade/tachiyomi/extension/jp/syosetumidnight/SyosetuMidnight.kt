@@ -9,5 +9,5 @@ abstract class SyosetuMidnight :
     SyosetuBase(
         siteType = SiteType.MID,
         isAdult = true,
-        supportsRanking = false,
+        supportsRanking = true,
     )

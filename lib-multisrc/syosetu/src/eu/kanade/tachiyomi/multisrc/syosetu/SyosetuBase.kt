@@ -65,8 +65,17 @@ abstract class SyosetuBase(
     private val dateFormat = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm", Locale.ROOT)
     private val mangaPath = SlugPath("/")
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
-    override fun getChapterUrl(chapter: SChapter): String = baseUrl + mangaPath.resolve(chapter.url)
+    // NOC/MID/MNLT are genre-curated ranking & search fronts over novel18.syosetu.com - every
+    // novel/chapter/detail page they link to actually lives on novel18.syosetu.com itself
+    // (their own hosts 404 on a novel path), so all content fetches must go there instead of
+    // browseBaseUrl/baseUrl.
+    private val contentBaseUrl = when (siteType) {
+        SiteType.NOC, SiteType.MID, SiteType.MNLT -> "https://novel18.syosetu.com"
+        else -> baseUrl
+    }
+
+    override fun getMangaUrl(manga: SManga): String = contentBaseUrl + mangaPath.resolve(manga.url)
+    override fun getChapterUrl(chapter: SChapter): String = contentBaseUrl + mangaPath.resolve(chapter.url)
 
     // novel18/mid/mnlt gate their listings behind an age-confirmation cookie
     private fun requestHeaders(): Headers = if (isAdult) {
@@ -76,17 +85,24 @@ abstract class SyosetuBase(
     }
 
     // ---------- Popular / Latest ----------
-    // NOC/MNLT/MID have no ranking pages - only search is available on those sites.
+    // NOC/MNLT/MID do have their own ranking pages (/rank/list/type/{period}_{modifier}/), just
+    // no genre breakdown and no all-time "累計" period (only daily/weekly/monthly/quarter/yearly
+    // - "total" 404s there), and no ranking-based notion of "latest" - that comes from the
+    // site's own search listing sorted by order=new instead (see buildOrderedListUrl).
     // NOVEL18 has neither a ranking nor a search HTML page anymore (both 404 even with the
     // age cookie) - it's browsed through the public novel18api JSON API instead.
     override suspend fun getPopularManga(page: Int): MangasPage = when {
         siteType == SiteType.NOVEL18 -> fetchNovel18ApiList(page, order = "hyoka")
+        siteType == SiteType.NOC || siteType == SiteType.MID || siteType == SiteType.MNLT ->
+            fetchNovelList(buildRankingUrl(page, "daily", "", "total"))
         supportsRanking -> fetchNovelList(buildRankingUrl(page, "total", "", "total"))
         else -> MangasPage(emptyList(), false)
     }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage = when {
         siteType == SiteType.NOVEL18 -> fetchNovel18ApiList(page, order = "new")
+        siteType == SiteType.NOC || siteType == SiteType.MID || siteType == SiteType.MNLT ->
+            fetchNovelList(buildOrderedListUrl(page, "new"))
         supportsRanking -> fetchNovelList(buildRankingUrl(page, "daily", "", "total"))
         else -> MangasPage(emptyList(), false)
     }
@@ -152,8 +168,18 @@ abstract class SyosetuBase(
         return "$browseBaseUrl/$searchPath?word=$encoded&p=$page"
     }
 
+    // Wordless search listing sorted by order (new/hyoka/...) - used as "latest"/"popular" for
+    // NOC/MID/MNLT, which have no chronological concept on their ranking pages.
+    private fun buildOrderedListUrl(page: Int, order: String): String {
+        val searchPath = when (siteType) {
+            SiteType.NCODE, SiteType.NOVEL18 -> "search.php"
+            SiteType.NOC, SiteType.MNLT, SiteType.MID -> "search/search/search.php"
+        }
+        return "$browseBaseUrl/$searchPath?type=&order=$order&p=$page"
+    }
+
     protected open fun buildFilteredSearchUrl(page: Int, filters: FilterList): String {
-        var ranking = "total"
+        var ranking = "daily"
         var genre = ""
         var modifier = "total"
         filters.forEach { filter ->
@@ -218,7 +244,7 @@ abstract class SyosetuBase(
     // ---------- Novel details ----------
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
-        val response = client.get(baseUrl + path, requestHeaders(), ensureSuccess = false)
+        val response = client.get(contentBaseUrl + path, requestHeaders(), ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         checkCloudflare(doc)
@@ -258,7 +284,7 @@ abstract class SyosetuBase(
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val response = client.get(baseUrl + mangaPath.resolve(manga.url), requestHeaders())
+        val response = client.get(contentBaseUrl + mangaPath.resolve(manga.url), requestHeaders())
         val doc = response.asJsoup()
         checkCloudflare(doc)
 
@@ -297,7 +323,7 @@ abstract class SyosetuBase(
             val pageDoc = if (page == 1) {
                 doc
             } else {
-                val response = client.get("$baseUrl$basePath?p=$page", requestHeaders())
+                val response = client.get("$contentBaseUrl$basePath?p=$page", requestHeaders())
                 response.asJsoup()
             }
             checkCloudflare(pageDoc)
@@ -323,13 +349,19 @@ abstract class SyosetuBase(
         return chapters.sortedBy { it.chapter_number }
     }
 
+    private val dateRegex = Regex("""\d{4}/\d{2}/\d{2} \d{2}:\d{2}""")
+
+    // Revision-edited chapters append a "(改)" note with its own timestamp after the original
+    // publish date (e.g. "2020/01/01 12:00\n（改）"), which LocalDateTime.parse rejects outright
+    // since it requires an exact match - pull just the leading date out first.
     private fun parseDate(dateStr: String): Long = runCatching {
-        LocalDateTime.parse(dateStr, dateFormat).atZone(ZoneId.of("Asia/Tokyo")).toInstant().toEpochMilli()
+        val match = dateRegex.find(dateStr) ?: return@runCatching 0L
+        LocalDateTime.parse(match.value, dateFormat).atZone(ZoneId.of("Asia/Tokyo")).toInstant().toEpochMilli()
     }.getOrDefault(0L)
 
     // ---------- Chapter content ----------
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(baseUrl + mangaPath.resolve(page.url), requestHeaders())
+        val response = client.get(contentBaseUrl + mangaPath.resolve(page.url), requestHeaders())
         val doc = response.asJsoup()
         checkCloudflare(doc)
 
@@ -341,25 +373,37 @@ abstract class SyosetuBase(
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     // ---------- Filters ----------
-    // These only affect the no-query browse list (buildFilteredSearchUrl), which NOVEL18 never
-    // reaches - it's always browsed through the JSON API instead - so hide them there.
-    override fun getFilterList(data: JsonElement?): FilterList = if (supportsRanking && siteType != SiteType.NOVEL18) {
-        FilterList(
+    // These only affect the no-query browse list (buildFilteredSearchUrl). NOVEL18 never
+    // reaches them - it's always browsed through the JSON API instead. NOC/MID/MNLT do have
+    // real ranking pages, but only per-period (no all-time "累計") and with no genre
+    // breakdown (/rank/genrelist|isekailist/... 404s on those hosts) - NCODE is the only site
+    // with the full ranking+genre combination.
+    override fun getFilterList(data: JsonElement?): FilterList = when (siteType) {
+        SiteType.NCODE -> FilterList(
             Filter.Header("Ranking"),
-            RankingFilter(),
+            RankingFilter(includeAllTime = true),
             Filter.Header("Genre"),
             GenreFilter(),
             Filter.Header("Modifier"),
             ModifierFilter(),
         )
-    } else {
-        FilterList()
+        SiteType.NOC, SiteType.MID, SiteType.MNLT -> FilterList(
+            Filter.Header("Ranking"),
+            RankingFilter(includeAllTime = false),
+            Filter.Header("Modifier"),
+            ModifierFilter(),
+        )
+        SiteType.NOVEL18 -> FilterList()
     }
 
-    private class RankingFilter :
+    private class RankingFilter(includeAllTime: Boolean) :
         Filter.Select<String>(
             "Rank by",
-            arrayOf("日間", "週間", "月間", "四半期", "年間", "累計"),
+            if (includeAllTime) {
+                arrayOf("日間", "週間", "月間", "四半期", "年間", "累計")
+            } else {
+                arrayOf("日間", "週間", "月間", "四半期", "年間")
+            },
         ) {
         fun toUriPart(): String = when (state) {
             0 -> "daily"
@@ -368,7 +412,7 @@ abstract class SyosetuBase(
             3 -> "quarter"
             4 -> "yearly"
             5 -> "total"
-            else -> "total"
+            else -> "daily"
         }
     }
 

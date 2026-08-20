@@ -9,5 +9,5 @@ abstract class SyosetuNocturne :
     SyosetuBase(
         siteType = SiteType.NOC,
         isAdult = true,
-        supportsRanking = false,
+        supportsRanking = true,
     )
