@@ -47,6 +47,9 @@ abstract class Novelight :
 
     private val mangaPath = SlugPath("/book/")
 
+    // Chapter urls are "/book/chapter/<id>", independent of the novel's own slug.
+    private val chapterPath = SlugPath("/book/chapter/")
+
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
@@ -181,7 +184,7 @@ abstract class Novelight :
                             .takeIf { !isNullOrBlank() }
                             ?.let { append(" - $it") }
                     },
-                    url = "/" + href.trimStart('/'),
+                    url = chapterPath.slug("/" + href.trimStart('/')),
                     chapter = number,
                     volume = volume,
                     date = a.selectFirst(".date")?.text(),
@@ -234,6 +237,8 @@ abstract class Novelight :
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
+    override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapterPath.resolve(chapter.url)
+
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
         val response = client.get(url, headers, ensureSuccess = false)
@@ -242,7 +247,7 @@ abstract class Novelight :
         return parseMangaDetails(doc).apply { this.url = mangaPath.slug(path) }
     }
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, "$baseUrl${chapter.url}"))
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, baseUrl + chapterPath.resolve(chapter.url)))
 
     @Serializable
     private class ReadChapter(val content: String = "")
