@@ -6,9 +6,9 @@ plugins {
 
 keiyoushi {
     name = "Dragonholic"
-    versionCode = 1
+    versionCode = 2
     contentWarning = ContentWarning.SAFE
-    theme = "madaranovel"
+    libVersion = "1.6"
 
     source {
         lang = "en"
@@ -17,6 +17,10 @@ keiyoushi {
 
     deeplink {
         host("dragonholictranslations.com")
-        path("/novel/..*")
+        path("/series/..*")
     }
+}
+
+dependencies {
+    implementation(project(":lib:chapterutils"))
 }
