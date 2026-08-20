@@ -176,7 +176,11 @@ abstract class ShanghaiFantasy :
     override suspend fun fetchPageText(page: Page): String {
         val doc = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers).asJsoup()
         val title = doc.selectFirst("div.my-5")?.text() ?: ""
-        val content = doc.selectFirst("div.flex:nth-child(4)") ?: return ""
+        // "div.flex:nth-child(4)" doesn't match anything on the live page - the real container
+        // is "div.contenta" (verified live), which also carries inline AdSense blocks injected
+        // between paragraphs (".ai-viewports"/"[data-insertion-position]" wrapper divs).
+        val content = doc.selectFirst("div.contenta") ?: return ""
+        content.select(".ai-viewports, [data-insertion-position], script, ins.adsbygoogle").remove()
         content.children().first()?.before("<h1>$title</h1>")
         content.select("button").remove()
         content.select("p").filter { it.text().isBlank() }.forEach { it.remove() }
