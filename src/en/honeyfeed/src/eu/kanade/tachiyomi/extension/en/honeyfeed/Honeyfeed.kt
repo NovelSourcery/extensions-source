@@ -14,6 +14,10 @@ import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.WebViewSession
+import keiyoushi.utils.WebViewTimeoutException
+import keiyoushi.utils.parseAs
+import keiyoushi.utils.runWebView
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonElement
@@ -22,6 +26,7 @@ import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
+import kotlin.time.Duration.Companion.seconds
 
 @Source
 abstract class Honeyfeed :
@@ -40,13 +45,63 @@ abstract class Honeyfeed :
      * "/" is a pre-existing full-path entry and is resolved unchanged. */
     private val mangaPath = SlugPath("/novels/")
 
+    // ======================== Cloudflare challenge bypass ========================
+    // Confirmed live (HAR capture): this site occasionally answers with a real interactive
+    // Cloudflare Turnstile challenge (403, __cf_chl_tk token, JS-computed proof-of-work POST'd
+    // back to the same url) even when a prior cf_clearance cookie is already attached - not a
+    // missing-header issue, no static header combination replicates it. Solve it in a real
+    // WebView instead: routing the WebView's own requests through the shared OkHttp client
+    // (useOkHttpNetwork) means the fresh cf_clearance cookie the challenge issues lands directly
+    // in this source's own cookie jar, so the plain retry below just works afterwards.
+    private val webViewSession = WebViewSession()
+
+    private suspend fun getBypassingChallenge(url: String, requestHeaders: Headers = headers, ensureSuccess: Boolean = true): Response {
+        val response = client.get(url, requestHeaders, ensureSuccess = false)
+        if (response.isSuccessful || response.code !in CHALLENGE_CODES) {
+            if (ensureSuccess && !response.isSuccessful) {
+                val code = response.code
+                response.close()
+                throw Exception("HTTP error $code")
+            }
+            return response
+        }
+        response.close()
+        solveCloudflareChallenge(url)
+        return client.get(url, requestHeaders, ensureSuccess = ensureSuccess)
+    }
+
+    private suspend fun solveCloudflareChallenge(url: String) {
+        try {
+            runWebView<Unit>(session = webViewSession, timeout = 45.seconds) {
+                useOkHttpNetwork = true
+                var resolved = false
+                onPageFinished {
+                    if (resolved) return@onPageFinished
+                    evaluateJs("document.title") { titleJson ->
+                        val title = titleJson.parseAs<String>()
+                        val stillChallenged = CHALLENGE_TITLE_MARKERS.any { title.contains(it, ignoreCase = true) }
+                        if (!stillChallenged) {
+                            resolved = true
+                            resolve(Unit)
+                        }
+                        // Otherwise keep waiting - the challenge page's own JS will navigate
+                        // again once it solves Turnstile, firing onPageFinished a second time.
+                    }
+                }
+                loadUrl(url)
+            }
+        } catch (e: WebViewTimeoutException) {
+            throw Exception("Honeyfeed: could not get past a Cloudflare challenge automatically. Please open the novel in WebView once, then retry.", e)
+        }
+    }
+
     // region Popular
 
     private fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/ranking/monthly?page=$page", headers)
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = buildPopularMangaRequest(page)
-        val doc = client.get(request.url, request.headers).asJsoup()
+        val doc = getBypassingChallenge(request.url.toString(), request.headers).asJsoup()
         val mangas = parseNovelList(doc)
         return MangasPage(mangas, mangas.isNotEmpty())
     }
@@ -59,7 +114,7 @@ abstract class Honeyfeed :
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val request = buildLatestUpdatesRequest(page)
-        val doc = client.get(request.url, request.headers).asJsoup()
+        val doc = getBypassingChallenge(request.url.toString(), request.headers).asJsoup()
         val mangas = parseNovelList(doc)
         return MangasPage(mangas, mangas.isNotEmpty())
     }
@@ -102,7 +157,7 @@ abstract class Honeyfeed :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val request = buildSearchMangaRequest(page, query, filters)
-        val doc = client.get(request.url, request.headers).asJsoup()
+        val doc = getBypassingChallenge(request.url.toString(), request.headers).asJsoup()
         val mangas = parseNovelList(doc)
         return MangasPage(mangas, mangas.isNotEmpty())
     }
@@ -119,12 +174,12 @@ abstract class Honeyfeed :
     ): SMangaUpdate = coroutineScope {
         // Details and chapters live on different pages - fire both concurrently when both are needed.
         val detailsDeferred = if (fetchDetails) {
-            async { parseMangaDetails(client.get(baseUrl + mangaPath.resolve(manga.url), headers)) }
+            async { parseMangaDetails(getBypassingChallenge(baseUrl + mangaPath.resolve(manga.url))) }
         } else {
             null
         }
         val chaptersDeferred = if (fetchChapters) {
-            async { parseChapterList(client.get(baseUrl + mangaPath.resolve(manga.url) + "/chapters", headers)) }
+            async { parseChapterList(getBypassingChallenge(baseUrl + mangaPath.resolve(manga.url) + "/chapters")) }
         } else {
             null
         }
@@ -171,7 +226,7 @@ abstract class Honeyfeed :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
-        val response = client.get(baseUrl + path, headers, ensureSuccess = false)
+        val response = getBypassingChallenge(baseUrl + path, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response).apply { this.url = mangaPath.slug(path) }
     }
@@ -181,12 +236,12 @@ abstract class Honeyfeed :
     // region Pages
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.get(if (chapter.url.startsWith("http")) chapter.url else baseUrl + chapter.url, headers)
+        val response = getBypassingChallenge(if (chapter.url.startsWith("http")) chapter.url else baseUrl + chapter.url)
         return listOf(Page(0, response.request.url.toString()))
     }
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers).asJsoup()
+        val doc = getBypassingChallenge(if (page.url.startsWith("http")) page.url else baseUrl + page.url).asJsoup()
         val title = doc.selectFirst("h1")?.text() ?: ""
         val body = doc.selectFirst(".wrap-body") ?: return ""
         body.select("#wrap-button-remove-blur").remove()
@@ -264,6 +319,9 @@ abstract class Honeyfeed :
         )
 
         private val SORT_BY_PATHS = arrayOf("/ranking/monthly", "/ranking/weekly", "/novels")
+
+        private val CHALLENGE_CODES = setOf(403, 503)
+        private val CHALLENGE_TITLE_MARKERS = listOf("Just a moment", "Attention Required", "Cloudflare")
     }
 
     // endregion
