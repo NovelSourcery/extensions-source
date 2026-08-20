@@ -1,9 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.novellive
 
-import android.app.Application
-import android.content.SharedPreferences
-import androidx.preference.PreferenceScreen
-import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -22,26 +18,17 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import uy.kohesive.injekt.Injekt
-import uy.kohesive.injekt.api.get
 
 /**
  * novellive.app — FreeWebNovel/ReadNovelFull-style engine (lightnovelpub.me is a page-1-only
  * mirror that redirects deeper pages here). Browse cards are `div.li-row`; chapter list is
- * paginated at /book/<slug>/<page> (page count from #indexselect). Chapter urls follow the
- * stable /book/<slug>/chapter-<n> pattern, so the default "fast" mode synthesizes the list from
- * the latest chapter number instead of fetching every index page.
+ * paginated at /book/<slug>/<page> (page count from #indexselect). Always fetches every index
+ * page for real chapter titles instead of synthesizing urls from the latest chapter number.
  */
 @Source
 abstract class NovelLive : ReadNovelFull() {
 
     override val mangaPathTemplate = SlugPath("/book/")
-
-    private val prefs: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
-    }
-
-    private val accurateChapters get() = prefs.getBoolean(PREF_ACCURATE, false)
 
     override fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/list/most-popular-novels/$page", headers)
 
@@ -121,18 +108,6 @@ abstract class NovelLive : ReadNovelFull() {
                 ?.attr("href")?.let { Regex("""chapter-(\d+)""").find(it)?.groupValues?.get(1)?.toIntOrNull() }
             ?: 0
 
-        // Fast mode (default): synthesize from the stable /book/<slug>/chapter-<n> url pattern.
-        if (!accurateChapters && latestNum > 0) {
-            return (latestNum downTo 1).map { n ->
-                SChapter.create().apply {
-                    setUrlWithoutDomain("$novelPath/chapter-$n")
-                    name = "Chapter $n"
-                    chapter_number = n.toFloat()
-                }
-            }
-        }
-
-        // Accurate mode: fetch every index page for real chapter titles.
         // Pages are oldest-first (#indexselect C.1-C.40, C.41-C.80, ...). Keep fetch order, then
         // number by position (href chapter numbers are unreliable) and present newest-first.
         val ascending = paginatedChapterList(
@@ -158,22 +133,5 @@ abstract class NovelLive : ReadNovelFull() {
         )
         ascending.forEachIndexed { i, ch -> ch.chapter_number = (i + 1).toFloat() }
         return ascending.reversed()
-    }
-
-    override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        super.setupPreferenceScreen(screen)
-        screen.addPreference(
-            SwitchPreferenceCompat(screen.context).apply {
-                key = PREF_ACCURATE
-                title = "Accurate chapter list"
-                summary = "Fetch every index page for real chapter titles. Slower on long novels. " +
-                    "When off (default), the list is built quickly from the latest chapter number."
-                setDefaultValue(false)
-            },
-        )
-    }
-
-    companion object {
-        private const val PREF_ACCURATE = "pref_accurate_chapters"
     }
 }
