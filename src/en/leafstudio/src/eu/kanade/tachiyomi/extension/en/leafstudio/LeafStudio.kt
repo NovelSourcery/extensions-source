@@ -1,5 +1,8 @@
 package eu.kanade.tachiyomi.novelextension.en.leafstudio
 
+import androidx.preference.PreferenceScreen
+import androidx.preference.SwitchPreferenceCompat
+import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -12,6 +15,7 @@ import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.getPreferencesLazy
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -21,13 +25,16 @@ import org.jsoup.nodes.Element
 /**
  * LeafStudio (leafstudio.site). Plain WordPress-theme HTML, no API. As of 2026-08 the site has
  * moved to a paid "emerald" unlock model - most/all chapters are `.premium_chap` (login-gated),
- * only `.free_chap` ones (if any remain) return real prose; premium chapters are still listed
- * (prefixed) so the list isn't empty, but fetching one just returns the site's own login prompt.
+ * only `.free_chap` ones (if any remain) return real prose; fetching a locked chapter just
+ * returns the site's own login prompt, so locked chapters are hidden from the list by default.
  */
 @Source
 abstract class LeafStudio :
     KeiSource(),
-    NovelSource {
+    NovelSource,
+    ConfigurableSource {
+
+    private val preferences by getPreferencesLazy()
 
     override val supportsLatest = false
 
@@ -115,17 +122,22 @@ abstract class LeafStudio :
     }
 
     // Both free and premium(locked) chapters are listed - locked ones are prefixed so the reader
-    // can see they exist, even though fetching one currently just returns a login prompt.
-    private fun parseChapterList(document: Document): List<SChapter> = document.select("a.chap").mapNotNull { element ->
-        val href = element.attr("abs:href")
-        if (href.isBlank()) return@mapNotNull null
-        val rawName = element.selectFirst("p")?.text().orEmpty()
-        val locked = element.hasClass("premium_chap")
-        SChapter.create().apply {
-            setUrlWithoutDomain(href)
-            name = if (locked) "🔒 $rawName" else rawName
-            chapter_number = Regex("""Chapter\s+(\d+(?:\.\d+)?)""").find(rawName)
-                ?.groupValues?.get(1)?.toFloatOrNull() ?: -1f
+    // can see they exist, even though fetching one currently just returns a login prompt. Hidden
+    // by default via PREF_SHOW_LOCKED since they aren't actually readable.
+    private fun parseChapterList(document: Document): List<SChapter> {
+        val showLocked = preferences.getBoolean(PREF_SHOW_LOCKED, false)
+        return document.select("a.chap").mapNotNull { element ->
+            val href = element.attr("abs:href")
+            if (href.isBlank()) return@mapNotNull null
+            val locked = element.hasClass("premium_chap")
+            if (locked && !showLocked) return@mapNotNull null
+            val rawName = element.selectFirst("p")?.text().orEmpty()
+            SChapter.create().apply {
+                setUrlWithoutDomain(href)
+                name = if (locked) "🔒 $rawName" else rawName
+                chapter_number = Regex("""Chapter\s+(\d+(?:\.\d+)?)""").find(rawName)
+                    ?.groupValues?.get(1)?.toFloatOrNull() ?: -1f
+            }
         }
     }
 
@@ -161,4 +173,18 @@ abstract class LeafStudio :
     }
 
     override fun getFilterList(data: JsonElement?): FilterList = FilterList()
+
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        SwitchPreferenceCompat(screen.context).apply {
+            key = PREF_SHOW_LOCKED
+            title = "Show locked chapters"
+            summary = "Include premium/login-gated chapters in the chapter list. They aren't " +
+                "actually readable - fetching one just returns the site's login prompt."
+            setDefaultValue(false)
+        }.also(screen::addPreference)
+    }
+
+    companion object {
+        private const val PREF_SHOW_LOCKED = "pref_show_locked_chapters"
+    }
 }
