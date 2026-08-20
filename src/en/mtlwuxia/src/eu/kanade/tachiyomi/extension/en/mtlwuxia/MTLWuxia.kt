@@ -21,19 +21,20 @@ import keiyoushi.utils.SlugPath
 import keiyoushi.utils.extractNextJs
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.jsonInstance
+import keiyoushi.utils.parseAs
+import keiyoushi.utils.toJsonElement
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.put
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Response
@@ -60,23 +61,24 @@ abstract class MTLWuxia :
      */
     private val mangaPathTemplate: SlugPath = SlugPath("/novel/")
 
+    // tRPC input schemas treat an omitted optional field differently from an explicit null
+    // (e.g. a zod .optional() cursor), so this overrides the shared instance's null handling
+    // just for encoding request inputs.
+    private val requestJson = Json(jsonInstance) { explicitNulls = false }
+
     // ---- tRPC helpers ----
 
     private fun trpcUrl(procedure: String, input: JsonElement?, fragment: String? = null): HttpUrl {
-        val batchInput = buildJsonObject {
-            put(
-                "0",
-                buildJsonObject {
-                    put("json", input ?: JsonNull)
-                },
-            )
-        }
+        val batchInput = mapOf("0" to TrpcJsonWrapper(input ?: JsonNull))
         return "$baseUrl/api/trpc/$procedure".toHttpUrl().newBuilder()
             .addQueryParameter("batch", "1")
-            .addQueryParameter("input", batchInput.toString())
+            .addQueryParameter("input", jsonInstance.encodeToString(batchInput))
             .fragment(fragment)
             .build()
     }
+
+    @Serializable
+    private class TrpcJsonWrapper(val json: JsonElement)
 
     // Unwraps [{"result":{"data":{"json":<payload>}}}]
     private fun Response.trpcJson(): JsonElement = jsonInstance.parseToJsonElement(body.string())
@@ -148,7 +150,10 @@ abstract class MTLWuxia :
 
     // ---- Details ----
 
-    private fun buildMangaDetailsUrl(manga: SManga): HttpUrl = trpcUrl("novel.getBySlug", buildJsonObject { put("slug", manga.slug()) })
+    private fun buildMangaDetailsUrl(manga: SManga): HttpUrl = trpcUrl("novel.getBySlug", SlugInput(manga.slug()).toJsonElement())
+
+    @Serializable
+    private class SlugInput(val slug: String)
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
@@ -169,13 +174,12 @@ abstract class MTLWuxia :
 
     private fun chapterPageUrl(slug: String, cursor: String?): HttpUrl = trpcUrl(
         "chapter.getListByNovel",
-        buildJsonObject {
-            put("novelSlug", slug)
-            put("limit", 100)
-            cursor?.let { put("cursor", it) }
-        },
+        ChapterListInput(novelSlug = slug, cursor = cursor).toJsonElement(requestJson),
         fragment = slug,
     )
+
+    @Serializable
+    private class ChapterListInput(val novelSlug: String, val limit: Int = 100, val cursor: String? = null)
 
     private suspend fun fetchAllChapters(slug: String): List<SChapter> {
         val chapters = mutableListOf<ChapterDto>()
@@ -278,17 +282,15 @@ abstract class MTLWuxia :
 
         runCatching {
             // Single batched call: search.getGenres,search.getTags
-            val batchInput = buildJsonObject {
-                put("0", buildJsonObject { put("json", JsonNull) })
-                put("1", buildJsonObject { put("json", JsonNull) })
-            }
+            val batchInput = mapOf(
+                "0" to TrpcJsonWrapper(JsonNull),
+                "1" to TrpcJsonWrapper(JsonNull),
+            )
             val url = "$baseUrl/api/trpc/search.getGenres,search.getTags".toHttpUrl().newBuilder()
                 .addQueryParameter("batch", "1")
-                .addQueryParameter("input", batchInput.toString())
+                .addQueryParameter("input", jsonInstance.encodeToString(batchInput))
                 .build()
-            val results = jsonInstance.parseToJsonElement(
-                client.newCall(GET(url, headers)).execute().body.string(),
-            ).jsonArray
+            val results = client.newCall(GET(url, headers)).execute().parseAs<JsonElement>().jsonArray
 
             fun parseOptions(element: JsonElement): List<FilterOption> = element
                 .jsonObject["result"]!!

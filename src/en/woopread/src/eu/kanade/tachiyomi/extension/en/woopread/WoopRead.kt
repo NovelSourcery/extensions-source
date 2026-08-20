@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.parseAs
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -68,8 +69,11 @@ abstract class WoopRead :
         return parseMangaListResponse(client.get(browseUrl(page, sortBy, filters), headers))
     }
 
-    // manga.url is just the slug; strip any wrapping path/id so old stored urls still resolve.
-    private fun extractSlug(url: String): String = url.trim('/').substringAfterLast("/")
+    private val mangaPathTemplate = SlugPath("/series/")
+
+    // manga.url is just the slug; this normalizes both bare-slug (current) and pre-migration
+    // full-path stored values back to the bare slug.
+    private fun SManga.slug(): String = mangaPathTemplate.slug(mangaPathTemplate.resolve(url))
 
     private fun NovelDto.toSManga() = SManga.create().apply {
         title = this@toSManga.title
@@ -80,10 +84,10 @@ abstract class WoopRead :
         status = parseStatus(this@toSManga.status)
     }
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl/series/${extractSlug(manga.url)}"
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val slug = extractSlug(url.encodedPath)
+        val slug = mangaPathTemplate.slug(url.encodedPath)
         val response = client.get("$baseUrl/series/$slug", headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return fetchNovelDetails(SManga.create().apply { this.url = slug })
@@ -105,7 +109,7 @@ abstract class WoopRead :
     }
 
     private suspend fun fetchNovelDetails(manga: SManga): SManga {
-        val response = client.get("$baseUrl/series/${extractSlug(manga.url)}", headers)
+        val response = client.get("$baseUrl/series/${manga.slug()}", headers)
         val doc = response.asJsoup()
         return SManga.create().apply {
             title = doc.selectFirst("meta[property=og:title]")?.attr("content")
@@ -133,7 +137,7 @@ abstract class WoopRead :
     }
 
     private suspend fun fetchNovelChapterList(manga: SManga): List<SChapter> {
-        val seriesSlug = extractSlug(manga.url)
+        val seriesSlug = manga.slug()
         val response = client.get("$baseUrl/api/novels/$seriesSlug/chapters", headers)
         val chapters = response.parseAs<List<ChapterDto>>()
         return chapters.sortedByDescending { it.number }.map { dto ->

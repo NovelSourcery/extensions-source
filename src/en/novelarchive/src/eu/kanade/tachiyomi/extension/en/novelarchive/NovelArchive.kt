@@ -11,21 +11,23 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.parseAs
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
-// NOTE: manga.url is already stored as a bare opaque id (no site-path prefix at all - see
-// createSMangaFromJson/toSManga below) and is combined with different prefixes for the webview
-// link ("/novel/") vs the API endpoint ("/api/novels/"), so there's no single site-path shape to
-// apply SlugPath to; it's left as-is.
 @Source
 abstract class NovelArchive :
     KeiSource(),
     NovelSource {
 
     override val supportsLatest = true
+
+    // manga.url is stored as a bare opaque id; this template covers only the webview/deeplink
+    // shape ("/novel/<id>") - the API endpoint uses a different prefix ("/api/novels/<id>") built
+    // directly in buildMangaDetailsUrl, since SlugPath models one canonical resolve/slug pair.
+    private val mangaPathTemplate: SlugPath = SlugPath("/novel/")
 
     private fun buildListUrl(page: Int, sort: String, query: String, filters: FilterList): HttpUrl {
         val url = "$baseUrl/api/novels".toHttpUrl().newBuilder()
@@ -89,10 +91,10 @@ abstract class NovelArchive :
         genre = cleanGenres(genres)
     }
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.url}"
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val id = url.encodedPath.removePrefix("/novel/").trim('/')
+        val id = mangaPathTemplate.slug(url.encodedPath).trim('/')
         if (id.isBlank()) return null
         val response = client.get("$baseUrl/api/novels/$id", headers, ensureSuccess = false)
         if (!response.isSuccessful) return null

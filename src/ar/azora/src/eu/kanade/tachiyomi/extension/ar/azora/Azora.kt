@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.parseAs
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -35,6 +36,10 @@ abstract class Azora :
 
     private val apiUrl = "https://api.azorafly.com"
     private val perPage = 39
+
+    private val mangaPathTemplate = SlugPath("/series/")
+
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
     private val postIdCache = mutableMapOf<String, Int>()
 
@@ -61,7 +66,7 @@ abstract class Azora :
         // parsing for the HTML fallback path - asJsoup() would consume it without giving the
         // string back.
         val html = response.body.string()
-        return parseMangaDetails(html).apply { this.url = url.encodedPath }
+        return parseMangaDetails(html).apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
     }
 
     override suspend fun fetchMangaUpdate(
@@ -70,8 +75,8 @@ abstract class Azora :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val slug = manga.url.removePrefix("/series/").trim('/')
-        val html = client.get(baseUrl + manga.url, headers).body.string()
+        val slug = mangaPathTemplate.slug(mangaPathTemplate.resolve(manga.url))
+        val html = client.get(baseUrl + mangaPathTemplate.resolve(manga.url), headers).body.string()
         val post = extractPost(html)
         post?.let { postIdCache[it.slug] = it.id }
 

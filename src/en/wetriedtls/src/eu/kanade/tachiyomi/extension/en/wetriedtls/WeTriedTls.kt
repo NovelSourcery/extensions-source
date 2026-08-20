@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.setAltTitles
 import kotlinx.coroutines.async
@@ -62,8 +63,11 @@ abstract class WeTriedTls :
         return parseMangaListResponse(client.get(queryUrl(page, query, orderBy, status), headers))
     }
 
-    // manga.url is just the slug; strip any wrapping path/id so old stored urls still resolve.
-    private fun extractSlug(url: String): String = url.trim('/').substringAfterLast("/")
+    private val mangaPathTemplate = SlugPath("/series/")
+
+    // manga.url is just the slug; this normalizes both bare-slug (current) and pre-migration
+    // full-path stored values back to the bare slug.
+    private fun SManga.slug(): String = mangaPathTemplate.slug(mangaPathTemplate.resolve(url))
 
     private fun SeriesDto.toSManga() = SManga.create().apply {
         title = this@toSManga.title
@@ -72,10 +76,10 @@ abstract class WeTriedTls :
         status = parseStatus(this@toSManga.status)
     }
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl/series/${extractSlug(manga.url)}"
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val slug = extractSlug(url.encodedPath)
+        val slug = mangaPathTemplate.slug(url.encodedPath)
         val response = client.get("$apiUrl/series/$slug", headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return fetchNovelDetails(SManga.create().apply { this.url = slug })
@@ -97,7 +101,7 @@ abstract class WeTriedTls :
     }
 
     private suspend fun fetchNovelDetails(manga: SManga): SManga {
-        val response = client.get("$apiUrl/series/${extractSlug(manga.url)}", headers)
+        val response = client.get("$apiUrl/series/${manga.slug()}", headers)
         val dto = response.parseAs<SeriesDto>()
         return SManga.create().apply {
             title = dto.title
@@ -128,7 +132,7 @@ abstract class WeTriedTls :
     }
 
     private suspend fun fetchNovelChapterList(manga: SManga): List<SChapter> {
-        val seriesSlug = extractSlug(manga.url)
+        val seriesSlug = manga.slug()
         val chapters = mutableListOf<SChapter>()
         var page = 1
         while (true) {

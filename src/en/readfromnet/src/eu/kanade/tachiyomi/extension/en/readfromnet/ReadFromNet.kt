@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import okhttp3.HttpUrl
 import okhttp3.Request
 import org.jsoup.nodes.Document
@@ -29,6 +30,12 @@ abstract class ReadFromNet :
     NovelSource {
 
     override val supportsLatest = true
+
+    // Detail-page hrefs are bare filenames at domain root (e.g. "some-book.html"), no site-path
+    // prefix.
+    private val mangaPathTemplate: SlugPath = SlugPath("/")
+
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
     // ======================== Popular ========================
 
     protected open fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/allbooks/page/$page/", headers)
@@ -75,19 +82,11 @@ abstract class ReadFromNet :
             try {
                 val titleElement = element.selectFirst("h2.title a") ?: return@mapNotNull null
                 val title = titleElement.text()
-                // LN Reader: .replace('https://readfrom.net/', '').replace(/^\//, '')
-                var url = titleElement.attr("href")
-
-                // Simple replacement as per LN Reader TS
-                // replace('https://readfrom.net/', '').replace(/^\//, '')
-                url = url.replace("https://readfrom.net/", "")
-                    .replace(Regex("^/"), "")
-
                 val cover = element.selectFirst("img")?.attr("src") ?: ""
 
                 SManga.create().apply {
                     this.title = title
-                    this.url = url
+                    setSlugUrl(mangaPathTemplate, titleElement.attr("href"))
                     thumbnail_url = cover
                 }
             } catch (e: Exception) {
@@ -97,7 +96,7 @@ abstract class ReadFromNet :
     }
     // ======================== Details + Chapters ========================
 
-    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET("$baseUrl/${manga.url}", headers)
+    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -118,7 +117,7 @@ abstract class ReadFromNet :
     }
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val mangaUrl = url.encodedPath.removePrefix("/")
+        val mangaUrl = mangaPathTemplate.slug(url.encodedPath)
         val response = client.get(url, headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.asJsoup()).apply { this.url = mangaUrl }

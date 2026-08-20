@@ -20,32 +20,27 @@ import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.network.post
+import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.jsonInstance
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.setAltTitles
+import keiyoushi.utils.toJsonRequestBody
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
 import okhttp3.HttpUrl
-import okhttp3.Interceptor
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.parser.Parser
@@ -56,6 +51,7 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.time.Duration.Companion.seconds
 
 @Source
 abstract class FictionZone :
@@ -69,31 +65,13 @@ abstract class FictionZone :
 
     // Every request (browse/details/chapters/content, including all omniportal proxy calls)
     // hits this single api-party endpoint, which 429s hard under mass-import's sequential load.
-    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(::retryOnTooManyRequests)
-
-    // Max retries when the site answers 429; each retry waits the Retry-After interval.
-    private val maxRetriesOn429 = 3
-
-    private fun retryOnTooManyRequests(chain: Interceptor.Chain): Response {
-        val request = chain.request()
-        var response = chain.proceed(request)
-        var attempts = 0
-        while (response.code == 429 && attempts < maxRetriesOn429) {
-            val waitSeconds = response.header("Retry-After")?.toLongOrNull()?.coerceIn(1, 60) ?: 5
-            response.close()
-            try {
-                Thread.sleep(waitSeconds * 1000)
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-                break
-            }
-            response = chain.proceed(request)
-            attempts++
-        }
-        return response
-    }
+    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = rateLimit(1, 1.seconds)
 
     private val json: Json by injectLazy()
+
+    // The api-party envelope omits "query"/"body" entirely when absent; the shared jsonInstance
+    // doesn't guarantee that for null fields, so this overrides just that behavior for encoding.
+    private val requestJson = Json(jsonInstance) { explicitNulls = false }
 
     private val dateFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.US)
 
@@ -118,61 +96,37 @@ abstract class FictionZone :
         return preferences.getString("fz_access_token", null)
     }
 
-    private fun apiRequest(path: String, method: String = "GET", includeAuth: Boolean = true, bodyJson: JsonObject? = null): Request {
+    private fun apiRequest(path: String, method: String = "GET", includeAuth: Boolean = true, bodyJson: JsonElement? = null): Request {
         val timestamp = java.time.Instant.now().toString()
-        val headers = buildJsonArray {
-            add(
-                buildJsonArray {
-                    add(JsonPrimitive("content-type"))
-                    add(JsonPrimitive("application/json"))
-                },
-            )
-            add(
-                buildJsonArray {
-                    add(JsonPrimitive("x-request-time"))
-                    add(JsonPrimitive(timestamp))
-                },
-            )
+        val apiHeaders = buildList {
+            add(listOf("content-type", "application/json"))
+            add(listOf("x-request-time", timestamp))
             if (includeAuth) {
-                val token = getAccessToken()
-                if (token != null) {
-                    add(
-                        buildJsonArray {
-                            add(JsonPrimitive("authorization"))
-                            add(JsonPrimitive("Bearer $token"))
-                        },
-                    )
-                }
+                getAccessToken()?.let { token -> add(listOf("authorization", "Bearer $token")) }
             }
         }
 
         val pathOnly = path.substringBefore('?')
         val queryString = path.substringAfter('?', "")
-        val queryObject = buildJsonObject {
-            if (queryString.isNotEmpty()) {
-                queryString.split('&').forEach { pair ->
-                    if (pair.isEmpty()) return@forEach
-                    val key = pair.substringBefore('=')
-                    val value = java.net.URLDecoder.decode(pair.substringAfter('=', ""), "UTF-8")
-                    put(key, JsonPrimitive(value))
-                }
+        val queryMap = queryString.takeIf { it.isNotEmpty() }
+            ?.split('&')
+            ?.filter { it.isNotEmpty() }
+            ?.associate { pair ->
+                val key = pair.substringBefore('=')
+                val value = java.net.URLDecoder.decode(pair.substringAfter('=', ""), "UTF-8")
+                key to value
             }
-        }
+            ?.takeIf { it.isNotEmpty() }
 
-        val body = buildJsonObject {
-            put("path", JsonPrimitive(pathOnly))
-            if (queryObject.isNotEmpty()) {
-                put("query", queryObject)
-            }
-            put("headers", headers)
-            put("method", JsonPrimitive(method))
-            if (bodyJson != null) {
-                put("body", bodyJson)
-            }
-        }
+        val envelope = ApiPartyRequestDto(
+            path = pathOnly,
+            query = queryMap,
+            headers = apiHeaders,
+            method = method,
+            body = bodyJson,
+        )
 
-        val requestBody = body.toString().toRequestBody("application/json".toMediaType())
-        return POST(apiUrl, this.headers, requestBody)
+        return POST(apiUrl, this.headers, envelope.toJsonRequestBody(requestJson))
     }
 
     private fun buildPopularMangaRequest(page: Int): Request = apiRequest("/platform/browse?page=$page&page_size=20&sort_by=bookmark_count&sort_order=desc&include_genres=true")
@@ -189,11 +143,11 @@ abstract class FictionZone :
                 title = novel.title
 
                 url = if (novel.slug != null) {
-                    "/novel/${novel.slug}"
+                    novel.slug!!
                 } else if (novel.sourceKey != null && novel.sourceId != null) {
-                    "/omniportal/${novel.sourceId}/${novel.sourceKey}"
+                    "${novel.sourceId}/${novel.sourceKey}"
                 } else {
-                    "/novel/unknown"
+                    "unknown"
                 }
 
                 // Omniportal entries keep this as the only synopsis source
@@ -311,7 +265,7 @@ abstract class FictionZone :
             val mangas = results.filter { it.slug.isNotBlank() }.map { result ->
                 SManga.create().apply {
                     title = result.title ?: result.slug
-                    url = "/novel/${result.slug}"
+                    url = result.slug
                     description = result.synopsis?.let { formatDescription(it) }
                     thumbnail_url = result.coverImageUrl
                         ?.takeIf { it.isNotBlank() }
@@ -324,27 +278,39 @@ abstract class FictionZone :
         return parseBrowseData(data)
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + manga.url
+    // manga.url stores the bare identifier: a novel slug (single segment, e.g. "some-slug") or an
+    // omniportal "<sourceId>/<sourceKey>" pair (two segments) - distinguished by segment count,
+    // since the two id shapes can't share one fixed SlugPath prefix. A stored value starting with
+    // "/" is a pre-existing full-path entry from before this migration and is resolved unchanged.
+    private fun resolveMangaPath(stored: String): String = when {
+        stored.startsWith("/") -> stored
+        '/' in stored -> "/omniportal/$stored"
+        else -> "/novel/$stored"
+    }
+
+    override fun getMangaUrl(manga: SManga): String = baseUrl + resolveMangaPath(manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
         // Omniportal entries are proxied external sources with no direct site page to paste.
         if (!path.startsWith("/novel/")) return null
-        val request = buildMangaDetailsRequest(SManga.create().apply { this.url = path })
+        val slug = path.removePrefix("/novel/").trim('/')
+        val request = buildMangaDetailsRequest(SManga.create().apply { this.url = slug })
         val response = client.post(request.url, request.headers, request.body!!, ensureSuccess = false)
         if (!response.isSuccessful) return null
-        return parseMangaDetails(response).apply { this.url = path }
+        return parseMangaDetails(response).apply { this.url = slug }
     }
 
     private fun buildMangaDetailsRequest(manga: SManga): Request {
-        if (manga.url.startsWith("/omniportal/")) {
-            val parts = manga.url.removePrefix("/omniportal/").split("/")
+        val resolved = resolveMangaPath(manga.url)
+        if (resolved.startsWith("/omniportal/")) {
+            val parts = resolved.removePrefix("/omniportal/").split("/")
             val sourceId = parts[0]
             val sourceKey = parts[1]
             return apiRequest("/omniportal/novels/details?source_id=$sourceId&source_key=$sourceKey&translate=en")
         }
 
-        val slug = manga.url.substringAfter("/novel/")
+        val slug = resolved.substringAfter("/novel/")
         return apiRequest("/platform/novel-details?slug=$slug")
     }
 
@@ -396,10 +362,11 @@ abstract class FictionZone :
     }
 
     private suspend fun loadChapterList(manga: SManga): List<SChapter> {
-        val isOmniportal = manga.url.startsWith("/omniportal/")
+        val resolvedMangaUrl = resolveMangaPath(manga.url)
+        val isOmniportal = resolvedMangaUrl.startsWith("/omniportal/")
 
         val (request, novelId, sourceId, sourceKey) = if (isOmniportal) {
-            val parts = manga.url.removePrefix("/omniportal/").split("/")
+            val parts = resolvedMangaUrl.removePrefix("/omniportal/").split("/")
             val srcId = parts[0]
             val srcKey = parts[1]
             val req = apiRequest("/omniportal/novels/chapters?source_id=$srcId&source_key=$srcKey&translate=en&engine=google-trans")
@@ -443,7 +410,7 @@ abstract class FictionZone :
                     val respSourceKey = data.sourceKey ?: sourceKey
                     "/omniportal/$respSourceId/$respSourceKey/${chapter.chapterId}"
                 } else {
-                    val slug = manga.url.removePrefix("/novel/").trim('/')
+                    val slug = resolvedMangaUrl.removePrefix("/novel/").trim('/')
                     "/novel/$slug/${chapter.chapterId}?novel_id=$novelId"
                 }
 

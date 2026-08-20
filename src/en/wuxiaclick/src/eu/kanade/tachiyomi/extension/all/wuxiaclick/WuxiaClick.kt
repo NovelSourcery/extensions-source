@@ -22,15 +22,12 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
 import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -55,38 +52,27 @@ abstract class WuxiaClick :
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
 
-    private fun getSearchCache(): JsonArray = try {
-        val raw = preferences.getString(SEARCH_CACHE_KEY, null) ?: return JsonArray(emptyList())
-        json.parseToJsonElement(raw).jsonArray
+    @Serializable
+    private class SearchCacheEntry(val slug: String, val title: String)
+
+    private fun getSearchCache(): List<SearchCacheEntry> = try {
+        val raw = preferences.getString(SEARCH_CACHE_KEY, null) ?: return emptyList()
+        json.decodeFromString<List<SearchCacheEntry>>(raw)
     } catch (e: Exception) {
-        JsonArray(emptyList())
+        emptyList()
     }
 
     private fun appendToSearchCache(items: List<Pair<String, String>>) {
         try {
             val current = getSearchCache().toMutableList()
-            val existingSlugs = current.mapNotNull {
-                it.jsonObject["slug"]?.let { s ->
-                    try {
-                        s.jsonPrimitive.content
-                    } catch (_: Exception) {
-                        null
-                    }
-                }
-            }.toMutableSet()
+            val existingSlugs = current.map { it.slug }.toMutableSet()
             for ((slug, title) in items) {
                 if (!existingSlugs.contains(slug)) {
-                    current.add(
-                        buildJsonObject {
-                            put("slug", JsonPrimitive(slug))
-                            put("title", JsonPrimitive(title))
-                        },
-                    )
+                    current.add(SearchCacheEntry(slug, title))
                     existingSlugs.add(slug)
                 }
             }
-            val arr = JsonArray(current)
-            preferences.edit().putString(SEARCH_CACHE_KEY, arr.toString()).apply()
+            preferences.edit().putString(SEARCH_CACHE_KEY, json.encodeToString(current)).apply()
         } catch (_: Exception) {
         }
     }

@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -40,6 +41,10 @@ abstract class WuxiaWorldEU :
     private val json = Json { ignoreUnknownKeys = true }
 
     private val pageSize = 20
+
+    private val mangaPathTemplate = SlugPath("/novel/")
+
+    private fun SManga.slug(): String = mangaPathTemplate.slug(mangaPathTemplate.resolve(url))
 
     // ======================== Browse / Search ========================
 
@@ -82,10 +87,10 @@ abstract class WuxiaWorldEU :
 
     // ======================== Details ========================
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.url}"
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val slug = url.encodedPath.removePrefix("/novel/").trim('/')
+        val slug = mangaPathTemplate.slug(url.encodedPath)
         val tempManga = SManga.create().apply { this.url = slug }
         val response = client.get(mangaDetailsUrl(tempManga), headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
@@ -93,7 +98,7 @@ abstract class WuxiaWorldEU :
         return parseMangaDetails(data).apply { this.url = slug }
     }
 
-    private fun mangaDetailsUrl(manga: SManga): String = "$baseUrl/api/novels/${manga.url}/"
+    private fun mangaDetailsUrl(manga: SManga): String = "$baseUrl/api/novels/${manga.slug()}/"
 
     private fun parseMangaDetails(data: JsonObject): SManga = SManga.create().apply {
         title = data["name"]!!.jsonPrimitive.content

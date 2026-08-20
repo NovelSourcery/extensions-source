@@ -24,7 +24,7 @@ class PostDto(
     val genres: List<GenreDto> = emptyList(),
 ) {
     fun toSManga() = SManga.create().apply {
-        url = "/series/$slug"
+        url = slug
         title = postTitle
         thumbnail_url = featuredImage
         author = alternativeTitles.trim()

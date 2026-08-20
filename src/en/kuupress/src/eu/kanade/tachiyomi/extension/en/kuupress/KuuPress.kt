@@ -19,6 +19,7 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.stripChapterNumberPrefix
 import kotlinx.serialization.json.Json
@@ -46,6 +47,11 @@ abstract class KuuPress :
 
     private val apiBase = "https://api-kp.kuupress.com/api/public"
     private val mediaProxyBase = "https://api-kp.kuupress.com"
+
+    // SManga.url is already stored bare (see extractSlug below, used instead of SlugPath.slug()
+    // since it must also recognize two legacy prefixes ("novels/", "novel/") besides "read/" for
+    // old deep links); this template only covers resolving the canonical detail path back out.
+    private val mangaPathTemplate: SlugPath = SlugPath("/read/")
 
     private val preferences: SharedPreferences by getPreferencesLazy()
 
@@ -321,10 +327,7 @@ abstract class KuuPress :
         }
     }
 
-    override fun getMangaUrl(manga: SManga): String {
-        val slug = extractSlug(manga.url)
-        return "$baseUrl/read/$slug"
-    }
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(extractSlug(manga.url))
 
     override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         Filter.Header("Search"),

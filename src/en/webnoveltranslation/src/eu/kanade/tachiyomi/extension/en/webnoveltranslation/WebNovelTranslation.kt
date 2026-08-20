@@ -13,6 +13,7 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.setAltTitles
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -43,6 +44,8 @@ abstract class WebNovelTranslation :
     NovelSource {
 
     override val supportsLatest = false
+
+    private val mangaPathTemplate: SlugPath = SlugPath("/series/")
 
     private val json: Json by injectLazy()
 
@@ -123,12 +126,12 @@ abstract class WebNovelTranslation :
         )
     }
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl/series/${manga.novelId()}"
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.novelId())
 
     // The API returns the full catalogue in one call, so resolving a pasted /series/<id> URL
     // just means matching the id against that catalogue - same as fetchMangaUpdate's details path.
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val id = url.encodedPath.trimStart('/').removePrefix("series/").substringBefore('/')
+        val id = mangaPathTemplate.slug(url.encodedPath).substringBefore('/')
         val response = client.get(popularMangaUrl(1), headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val novel = response.parseNovelsArray().firstOrNull { it.id == id } ?: return null

@@ -50,6 +50,18 @@ class AiSearchResultDto(
 @Serializable
 class AiSearchRequestDto(val query: String, val limit: Int, val offset: Int)
 
+// Envelope the api-party proxy expects for every browse/details/chapters/content call.
+// headers is a list of [name, value] pairs (not a JSON object) because that's the shape
+// the endpoint requires.
+@Serializable
+class ApiPartyRequestDto(
+    val path: String,
+    val query: Map<String, String>? = null,
+    val headers: List<List<String>>,
+    val method: String,
+    val body: JsonElement? = null,
+)
+
 // The details endpoint has been observed to return the novel flatly under "data"; some other
 // path apparently nests it under "data.novel" (hence the wrapper), but that shape has never been
 // directly observed against the live API (it requires omniportal auth this session didn't have),

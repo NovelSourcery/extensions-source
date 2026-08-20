@@ -22,8 +22,10 @@ import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.network.post
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.toJsonRequestBody
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -34,12 +36,10 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
@@ -64,6 +64,40 @@ class SourceItem(
     val regexp: String = "",
 )
 
+@Serializable
+class SearchProxyRequestDto(
+    val query: String,
+    val offset: Int,
+    @SerialName("update_status") val updateStatus: String? = null,
+    @SerialName("word_count") val wordCount: String? = null,
+    @SerialName("sort_order") val sortOrder: String? = null,
+)
+
+@Serializable
+class ChatMessageDto(val role: String, val content: String)
+
+@Serializable
+class ChatCompletionRequestDto(
+    val model: String,
+    val temperature: Double,
+    val messages: List<ChatMessageDto>,
+)
+
+@Serializable
+class BingTranslateTextDto(@SerialName("Text") val text: String)
+
+// manga.url stores the bare identifier: a book id (single segment, e.g. "12345") or a garden
+// "<source>/<hexId>" pair (two segments) - distinguished by segment count, since the two id
+// shapes can't share one fixed SlugPath prefix. A stored value starting with "/" is a
+// pre-existing full-path entry from before this migration and is resolved unchanged.
+private fun resolveMangaPath(stored: String): String = when {
+    stored.startsWith("/") -> stored
+    '/' in stored -> "/garden/$stored"
+    else -> "/book/$stored"
+}
+
+private fun SManga.resolvedUrl(): String = resolveMangaPath(url)
+
 @Source
 abstract class TomatoMTL :
     KeiSource(),
@@ -75,6 +109,9 @@ abstract class TomatoMTL :
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
+        // so a null optional request field (e.g. search filters) is omitted entirely
+        // instead of encoded as an explicit "field": null.
+        explicitNulls = false
     }
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
@@ -149,9 +186,9 @@ abstract class TomatoMTL :
                     val parts = bookId.removePrefix("garden:").split(":", limit = 2)
                     val source = parts[0]
                     val hexId = parts[1]
-                    "/garden/$source/$hexId"
+                    "$source/$hexId"
                 } else {
-                    "/book/$bookId"
+                    bookId
                 }
 
                 Triple(
@@ -311,37 +348,15 @@ abstract class TomatoMTL :
         }
 
         // Regular search using search-proxy.php
-        val bodyJson = buildJsonObject {
-            put("query", query)
-            put("offset", offset)
+        val bodyJson = SearchProxyRequestDto(
+            query = query,
+            offset = offset,
+            updateStatus = (filters.filterIsInstance<SearchStatusFilter>().firstOrNull()?.takeIf { it.state > 0 })?.toUriPart(),
+            wordCount = (filters.filterIsInstance<SearchWordCountFilter>().firstOrNull()?.takeIf { it.state > 0 })?.toUriPart(),
+            sortOrder = (filters.filterIsInstance<SearchSortFilter>().firstOrNull()?.takeIf { it.state > 0 })?.toUriPart(),
+        )
 
-            filters.forEach { filter ->
-                when (filter) {
-                    is SearchStatusFilter -> {
-                        if (filter.state > 0) {
-                            put("update_status", filter.toUriPart())
-                        }
-                    }
-
-                    is SearchWordCountFilter -> {
-                        if (filter.state > 0) {
-                            put("word_count", filter.toUriPart())
-                        }
-                    }
-
-                    is SearchSortFilter -> {
-                        if (filter.state > 0) {
-                            put("sort_order", filter.toUriPart())
-                        }
-                    }
-
-                    else -> {}
-                }
-            }
-        }
-
-        val requestBody = bodyJson.toString().toRequestBody("application/json".toMediaType())
-        return client.post("$baseUrl/api/search-proxy.php", headers, requestBody)
+        return client.post("$baseUrl/api/search-proxy.php", headers, bodyJson.toJsonRequestBody(json))
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseSearchMangaResponse(performSearchMangaRequest(page, query, filters))
@@ -454,7 +469,7 @@ abstract class TomatoMTL :
                             ?: "unknown"
                     }
 
-                    val gardenUrl = "/garden/$source/$hexUrl"
+                    val gardenUrl = "$source/$hexUrl"
 
                     Triple(
                         gardenUrl,
@@ -511,9 +526,9 @@ abstract class TomatoMTL :
                     val parts = bookId.removePrefix("garden:").split(":", limit = 2)
                     val source = parts[0]
                     val hexId = parts[1]
-                    "/garden/$source/$hexId"
+                    "$source/$hexId"
                 } else {
-                    "/book/$bookId"
+                    bookId
                 }
 
                 val rawTitle = cleanHtml(bookData["book_name"]?.jsonPrimitive?.contentOrNull ?: "Unknown")
@@ -568,7 +583,7 @@ abstract class TomatoMTL :
                     titlesToTranslate.add(cleanedTitle)
 
                     Triple(
-                        "/book/$bookId",
+                        bookId,
                         book["thumb_url"]?.jsonPrimitive?.contentOrNull?.let { linkCover(it) },
                         book["author"]?.jsonPrimitive?.contentOrNull,
                     )
@@ -631,7 +646,7 @@ abstract class TomatoMTL :
                     titlesToTranslate.add(rawTitle)
 
                     Triple(
-                        "/book/$bookId",
+                        bookId,
                         book["thumb_url"]?.jsonPrimitive?.contentOrNull?.let { linkCover(it) },
                         book["author"]?.jsonPrimitive?.contentOrNull,
                     )
@@ -695,7 +710,7 @@ abstract class TomatoMTL :
                     titlesToTranslate.add(cleanedTitle)
 
                     Triple(
-                        "/book/$bookId",
+                        bookId,
                         book["thumb_url"]?.jsonPrimitive?.contentOrNull?.let { linkCover(it) },
                         book["author"]?.jsonPrimitive?.contentOrNull,
                     )
@@ -790,7 +805,9 @@ abstract class TomatoMTL :
 
     // ======================== Details ========================
 
-    private fun buildMangaDetailsUrl(manga: SManga): String = "$baseUrl${manga.url}"
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl${manga.resolvedUrl()}"
+
+    private fun buildMangaDetailsUrl(manga: SManga): String = "$baseUrl${manga.resolvedUrl()}"
 
     // Garden novels aren't real browsable pages on the site (require login), so only regular
     // /book/ pages can be resolved directly from a pasted URL.
@@ -798,7 +815,8 @@ abstract class TomatoMTL :
         val path = url.encodedPath
         val response = client.get(url.toString(), headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
-        return parseMangaDetailsHtml(response).apply { this.url = path }
+        val bookId = path.removePrefix("/book/").trim('/')
+        return parseMangaDetailsHtml(response).apply { this.url = bookId }
     }
 
     /**
@@ -811,7 +829,7 @@ abstract class TomatoMTL :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate = coroutineScope {
-        val isGarden = manga.url.contains("/garden/")
+        val isGarden = manga.resolvedUrl().contains("/garden/")
 
         if (isGarden) {
             val detailsDeferred = if (fetchDetails) async { ensureGardenTitle(fetchGardenMangaDetailsInternal(manga)) } else null
@@ -840,7 +858,7 @@ abstract class TomatoMTL :
         val hasTitle = runCatching { manga.title }.getOrNull()?.isNotBlank() == true
         if (!hasTitle) {
             val novelUrl = runCatching {
-                val pathParts = manga.url.removePrefix("/garden/").split("/")
+                val pathParts = manga.resolvedUrl().removePrefix("/garden/").split("/")
                 hexToString(pathParts[1])
             }.getOrNull()
             manga.title = novelUrl?.trim('/')?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
@@ -851,7 +869,7 @@ abstract class TomatoMTL :
 
     private suspend fun fetchGardenMangaDetailsInternal(manga: SManga): SManga {
         try {
-            val pathParts = manga.url.removePrefix("/garden/").split("/")
+            val pathParts = manga.resolvedUrl().removePrefix("/garden/").split("/")
             if (pathParts.size < 2) return manga
 
             val hexId = pathParts[1]
@@ -1134,7 +1152,7 @@ abstract class TomatoMTL :
     private suspend fun fetchGardenChapterListInternal(manga: SManga): List<SChapter> {
         return run fromCallable@{
             try {
-                val pathParts = manga.url.removePrefix("/garden/").split("/")
+                val pathParts = manga.resolvedUrl().removePrefix("/garden/").split("/")
                 if (pathParts.size < 2) return@fromCallable emptyList<SChapter>()
 
                 val hexId = pathParts[1]
@@ -1166,7 +1184,7 @@ abstract class TomatoMTL :
                             Log.e("TomatoMTL", "Garden API returned error: $error")
                             return@fromCallable listOf(
                                 SChapter.create().apply {
-                                    url = manga.url + "/error"
+                                    url = manga.resolvedUrl() + "/error"
                                     name = "⚠️ $error"
                                     chapter_number = 0f
                                 },
@@ -1222,7 +1240,7 @@ abstract class TomatoMTL :
 
                     chapters.add(
                         SChapter.create().apply {
-                            url = manga.url + "/0"
+                            url = manga.resolvedUrl() + "/0"
                             name = "⚠️ Login Required"
                             chapter_number = 0f
                         },
@@ -1232,7 +1250,7 @@ abstract class TomatoMTL :
                 chapters.ifEmpty {
                     listOf(
                         SChapter.create().apply {
-                            url = manga.url + "/info"
+                            url = manga.resolvedUrl() + "/info"
                             name = "⚠️ Garden novels require login on TomatoMTL website"
                             chapter_number = 0f
                         },
@@ -1242,7 +1260,7 @@ abstract class TomatoMTL :
                 Log.e("TomatoMTL", "Error fetching garden chapter list: ${e.message}")
                 listOf(
                     SChapter.create().apply {
-                        url = manga.url + "/error"
+                        url = manga.resolvedUrl() + "/error"
                         name = "Error loading chapters: ${e.message}"
                         chapter_number = 0f
                     },
@@ -1318,10 +1336,10 @@ abstract class TomatoMTL :
     private suspend fun fetchRegularChapterListInternal(manga: SManga): List<SChapter> {
         return run fromCallable@{
             try {
-                val bookId = manga.url.removePrefix("/book/").split("/").firstOrNull()
+                val bookId = manga.resolvedUrl().removePrefix("/book/").split("/").firstOrNull()
                 if (bookId.isNullOrBlank()) {
                     return@fromCallable parseChapterListHtml(
-                        client.get("$baseUrl${manga.url}", headers),
+                        client.get("$baseUrl${manga.resolvedUrl()}", headers),
                     )
                 }
 
@@ -1385,7 +1403,7 @@ abstract class TomatoMTL :
 
                 if (chapters.isEmpty()) {
                     return@fromCallable parseChapterListHtml(
-                        client.get("$baseUrl${manga.url}", headers),
+                        client.get("$baseUrl${manga.resolvedUrl()}", headers),
                     )
                 }
 
@@ -1803,21 +1821,11 @@ abstract class TomatoMTL :
 
             val prompt = "You are a translator. Translate the following text into English. Requirements: accurate translation, natural flow, preserve the original style. Translate names and proper nouns. Do not omit any sentence or add extra commentary. Keep line breaks, and the number of output lines must equal the number of input lines.\n\nSource:\n$textToTranslate"
 
-            val requestBody = buildJsonObject {
-                put("model", "LongCat-Flash-Chat")
-                put("temperature", 0.2)
-                put(
-                    "messages",
-                    buildJsonArray {
-                        add(
-                            buildJsonObject {
-                                put("role", "user")
-                                put("content", prompt)
-                            },
-                        )
-                    },
-                )
-            }.toString().toRequestBody("application/json".toMediaType())
+            val requestBody = ChatCompletionRequestDto(
+                model = "LongCat-Flash-Chat",
+                temperature = 0.2,
+                messages = listOf(ChatMessageDto(role = "user", content = prompt)),
+            ).toJsonRequestBody()
 
             val longcatHeaders = Headers.Builder()
                 .add("Authorization", "Bearer ${getLongcatApiKey()}")
@@ -1864,13 +1872,7 @@ abstract class TomatoMTL :
 
             if (text.isBlank()) return formatContent(content)
 
-            val requestBody = buildJsonArray {
-                add(
-                    buildJsonObject {
-                        put("Text", text)
-                    },
-                )
-            }.toString().toRequestBody("application/json".toMediaType())
+            val requestBody = listOf(BingTranslateTextDto(text)).toJsonRequestBody()
 
             val bingUrl = "https://api.cognitive.microsofttranslator.com/translate?" +
                 "from=&to=en&api-version=3.0&textType=html&includeSentenceLength=true"

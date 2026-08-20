@@ -31,18 +31,17 @@ import keiyoushi.utils.toJsonRequestBody
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
@@ -90,6 +89,10 @@ abstract class WtrLab :
     }
 
     private val json = jsonInstance
+
+    // The event/add endpoint omits "chapter_id" entirely when unresolved; json doesn't
+    // guarantee that for null fields, so this overrides just that behavior for encoding.
+    private val requestJson = Json(json) { explicitNulls = false }
     private val preferences = Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
 
     /** [SManga.url] is stored as bare "<rawId>/<slug>"; a stored value starting with "/" is a
@@ -506,9 +509,7 @@ abstract class WtrLab :
     }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val requestBody = buildJsonObject {
-            put("page", page)
-        }.toString().toRequestBody("application/json".toMediaType())
+        val requestBody = PageRequestDto(page).toJsonRequestBody()
 
         val response = client.post("$baseUrl/api/home/recent", apiHeaders, requestBody)
         val jsonResult = json.parseToJsonElement(response.body.string()).jsonObject
@@ -931,7 +932,6 @@ abstract class WtrLab :
 
     private val serieIdCache = mutableMapOf<Int, Int>()
     private val chapterIdCache = mutableMapOf<Pair<Int, Int>, Int>()
-    private val jsonMime = "application/json".toMediaType()
 
     private fun folderReading() = preferences.getString(PREF_FOLDER_READING, "1")?.toIntOrNull() ?: 1
     private fun folderCompleted() = preferences.getString(PREF_FOLDER_COMPLETED, "3")?.toIntOrNull() ?: 3
@@ -952,6 +952,21 @@ abstract class WtrLab :
 
     @Serializable
     private class FolderRequestBody(val sid: Int, val raw_id: Int, val folder: Int)
+
+    @Serializable
+    private class ReadEventRequestBody(
+        val serie_id: Int,
+        val raw_id: Int,
+        val translate: String,
+        val order: Int,
+        val language: String = "en",
+        val chapter_id: Int? = null,
+        val new_event: Boolean = true,
+        val version: Int = 2,
+    )
+
+    @Serializable
+    private class PageRequestDto(val page: Int)
 
     private fun SChapter.isRead(): Boolean = try {
         this::class.java.getMethod("getRead").invoke(this) as? Boolean ?: false
@@ -1051,22 +1066,15 @@ abstract class WtrLab :
         }
     }
 
-    // Note: "chapter_id" is only included when resolvable, so this stays a manually-built
-    // JsonObject rather than a @Serializable DTO (a nullable field would either always
-    // serialize as null or require non-default JSON config to omit it).
     private suspend fun postReadEvent(ids: SerieIds, order: Int) {
         if (order <= 0) return
-        val chapterId = chapterIdFor(ids.rawId, order)
-        val body = buildJsonObject {
-            put("serie_id", ids.sid)
-            put("raw_id", ids.rawId)
-            put("language", "en")
-            put("translate", getTranslationMode())
-            if (chapterId != null) put("chapter_id", chapterId)
-            put("order", order)
-            put("new_event", true)
-            put("version", 2)
-        }.toString().toRequestBody(jsonMime)
+        val body = ReadEventRequestBody(
+            serie_id = ids.sid,
+            raw_id = ids.rawId,
+            translate = getTranslationMode(),
+            order = order,
+            chapter_id = chapterIdFor(ids.rawId, order),
+        ).toJsonRequestBody(requestJson)
         runCatching {
             client.post("$baseUrl/api/event/add", apiHeaders, body).close()
         }
