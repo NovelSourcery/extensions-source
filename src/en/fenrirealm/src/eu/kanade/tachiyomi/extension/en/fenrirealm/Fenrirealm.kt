@@ -13,7 +13,9 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.getPreferencesLazy
@@ -40,6 +42,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import org.jsoup.nodes.Node
 import org.jsoup.nodes.TextNode
@@ -153,13 +156,17 @@ abstract class Fenrirealm :
     private fun buildPopularMangaRequest(page: Int): Request = GET("$apiBaseUrl/home/popular-series", headers)
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val novels = json.decodeFromString<List<NovelDto>>(client.newCall(buildPopularMangaRequest(page)).execute().body.string())
+        val request = buildPopularMangaRequest(page)
+        val novels = json.decodeFromString<List<NovelDto>>(client.get(request.url, request.headers).body.string())
         return MangasPage(novels.map { it.toSManga(baseUrl, mangaPathTemplate) }, false)
     }
 
     private fun buildLatestUpdatesRequest(page: Int): Request = GET("$apiBaseUrl/series?page=$page&per_page=20&status=any&sort=latest", headers)
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseSearchResultsResponse(client.newCall(buildLatestUpdatesRequest(page)).execute())
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val request = buildLatestUpdatesRequest(page)
+        return parseSearchResultsResponse(client.get(request.url, request.headers))
+    }
 
     private fun parseSearchResultsResponse(response: Response): MangasPage {
         val result = json.decodeFromString<SearchResponse>(response.body.string())
@@ -173,7 +180,7 @@ abstract class Fenrirealm :
         if (!url.encodedPath.contains("/series/")) return null
         val slug = url.encodedPath.substringAfter("/series/").trim('/').substringBefore('/')
         if (slug.isBlank()) return null
-        val response = client.newCall(GET("$apiBaseUrl/series/$slug", headers)).execute()
+        val response = client.get("$apiBaseUrl/series/$slug", headers)
         return runCatching { json.decodeFromString<NovelDto>(response.body.string()).toSManga(baseUrl, mangaPathTemplate) }.getOrNull()
     }
 
@@ -224,7 +231,10 @@ abstract class Fenrirealm :
         return GET(url, headers)
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseSearchResultsResponse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val request = buildSearchMangaRequest(page, query, filters)
+        return parseSearchResultsResponse(client.get(request.url, request.headers))
+    }
 
     override fun getMangaUrl(manga: SManga): String {
         val slug = mangaPathTemplate.resolve(manga.url).trim('/').substringAfterLast('/')
@@ -250,12 +260,18 @@ abstract class Fenrirealm :
         // Details and chapters live on different endpoints - fire both concurrently when both
         // are needed.
         val detailsDeferred = if (fetchDetails) {
-            async { parseMangaDetails(client.newCall(buildMangaDetailsRequest(manga)).execute()) }
+            async {
+                val request = buildMangaDetailsRequest(manga)
+                parseMangaDetails(client.get(request.url, request.headers))
+            }
         } else {
             null
         }
         val chaptersDeferred = if (fetchChapters) {
-            async { parseChapterList(client.newCall(buildChapterListRequest(manga)).execute()) }
+            async {
+                val request = buildChapterListRequest(manga)
+                parseChapterList(client.get(request.url, request.headers))
+            }
         } else {
             null
         }
@@ -339,16 +355,16 @@ abstract class Fenrirealm :
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        val response = client.get(baseUrl + chapter.url, headers)
         return listOf(Page(0, response.request.url.toString().removePrefix(baseUrl)))
     }
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
-        val body = response.body.string()
+        val response = client.get(baseUrl + page.url, headers)
+        val doc = response.asJsoup()
 
         // Try DOM extraction first (more reliable for rendered HTML)
-        val chapterContent = extractChapterContentFromDOM(body)
+        val chapterContent = extractChapterContentFromDOM(doc)
         if (chapterContent.isNotBlank()) {
             return chapterContent
         }
@@ -356,9 +372,7 @@ abstract class Fenrirealm :
         return ""
     }
 
-    private fun extractChapterContentFromDOM(body: String): String {
-        val doc = Jsoup.parse(body)
-
+    private fun extractChapterContentFromDOM(doc: Document): String {
         // Prefer the actual chapter body over the outer reader wrapper.
         val readerArea = doc.selectFirst("div.reader-area[id^=reader-area]")
             ?: doc.selectFirst("div.reader-area")

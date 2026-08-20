@@ -4,7 +4,6 @@ import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
@@ -15,6 +14,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.serialization.decodeFromString
@@ -87,31 +87,29 @@ abstract class BrightNovels :
     }
 
     @kotlinx.serialization.Serializable
-    private data class CachedOption(val name: String, val value: String)
+    private class CachedOption(val name: String, val value: String)
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseSeriesListing(
-        client.newCall(
-            seriesRequest(
-                page = page,
-                baseParams = mapOf(
-                    "sort" to "popular",
-                    "order" to "desc",
-                ),
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val request = seriesRequest(
+            page = page,
+            baseParams = mapOf(
+                "sort" to "popular",
+                "order" to "desc",
             ),
-        ).execute(),
-    )
+        )
+        return parseSeriesListing(client.get(request.url, request.headers))
+    }
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseSeriesListing(
-        client.newCall(
-            seriesRequest(
-                page = page,
-                baseParams = mapOf(
-                    "sort" to "latest_upload",
-                    "order" to "desc",
-                ),
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val request = seriesRequest(
+            page = page,
+            baseParams = mapOf(
+                "sort" to "latest_upload",
+                "order" to "desc",
             ),
-        ).execute(),
-    )
+        )
+        return parseSeriesListing(client.get(request.url, request.headers))
+    }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         if (query.length >= 3 && !hasActiveFilters(filters)) {
@@ -119,7 +117,7 @@ abstract class BrightNovels :
                 .addQueryParameter("query", query)
                 .build()
                 .toString()
-            return parseApiSearch(client.newCall(GET(searchUrl, headers)).execute())
+            return parseApiSearch(client.get(searchUrl, headers))
         }
 
         val params = mutableMapOf<String, String>()
@@ -177,7 +175,8 @@ abstract class BrightNovels :
             params["origin"] = selectedCountry.orEmpty()
         }
 
-        return parseSeriesListing(client.newCall(seriesRequest(page, params)).execute())
+        val request = seriesRequest(page, params)
+        return parseSeriesListing(client.get(request.url, request.headers))
     }
 
     private fun slugOf(manga: SManga): String = decodePathSegment(
@@ -196,7 +195,8 @@ abstract class BrightNovels :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list both come from the same series page - fetch it once.
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val request = buildMangaDetailsRequest(manga)
+        val response = client.get(request.url, request.headers)
 
         val updatedManga = if (fetchDetails) parseMangaDetails(response) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(response) else chapters
@@ -233,7 +233,7 @@ abstract class BrightNovels :
         }
     }
 
-    private fun parseChapterList(response: Response): List<SChapter> {
+    private suspend fun parseChapterList(response: Response): List<SChapter> {
         val fallbackSeriesSlug = response.request.url.pathSegments
             .lastOrNull { it.isNotBlank() }
             ?.let(::decodePathSegment)
@@ -279,14 +279,16 @@ abstract class BrightNovels :
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.newCall(inertiaRequest(absoluteUrl(chapter.url))).execute()
+        val request = inertiaRequest(absoluteUrl(chapter.url))
+        val response = client.get(request.url, request.headers)
         return listOf(Page(0, response.request.url.toString(), null))
     }
 
     override suspend fun fetchPageText(page: Page): String {
         // The app's getPageList short-circuit hands us the raw (relative) chapter url,
         // so rebuild an absolute url before requesting it.
-        val response = client.newCall(inertiaRequest(absoluteUrl(page.url))).execute()
+        val request = inertiaRequest(absoluteUrl(page.url))
+        val response = client.get(request.url, request.headers)
         val body = response.body.string()
         val props = extractInertiaProps(body, response.headers)
         val chapter = props["chapter"].asObject() ?: return ""
@@ -300,7 +302,8 @@ abstract class BrightNovels :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = url.pathSegments.lastOrNull { it.isNotBlank() }?.let(::decodePathSegment) ?: return null
         val manga = SManga.create().apply { this.url = encodePathSegment(slug) }
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val request = buildMangaDetailsRequest(manga)
+        val response = client.get(request.url, request.headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response)
     }
@@ -743,8 +746,9 @@ abstract class BrightNovels :
         return inertiaRequest(url)
     }
 
-    private fun fetchChapterObjectsFromEndpoint(seriesSlug: String, premium: Boolean): List<JsonElement> = try {
-        val response = client.newCall(chapterEndpointRequest(seriesSlug, premium)).execute()
+    private suspend fun fetchChapterObjectsFromEndpoint(seriesSlug: String, premium: Boolean): List<JsonElement> = try {
+        val request = chapterEndpointRequest(seriesSlug, premium)
+        val response = client.get(request.url, request.headers)
         parseChapterObjectsFromBody(response.body.string(), response.headers)
     } catch (_: Exception) {
         emptyList()

@@ -16,6 +16,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.getPreferencesLazy
@@ -96,7 +97,8 @@ abstract class Ranobes :
     protected open fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/updates/page/$page/", headers)
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val response = client.newCall(buildLatestUpdatesRequest(page)).execute()
+        val latestRequest = buildLatestUpdatesRequest(page)
+        val response = client.get(latestRequest.url, latestRequest.headers)
         val document = response.asJsoup()
 
         val novels = document.select("div.block.story_line.story_line-img").mapNotNull { block ->
@@ -253,7 +255,8 @@ abstract class Ranobes :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val updatedManga = if (fetchDetails) {
-            val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+            val mangaDetailsRequest = buildMangaDetailsRequest(manga)
+            val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers)
             parseMangaDetails(response)
         } else {
             manga
@@ -331,10 +334,11 @@ abstract class Ranobes :
         return GET("$baseUrl/chapters/$novelId/", headers)
     }
 
-    private fun fetchAllChapters(manga: SManga): List<SChapter> {
+    private suspend fun fetchAllChapters(manga: SManga): List<SChapter> {
         val allChapters = mutableListOf<SChapter>()
         var currentPage = 1
-        var document = client.newCall(buildChapterListRequest(manga)).execute().asJsoup()
+        val chapterListRequest = buildChapterListRequest(manga)
+        var document = client.get(chapterListRequest.url, chapterListRequest.headers).asJsoup()
 
         val baseChapterUrl = buildChapterListRequest(manga).url.toString()
             .substringBefore("/page/")
@@ -358,7 +362,7 @@ abstract class Ranobes :
 
             currentPage++
             val nextUrl = "$baseChapterUrl/page/$currentPage/"
-            val nextResponse = client.newCall(GET(nextUrl, headers)).execute()
+            val nextResponse = client.get(nextUrl, headers)
             document = nextResponse.asJsoup()
         }
 
@@ -472,7 +476,7 @@ abstract class Ranobes :
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.newCall(GET(url, headers)).execute()
+        val response = client.get(url, headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response).apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
     }
@@ -483,8 +487,8 @@ abstract class Ranobes :
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val request = GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
-        val response = client.newCall(request).execute()
+        val pageUrl = if (page.url.startsWith("http")) page.url else baseUrl + page.url
+        val response = client.get(pageUrl, headers)
         val document = response.asJsoup()
 
         return buildString {

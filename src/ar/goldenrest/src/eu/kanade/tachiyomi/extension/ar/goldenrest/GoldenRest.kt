@@ -11,12 +11,14 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.network.post
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.toJsonRequestBody
+import keiyoushi.utils.tryParse
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
@@ -24,6 +26,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import uy.kohesive.injekt.injectLazy
+import kotlin.time.Instant
 
 @Source
 abstract class GoldenRest :
@@ -43,11 +46,17 @@ abstract class GoldenRest :
 
     private fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/api/releases?page=$page", headers)
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseReleasesResponse(client.newCall(buildPopularMangaRequest(page)).execute())
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val request = buildPopularMangaRequest(page)
+        return parseReleasesResponse(client.get(request.url, request.headers))
+    }
 
     private fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/api/releases?page=$page", headers)
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseReleasesResponse(client.newCall(buildLatestUpdatesRequest(page)).execute())
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val request = buildLatestUpdatesRequest(page)
+        return parseReleasesResponse(client.get(request.url, request.headers))
+    }
 
     private fun parseReleasesResponse(response: Response): MangasPage {
         val data = json.decodeFromString<ReleasesResponse>(response.body.string())
@@ -66,16 +75,15 @@ abstract class GoldenRest :
             return GET("$baseUrl/api/mangas/$id", headers)
         }
 
-        val body = buildJsonObject {
-            put("title", query)
-            put("page", page.toString())
-        }.toString().toRequestBody("application/json".toMediaType())
+        val body = SearchRequestDto(query, page.toString()).toJsonRequestBody()
 
         return POST("$baseUrl/api/mangas/search", headers, body)
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val response = client.newCall(buildSearchMangaRequest(page, query, filters)).execute()
+        val request = buildSearchMangaRequest(page, query, filters)
+        val response = request.body?.let { client.post(request.url, request.headers, it) }
+            ?: client.get(request.url, request.headers)
         val body = response.body.string()
 
         val mangaResponse = try {
@@ -111,7 +119,8 @@ abstract class GoldenRest :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val updatedManga = if (fetchDetails) {
-            val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+            val request = buildMangaDetailsRequest(manga)
+            val response = client.get(request.url, request.headers)
             val data = json.decodeFromString<MangaResponse>(response.body.string())
             data.mangaData?.toSManga() ?: throw Exception("Manga not found")
         } else {
@@ -123,8 +132,8 @@ abstract class GoldenRest :
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private fun loadChapterList(manga: SManga): List<SChapter> {
-        val response = client.newCall(GET("$baseUrl/api/mangas/${mangaId(manga)}/releases?page=1", headers)).execute()
+    private suspend fun loadChapterList(manga: SManga): List<SChapter> {
+        val response = client.get("$baseUrl/api/mangas/${mangaId(manga)}/releases?page=1", headers)
         val data = json.decodeFromString<ReleasesResponse>(response.body.string())
         val seen = mutableSetOf<Float>()
 
@@ -147,14 +156,14 @@ abstract class GoldenRest :
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
         val releaseId = chapter.url.substringAfterLast("/")
-        val response = client.newCall(GET("$baseUrl/api/releases/$releaseId", headers)).execute()
+        val response = client.get("$baseUrl/api/releases/$releaseId", headers)
         return listOf(Page(0, response.request.url.encodedPath))
     }
 
     override suspend fun fetchPageText(page: Page): String {
         val releaseId = page.url.substringAfterLast("/").substringBefore("?")
 
-        val releaseResponse = client.newCall(GET("$baseUrl/api/releases/$releaseId", headers)).execute()
+        val releaseResponse = client.get("$baseUrl/api/releases/$releaseId", headers)
         val releaseBody = releaseResponse.body.string()
 
         val releaseData = try {
@@ -170,13 +179,11 @@ abstract class GoldenRest :
                 .joinToString("\n") { "<p>${it.trim()}</p>" }
         }
 
-        val downloadResponse = client.newCall(
-            POST(
-                "$baseUrl/api/releases/$releaseId/download",
-                headers,
-                "{}".toRequestBody("application/json".toMediaType()),
-            ),
-        ).execute()
+        val downloadResponse = client.post(
+            "$baseUrl/api/releases/$releaseId/download",
+            headers,
+            "{}".toRequestBody("application/json".toMediaType()),
+        )
 
         val downloadBody = downloadResponse.body.string()
 
@@ -199,7 +206,8 @@ abstract class GoldenRest :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val request = buildMangaDetailsRequest(manga)
+        val response = client.get(request.url, request.headers)
         if (!response.isSuccessful) return null
         val data = json.decodeFromString<MangaResponse>(response.body.string()).mangaData ?: return null
         return data.toSManga()
@@ -251,11 +259,5 @@ abstract class GoldenRest :
         .replace("-+".toRegex(), "-")
         .trim('-')
 
-    private fun parseDate(dateStr: String): Long = try {
-        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
-        sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
-        sdf.parse(dateStr)?.time ?: 0L
-    } catch (_: Exception) {
-        0L
-    }
+    private fun parseDate(dateStr: String): Long = Instant.tryParse(dateStr)
 }

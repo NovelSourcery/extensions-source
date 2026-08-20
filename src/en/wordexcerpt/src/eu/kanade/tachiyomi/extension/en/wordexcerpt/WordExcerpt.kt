@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.wordexcerpt
 
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -9,6 +8,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.coroutines.async
@@ -18,7 +18,6 @@ import kotlinx.serialization.json.Json
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Request
 import okhttp3.Response
 import uy.kohesive.injekt.injectLazy
 
@@ -94,7 +93,7 @@ abstract class WordExcerpt :
         }
     }
 
-    private fun novelsListRequest(page: Int, order: String, extra: Map<String, String> = emptyMap()): Request {
+    private suspend fun novelsList(page: Int, order: String, extra: Map<String, String> = emptyMap()): Response {
         val from = (page - 1) * pageSize
         val to = from + pageSize - 1
         val url = "$api/novels".toHttpUrl().newBuilder()
@@ -107,7 +106,7 @@ abstract class WordExcerpt :
             .add("Range-Unit", "items")
             .add("Range", "$from-$to")
             .build()
-        return GET(url, rangeHeaders)
+        return client.get(url, rangeHeaders)
     }
 
     private fun parseNovels(response: Response): MangasPage {
@@ -115,28 +114,25 @@ abstract class WordExcerpt :
         return MangasPage(novels.map { it.toSManga() }, novels.size >= pageSize)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseNovels(client.newCall(novelsListRequest(page, "view_count.desc")).execute())
+    override suspend fun getPopularManga(page: Int): MangasPage = parseNovels(novelsList(page, "view_count.desc"))
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovels(client.newCall(novelsListRequest(page, "updated_at.desc")).execute())
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovels(novelsList(page, "updated_at.desc"))
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseNovels(client.newCall(novelsListRequest(page, "view_count.desc", mapOf("title" to "ilike.*$query*"))).execute())
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseNovels(novelsList(page, "view_count.desc", mapOf("title" to "ilike.*$query*")))
 
     private fun slugOf(mangaUrl: String) = mangaPathTemplate.resolve(mangaUrl).trim('/')
 
-    private fun novelBySlugRequest(slug: String): Request {
-        val url = "$api/novels".toHttpUrl().newBuilder()
-            .addQueryParameter("select", "$novelSelect,id")
-            .addQueryParameter("slug", "eq.$slug")
-            .addQueryParameter("limit", "1")
-            .build()
-        return GET(url, headers)
-    }
+    private fun novelBySlugUrl(slug: String): HttpUrl = "$api/novels".toHttpUrl().newBuilder()
+        .addQueryParameter("select", "$novelSelect,id")
+        .addQueryParameter("slug", "eq.$slug")
+        .addQueryParameter("limit", "1")
+        .build()
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = url.encodedPath.trim('/')
-        val response = client.newCall(novelBySlugRequest(slug)).execute()
+        val response = client.get(novelBySlugUrl(slug), headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val novel = json.decodeFromString<List<Novel>>(response.body.string()).firstOrNull() ?: return null
         return novel.toSManga()
@@ -150,7 +146,7 @@ abstract class WordExcerpt :
     ): SMangaUpdate = coroutineScope {
         // Both details and chapters need the novel's internal id, so resolve the novel row once
         // and fan out from there instead of looking it up twice.
-        val novel = client.newCall(novelBySlugRequest(slugOf(manga.url))).execute()
+        val novel = client.get(novelBySlugUrl(slugOf(manga.url)), headers)
             .let { json.decodeFromString<List<Novel>>(it.body.string()) }
             .firstOrNull()
 
@@ -163,7 +159,7 @@ abstract class WordExcerpt :
         )
     }
 
-    private fun fetchChapterList(novelId: String): List<SChapter> {
+    private suspend fun fetchChapterList(novelId: String): List<SChapter> {
         val url = "$api/chapters".toHttpUrl().newBuilder()
             .addQueryParameter("select", "id,number,title,is_free")
             .addQueryParameter("novel_id", "eq.$novelId")
@@ -171,7 +167,7 @@ abstract class WordExcerpt :
             .addQueryParameter("order", "number.asc")
             .build()
         val chapters = json.decodeFromString<List<Chapter>>(
-            client.newCall(GET(url, headers)).execute().body.string(),
+            client.get(url, headers).body.string(),
         )
 
         return chapters.map { ch ->
@@ -197,7 +193,7 @@ abstract class WordExcerpt :
             .addQueryParameter("limit", "1")
             .build()
         val chapter = json.decodeFromString<List<Chapter>>(
-            client.newCall(GET(url, headers)).execute().body.string(),
+            client.get(url, headers).body.string(),
         ).firstOrNull()
         return chapter?.content.orEmpty()
     }

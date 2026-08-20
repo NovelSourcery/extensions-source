@@ -2,7 +2,6 @@ package eu.kanade.tachiyomi.novelextension.en.webnoveltranslation
 
 import android.app.Application
 import android.content.SharedPreferences
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -12,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.setAltTitles
 import kotlinx.coroutines.async
@@ -24,12 +24,13 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl
-import okhttp3.Request
 import okhttp3.Response
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
-import java.text.SimpleDateFormat
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /**
@@ -49,14 +50,14 @@ abstract class WebNovelTranslation :
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
 
-    private val dateFormat = SimpleDateFormat("MMM dd, yyyy", Locale.US)
+    private val dateFormat = DateTimeFormatter.ofPattern("MMM dd, yyyy", Locale.US)
 
     // Popular / Latest
 
-    private fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/api/novels?page=1", headers)
+    private fun popularMangaUrl(page: Int): String = "$baseUrl/api/novels?page=1"
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val novels = client.newCall(buildPopularMangaRequest(page)).execute().parseNovelsArray()
+        val novels = client.get(popularMangaUrl(page), headers).parseNovelsArray()
         cacheGenres(novels)
         val mangas = novels.map { it.toSManga() }
         return MangasPage(mangas, hasNextPage = false)
@@ -68,7 +69,7 @@ abstract class WebNovelTranslation :
 
     // The API returns the full catalogue in one call, so search/filter runs client-side.
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val novels = client.newCall(buildPopularMangaRequest(page)).execute().parseNovelsArray()
+        val novels = client.get(popularMangaUrl(page), headers).parseNovelsArray()
         cacheGenres(novels)
 
         val selectedGenres = filters.filterIsInstance<GenreFilter>()
@@ -104,7 +105,7 @@ abstract class WebNovelTranslation :
         val detailsDeferred = if (fetchDetails) {
             async {
                 val id = manga.novelId()
-                val novel = client.newCall(buildPopularMangaRequest(1)).execute().parseNovelsArray()
+                val novel = client.get(popularMangaUrl(1), headers).parseNovelsArray()
                     .firstOrNull { it.id == id }
                     ?: return@async manga
                 novel.toSManga().apply {
@@ -128,7 +129,7 @@ abstract class WebNovelTranslation :
     // just means matching the id against that catalogue - same as fetchMangaUpdate's details path.
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val id = url.encodedPath.trimStart('/').removePrefix("series/").substringBefore('/')
-        val response = client.newCall(buildPopularMangaRequest(1)).execute()
+        val response = client.get(popularMangaUrl(1), headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val novel = response.parseNovelsArray().firstOrNull { it.id == id } ?: return null
         return novel.toSManga().apply {
@@ -136,8 +137,8 @@ abstract class WebNovelTranslation :
         }
     }
 
-    private fun loadChapterList(manga: SManga): List<SChapter> {
-        val response = client.newCall(GET("$baseUrl/api/chapters/${manga.novelId()}", headers)).execute()
+    private suspend fun loadChapterList(manga: SManga): List<SChapter> {
+        val response = client.get("$baseUrl/api/chapters/${manga.novelId()}", headers)
         val novelId = response.request.url.pathSegments.last()
         val chapters = json.parseToJsonElement(response.body.string())
             .jsonObject["chapters"]?.jsonArray
@@ -166,7 +167,7 @@ abstract class WebNovelTranslation :
 
     override suspend fun fetchPageText(page: Page): String {
         val path = page.url.trimStart('/')
-        val response = client.newCall(GET("$baseUrl/api/chapter-content/$path", headers)).execute()
+        val response = client.get("$baseUrl/api/chapter-content/$path", headers)
         val content = response.body.string()
         return content
             .split("\n\n")
@@ -256,11 +257,9 @@ abstract class WebNovelTranslation :
 
     private fun parseDate(date: String?): Long {
         if (date.isNullOrBlank()) return 0L
-        return try {
-            dateFormat.parse(date)?.time ?: 0L
-        } catch (_: Exception) {
-            0L
-        }
+        return runCatching {
+            LocalDate.parse(date, dateFormat).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        }.getOrDefault(0L)
     }
 
     companion object {

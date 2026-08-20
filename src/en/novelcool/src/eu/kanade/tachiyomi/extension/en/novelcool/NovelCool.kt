@@ -10,6 +10,8 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.network.post
 import keiyoushi.source.KeiSource
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -22,6 +24,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.FormBody
 import okhttp3.Headers
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import uy.kohesive.injekt.injectLazy
@@ -67,7 +70,7 @@ abstract class NovelCool :
             .add("chapter_id", chapterId)
             .build()
 
-        val response = client.newCall(POST("$apiUrl/chapter/info/", apiHeaders(), body)).execute()
+        val response = client.post("$apiUrl/chapter/info/", apiHeaders(), body)
         val jsonObject = json.parseToJsonElement(response.body.string()).jsonObject
         val info = jsonObject["info"]?.jsonObject ?: return ""
         return info["content"]?.jsonPrimitive?.contentOrNull ?: ""
@@ -83,7 +86,10 @@ abstract class NovelCool :
         return POST("$apiUrl/elite/hot", apiHeaders(), body)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelListResponse(client.newCall(buildPopularMangaRequest(page)).execute())
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val request = buildPopularMangaRequest(page)
+        return parseNovelListResponse(client.post(request.url, request.headers, request.body!!))
+    }
 
     private fun parseNovelListResponse(response: Response): MangasPage {
         val jsonObject = json.parseToJsonElement(response.body.string()).jsonObject
@@ -114,7 +120,10 @@ abstract class NovelCool :
         return POST("$apiUrl/elite/latest", apiHeaders(), body)
     }
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelListResponse(client.newCall(buildLatestUpdatesRequest(page)).execute())
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val request = buildLatestUpdatesRequest(page)
+        return parseNovelListResponse(client.post(request.url, request.headers, request.body!!))
+    }
 
     private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (query.startsWith("http") && query.contains("/novel/")) {
@@ -161,18 +170,37 @@ abstract class NovelCool :
         POST("$apiUrl/book/search/", apiHeaders(), body)
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseNovelListResponse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val request = buildSearchMangaRequest(page, query, filters)
+        return parseNovelListResponse(client.post(request.url, request.headers, request.body!!))
+    }
 
     // Webview should open the site page, not the JSON API endpoint
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.url.substringBefore("?id=")}.html"
 
-    private fun fetchBookInfo(bookId: String): JsonObject {
+    // The human-facing URL (/novel/<slug>.html) carries no book_id - the API needs one for every
+    // other call - so scrape it off the page itself (embedded in a book-follow-trigger button).
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val visitPath = url.encodedPath.removePrefix("/novel/").removeSuffix(".html").trim('/')
+        if (visitPath.isBlank()) return null
+
+        val response = client.get(url, headers, ensureSuccess = false)
+        if (!response.isSuccessful) return null
+        val html = response.body.string()
+        val bookId = Regex("""book_id="(\d+)"""").find(html)?.groupValues?.get(1) ?: return null
+
+        return parseMangaDetails(SManga.create().apply { this.url = "$visitPath?id=$bookId" }).apply {
+            this.url = "$visitPath?id=$bookId"
+        }
+    }
+
+    private suspend fun fetchBookInfo(bookId: String): JsonObject {
         val body = baseBodyBuilder().add("book_id", bookId).build()
-        val response = client.newCall(POST("$apiUrl/book/info/", apiHeaders(), body)).execute()
+        val response = client.post("$apiUrl/book/info/", apiHeaders(), body)
         return json.parseToJsonElement(response.body.string()).jsonObject
     }
 
-    private fun parseMangaDetails(manga: SManga): SManga {
+    private suspend fun parseMangaDetails(manga: SManga): SManga {
         val id = manga.url.substringAfter("?id=")
         var jsonObject = fetchBookInfo(id)
         var info = jsonObject["info"]?.jsonObject
@@ -209,7 +237,7 @@ abstract class NovelCool :
         }
     }
 
-    private fun parseChapterList(manga: SManga): List<SChapter> {
+    private suspend fun parseChapterList(manga: SManga): List<SChapter> {
         val id = manga.url.substringAfter("?id=")
         // The API ignores the query param; it carries the name slug into the chapter url so
         // site chapter paths can be built
@@ -218,7 +246,7 @@ abstract class NovelCool :
             .add("book_id", id)
             .build()
 
-        val response = client.newCall(POST("$apiUrl/chapter/book_list/?visit_path=$visitPath", apiHeaders(), body)).execute()
+        val response = client.post("$apiUrl/chapter/book_list/?visit_path=$visitPath", apiHeaders(), body)
         val jsonObject = json.parseToJsonElement(response.body.string()).jsonObject
         val list = jsonObject["list"]?.jsonArray ?: return emptyList()
 

@@ -16,6 +16,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.serialization.Serializable
@@ -28,7 +29,9 @@ import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
-import java.text.SimpleDateFormat
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 @Source
@@ -58,7 +61,8 @@ abstract class ReadNovelMtl :
     protected open fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/ranking/all-time${if (page > 1) "?page=$page" else ""}", headers)
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val document = client.newCall(buildPopularMangaRequest(page)).execute().asJsoup()
+        val request = buildPopularMangaRequest(page)
+        val document = client.get(request.url, request.headers).asJsoup()
         return parseNovelList(document)
     }
     // ======================== Latest ========================
@@ -66,7 +70,8 @@ abstract class ReadNovelMtl :
     protected open fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/novel${if (page > 1) "?page=$page" else ""}", headers)
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val document = client.newCall(buildLatestUpdatesRequest(page)).execute().asJsoup()
+        val request = buildLatestUpdatesRequest(page)
+        val document = client.get(request.url, request.headers).asJsoup()
         return parseNovelList(document)
     }
     // ======================== Search ========================
@@ -127,7 +132,8 @@ abstract class ReadNovelMtl :
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val document = client.newCall(buildSearchMangaRequest(page, query, filters)).execute().asJsoup()
+        val request = buildSearchMangaRequest(page, query, filters)
+        val document = client.get(request.url, request.headers).asJsoup()
         return parseNovelList(document)
     }
     // ======================== Details + Chapters ========================
@@ -140,7 +146,8 @@ abstract class ReadNovelMtl :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val mangaDetailsRequest = buildMangaDetailsRequest(manga)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers)
         val document = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(document, response.request.url.encodedPath) else manga
@@ -219,7 +226,7 @@ abstract class ReadNovelMtl :
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.newCall(GET(url, headers)).execute()
+        val response = client.get(url, headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val document = response.asJsoup()
         return parseMangaDetails(document, url.encodedPath)
@@ -228,14 +235,14 @@ abstract class ReadNovelMtl :
     // ======================== Pages ========================
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        val response = client.get(baseUrl + chapter.url, headers)
         return listOf(Page(0, response.request.url.toString()))
     }
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val request = GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
-        val response = client.newCall(request).execute()
+        val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
+        val response = client.get(url, headers)
         val document = response.asJsoup()
 
         val contentSection = document.selectFirst("#content")
@@ -398,13 +405,11 @@ abstract class ReadNovelMtl :
         Pair("Xuanhuan", "xuanhuan"),
     )
 
-    private fun parseDateString(dateStr: String): Long = try {
+    private fun parseDateString(dateStr: String): Long = runCatching {
         val cleanDate = dateStr.trim().replace(Regex("[\\(\\)]"), "")
-        val formatter = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-        formatter.parse(cleanDate)?.time ?: 0L
-    } catch (_: Exception) {
-        0L
-    }
+        val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.US)
+        LocalDate.parse(cleanDate, formatter).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    }.getOrDefault(0L)
 
     /**
      * Safely extract URL path from href, handling:

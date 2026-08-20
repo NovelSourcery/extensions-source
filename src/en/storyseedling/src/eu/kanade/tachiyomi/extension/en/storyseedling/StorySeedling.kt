@@ -1,7 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.storyseedling
 
-import eu.kanade.tachiyomi.network.GET
-import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -12,6 +10,8 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.network.post
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.Json
@@ -22,7 +22,6 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.FormBody
 import okhttp3.Headers
 import okhttp3.HttpUrl
-import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
@@ -74,11 +73,11 @@ abstract class StorySeedling :
     @Volatile
     private var cachedPostValue: String? = null
 
-    private fun getPostValue(): String {
+    private suspend fun getPostValue(): String {
         cachedPostValue?.let { return it }
 
         // Fetch browse page to extract dynamic post value
-        val browseResponse = client.newCall(GET("$baseUrl/browse", headers)).execute()
+        val browseResponse = client.get("$baseUrl/browse", headers)
         val doc = browseResponse.asJsoup()
 
         // LN Reader: Extract from div[ax-load][x-data] with format browse('xxxxx')
@@ -91,25 +90,22 @@ abstract class StorySeedling :
 
     // ======================== Popular/Browse ========================
 
-    protected open fun buildPopularMangaRequest(page: Int): Request {
+    protected open suspend fun fetchPopularMangaResponse(page: Int): Response {
         // LN Reader: Uses browse() post value from page, with fetch_browse action
         // NOTE: This is called for both "Popular" and when filters are used without search text
         // Filters should be handled here too, not just in search
         val postValue = getPostValue()
-        return POST(
-            "$baseUrl/ajax",
-            headers,
-            FormBody.Builder()
-                .add("search", "")
-                .add("orderBy", "recent")
-                .add("curpage", page.toString())
-                .add("post", postValue)
-                .add("action", "fetch_browse")
-                .build(),
-        )
+        val body = FormBody.Builder()
+            .add("search", "")
+            .add("orderBy", "recent")
+            .add("curpage", page.toString())
+            .add("post", postValue)
+            .add("action", "fetch_browse")
+            .build()
+        return client.post("$baseUrl/ajax", headers, body)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.newCall(buildPopularMangaRequest(page)).execute())
+    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(fetchPopularMangaResponse(page))
 
     private fun parseMangaListResponse(response: Response): MangasPage {
         val responseBody = response.body.string()
@@ -149,11 +145,11 @@ abstract class StorySeedling :
         }
     }
 
-    protected open fun buildLatestUpdatesRequest(page: Int): Request = buildPopularMangaRequest(page)
+    protected open suspend fun fetchLatestUpdatesResponse(page: Int): Response = fetchPopularMangaResponse(page)
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(client.newCall(buildLatestUpdatesRequest(page)).execute())
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(fetchLatestUpdatesResponse(page))
 
-    protected open fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    protected open suspend fun fetchSearchMangaResponse(page: Int, query: String, filters: FilterList): Response {
         var orderBy = "recent"
         var status = ""
         val includeGenres = mutableListOf<String>()
@@ -209,14 +205,14 @@ abstract class StorySeedling :
             body.add("tagsMode", tagsMode)
         }
 
-        return POST("$baseUrl/ajax", headers, body.build())
+        return client.post("$baseUrl/ajax", headers, body.build())
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseMangaListResponse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseMangaListResponse(fetchSearchMangaResponse(page, query, filters))
 
     // ======================== Details + Chapters ========================
 
-    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPath.resolve(manga.url), headers)
+    protected open fun buildMangaDetailsUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -225,7 +221,7 @@ abstract class StorySeedling :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list toc data both live on the same story page.
-        val doc = client.newCall(buildMangaDetailsRequest(manga)).execute().asJsoup()
+        val doc = client.get(buildMangaDetailsUrl(manga), headers).asJsoup()
         checkTurnstile(doc)
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
@@ -287,7 +283,7 @@ abstract class StorySeedling :
      * LN Reader: Extracts toc data from x-data attribute
      * Format: toc('dataNovelId', 'dataNovelN') - e.g., toc('000000', 'xxxxxxxxxx')
      */
-    private fun parseChapterList(doc: Document): List<SChapter> {
+    private suspend fun parseChapterList(doc: Document): List<SChapter> {
         // LN Reader: Extract toc data from x-data attribute - div[ax-load][x-data*=toc]
         // Format: toc('dataNovelId', 'dataNovelN')
         val xData = doc.selectFirst("div[ax-load][x-data*=toc]")?.attr("x-data")
@@ -304,17 +300,12 @@ abstract class StorySeedling :
             try {
                 // LN Reader: Fetch chapters via AJAX with series_toc action
                 // FormData: post=dataNovelN, id=dataNovelId, action=series_toc
-                val ajaxResponse = client.newCall(
-                    POST(
-                        "$baseUrl/ajax",
-                        headers,
-                        FormBody.Builder()
-                            .add("post", dataNovelN)
-                            .add("id", dataNovelId)
-                            .add("action", "series_toc")
-                            .build(),
-                    ),
-                ).execute()
+                val tocBody = FormBody.Builder()
+                    .add("post", dataNovelN)
+                    .add("id", dataNovelId)
+                    .add("action", "series_toc")
+                    .build()
+                val ajaxResponse = client.post("$baseUrl/ajax", headers, tocBody)
 
                 val responseBody = ajaxResponse.body.string()
                 if (responseBody.isNotBlank()) {
@@ -397,7 +388,7 @@ abstract class StorySeedling :
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.newCall(GET(url, headers)).execute()
+        val response = client.get(url, headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         checkTurnstile(doc)
@@ -407,7 +398,7 @@ abstract class StorySeedling :
     // ======================== Pages ========================
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        val response = client.get(baseUrl + chapter.url, headers)
         return listOf(Page(0, response.request.url.encodedPath))
     }
 
@@ -419,7 +410,7 @@ abstract class StorySeedling :
      * Content is loaded dynamically via loadChapter() JavaScript function
      */
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        val response = client.get(baseUrl + page.url, headers)
         val doc = response.asJsoup()
 
         // Check for Turnstile - StorySeedling uses loadChapter() with Turnstile

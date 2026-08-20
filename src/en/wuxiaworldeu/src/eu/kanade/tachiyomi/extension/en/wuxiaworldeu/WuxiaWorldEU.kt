@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.wuxiaworldeu
 
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -9,6 +8,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -20,7 +20,6 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Request
 import okhttp3.Response
 
 /**
@@ -44,18 +43,18 @@ abstract class WuxiaWorldEU :
 
     // ======================== Browse / Search ========================
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelsList(client.newCall(novelsRequest(page)).execute())
+    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelsList(client.get(novelsUrl(page), headers))
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelsList(client.newCall(novelsRequest(page)).execute())
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelsList(client.get(novelsUrl(page), headers))
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseNovelsList(client.newCall(novelsRequest(page, query)).execute())
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseNovelsList(client.get(novelsUrl(page, query), headers))
 
-    private fun novelsRequest(page: Int, query: String? = null): Request {
+    private fun novelsUrl(page: Int, query: String? = null): HttpUrl {
         val url = "$baseUrl/api/novels/".toHttpUrl().newBuilder()
             .addQueryParameter("limit", pageSize.toString())
             .addQueryParameter("offset", ((page - 1) * pageSize).toString())
         if (!query.isNullOrBlank()) url.addQueryParameter("search", query)
-        return GET(url.build(), headers)
+        return url.build()
     }
 
     private fun parseNovelsList(response: Response): MangasPage {
@@ -88,13 +87,13 @@ abstract class WuxiaWorldEU :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = url.encodedPath.removePrefix("/novel/").trim('/')
         val tempManga = SManga.create().apply { this.url = slug }
-        val response = client.newCall(buildMangaDetailsRequest(tempManga)).execute()
+        val response = client.get(mangaDetailsUrl(tempManga), headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val data = json.parseToJsonElement(response.body.string()).jsonObject
         return parseMangaDetails(data).apply { this.url = slug }
     }
 
-    private fun buildMangaDetailsRequest(manga: SManga): Request = GET("$baseUrl/api/novels/${manga.url}/", headers)
+    private fun mangaDetailsUrl(manga: SManga): String = "$baseUrl/api/novels/${manga.url}/"
 
     private fun parseMangaDetails(data: JsonObject): SManga = SManga.create().apply {
         title = data["name"]!!.jsonPrimitive.content
@@ -127,7 +126,7 @@ abstract class WuxiaWorldEU :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val data = json.parseToJsonElement(client.newCall(buildMangaDetailsRequest(manga)).execute().body.string()).jsonObject
+        val data = json.parseToJsonElement(client.get(mangaDetailsUrl(manga), headers).body.string()).jsonObject
 
         val updatedManga = if (fetchDetails) parseMangaDetails(data) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(data) else chapters
@@ -155,7 +154,7 @@ abstract class WuxiaWorldEU :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET("$baseUrl/api/getchapter/${page.url}/", headers)).execute()
+        val response = client.get("$baseUrl/api/getchapter/${page.url}/", headers)
         val data = json.parseToJsonElement(response.body.string()).jsonObject
         val text = data["text"]?.jsonPrimitive?.contentOrNull ?: return ""
         return text

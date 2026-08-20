@@ -11,8 +11,10 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.tryParseDateTime
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -20,7 +22,7 @@ import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import java.text.SimpleDateFormat
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 @Source
@@ -44,11 +46,17 @@ abstract class RewayatClub :
 
     private fun buildPopularMangaRequest(page: Int): Request = GET("$apiUrl/api/novels?page=$page", headers)
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelsResponse(client.newCall(buildPopularMangaRequest(page)).execute())
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val request = buildPopularMangaRequest(page)
+        return parseNovelsResponse(client.get(request.url, request.headers))
+    }
 
     private fun buildLatestUpdatesRequest(page: Int): Request = GET("$apiUrl/api/novels?page=$page", headers)
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelsResponse(client.newCall(buildLatestUpdatesRequest(page)).execute())
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val request = buildLatestUpdatesRequest(page)
+        return parseNovelsResponse(client.get(request.url, request.headers))
+    }
 
     private fun parseNovelsResponse(response: Response): MangasPage {
         val body = json.decodeFromString<NovelsResponse>(response.body.string())
@@ -61,7 +69,10 @@ abstract class RewayatClub :
         return GET("$apiUrl/api/novels?page=$page&search=$q", headers)
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseNovelsResponse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val request = buildSearchMangaRequest(page, query, filters)
+        return parseNovelsResponse(client.get(request.url, request.headers))
+    }
 
     private fun buildMangaDetailsRequest(manga: SManga): Request {
         val slug = mangaPathTemplate.resolve(manga.url).substringAfterLast("/")
@@ -72,7 +83,8 @@ abstract class RewayatClub :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val request = buildMangaDetailsRequest(manga)
+        val response = client.get(request.url, request.headers)
         if (!response.isSuccessful) return null
         return json.decodeFromString<NovelItem>(response.body.string()).toSManga()
     }
@@ -86,7 +98,8 @@ abstract class RewayatClub :
         val slug = mangaPathTemplate.resolve(manga.url).substringAfterLast("/")
 
         val updatedManga = if (fetchDetails) {
-            val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+            val request = buildMangaDetailsRequest(manga)
+            val response = client.get(request.url, request.headers)
             val item = json.decodeFromString<NovelItem>(response.body.string())
             cachedTranslators = item.contributors.map { it.username }.filter { it.isNotBlank() }.distinct().sorted()
             SManga.create().apply {
@@ -128,7 +141,7 @@ abstract class RewayatClub :
         return currentFilterList
     }
 
-    private fun fetchChapterList(novelSlug: String): List<SChapter> {
+    private suspend fun fetchChapterList(novelSlug: String): List<SChapter> {
         val blocked = currentFilterList.filterIsInstance<TranslatorBlockGroup>()
             .firstOrNull()?.state
             ?.filterIsInstance<TranslatorCheckBox>()
@@ -141,7 +154,7 @@ abstract class RewayatClub :
 
         var nextUrl: String? = "$apiUrl/api/chapters/$novelSlug/?ordering=-number&page=1&page_size=500"
         while (nextUrl != null) {
-            val pageResp = client.newCall(GET(nextUrl, headers)).execute()
+            val pageResp = client.get(nextUrl, headers)
             val body = json.decodeFromString<ChaptersResponse>(pageResp.body.string())
             pageResp.close()
             allChapters.addAll(body.results)
@@ -160,7 +173,7 @@ abstract class RewayatClub :
                 name = ch.title
                 scanlator = ch.uploader?.username
                 chapter_number = ch.number.toFloat()
-                date_upload = runCatching { DATE_FORMAT.parse(ch.date)?.time }.getOrNull() ?: 0L
+                date_upload = DATE_FORMAT.tryParseDateTime(ch.date)
             }
         }.sortedByDescending { it.chapter_number }
     }
@@ -176,7 +189,7 @@ abstract class RewayatClub :
         val number = parts.lastOrNull().orEmpty()
         if (slug.isNotEmpty() && number.isNotEmpty()) {
             val apiText = runCatching {
-                val resp = client.newCall(GET("$apiUrl/api/chapters/$slug/$number/", headers)).execute()
+                val resp = client.get("$apiUrl/api/chapters/$slug/$number/", headers)
                 val item = json.decodeFromString<ChapterDetail>(resp.body.string())
                 parseChapterContent(item.content)
             }.getOrNull()
@@ -194,7 +207,7 @@ abstract class RewayatClub :
     }
 
     private suspend fun parseChapterWebPage(page: Page): String {
-        val doc = client.newCall(GET("$baseUrl${page.url}", headers)).execute().asJsoup()
+        val doc = client.get("$baseUrl${page.url}", headers).asJsoup()
 
         val nuxtScript = doc.select("script").firstOrNull { it.html().contains("window.__NUXT__") }
         if (nuxtScript != null) {
@@ -387,6 +400,6 @@ abstract class RewayatClub :
     )
 
     companion object {
-        private val DATE_FORMAT = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
+        private val DATE_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
     }
 }

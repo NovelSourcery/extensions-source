@@ -10,8 +10,10 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.tryParseDateTime
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -52,6 +54,8 @@ abstract class SeaNovel :
     /** [SManga.url] stored as a bare slug via [mangaPathTemplate]. */
     private val mangaPathTemplate = SlugPath("/novels/")
 
+    private val dateFormatter = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
+
     private fun buildPopularMangaRequest(page: Int): Request {
         val limit = 50
         val offset = (page - 1) * limit
@@ -59,7 +63,8 @@ abstract class SeaNovel :
     }
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val response = client.newCall(buildPopularMangaRequest(page)).execute()
+        val request = buildPopularMangaRequest(page)
+        val response = client.get(request.url, request.headers)
         val body = response.body.string()
         val novels = json.decodeFromString<List<NovelDto>>(body)
         return MangasPage(novels.map { it.toSManga() }, novels.size >= 50)
@@ -72,7 +77,8 @@ abstract class SeaNovel :
     }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val response = client.newCall(buildLatestUpdatesRequest(page)).execute()
+        val request = buildLatestUpdatesRequest(page)
+        val response = client.get(request.url, request.headers)
         val body = response.body.string()
         val novels = json.decodeFromString<List<NovelDto>>(body)
         return MangasPage(novels.map { it.toSManga() }, novels.size >= 50)
@@ -84,7 +90,8 @@ abstract class SeaNovel :
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val response = client.newCall(buildSearchMangaRequest(page, query)).execute()
+        val request = buildSearchMangaRequest(page, query)
+        val response = client.get(request.url, request.headers)
         val url = response.request.url
         val queryParam = url.queryParameter("q") ?: ""
         val pageParam = url.queryParameter("__page")?.toIntOrNull() ?: 1
@@ -113,7 +120,8 @@ abstract class SeaNovel :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val request = buildMangaDetailsRequest(manga)
+        val response = client.get(request.url, request.headers)
         if (!response.isSuccessful) return null
         return json.decodeFromString<NovelDto>(response.body.string()).toSManga()
     }
@@ -127,7 +135,8 @@ abstract class SeaNovel :
         val slug = mangaPathTemplate.resolve(manga.url).substringAfterLast("/")
 
         val updatedManga = if (fetchDetails) {
-            val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+            val request = buildMangaDetailsRequest(manga)
+            val response = client.get(request.url, request.headers)
             val body = response.body.string()
             json.decodeFromString<NovelDto>(body).toSManga()
         } else {
@@ -139,14 +148,14 @@ abstract class SeaNovel :
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private fun fetchChapterList(slug: String): List<SChapter> {
+    private suspend fun fetchChapterList(slug: String): List<SChapter> {
         val allChapters = mutableListOf<SChapter>()
         var offset = 0
         val limit = 100
         var hasMore: Boolean
         do {
-            val request = GET("$baseUrl/api/novel/$slug/chapters?offset=$offset&limit=$limit&sort=asc", headers)
-            val response = client.newCall(request).execute()
+            val url = "$baseUrl/api/novel/$slug/chapters?offset=$offset&limit=$limit&sort=asc"
+            val response = client.get(url, headers)
             val chapterResponse = json.decodeFromString<ChapterResponse>(response.body.string())
             if (chapterResponse.chapters.isEmpty()) break
             allChapters.addAll(chapterResponse.chapters.map { it.toSChapter(slug) })
@@ -160,7 +169,7 @@ abstract class SeaNovel :
 
     override suspend fun fetchPageText(page: Page): String {
         val url = baseUrl + page.url
-        val response = client.newCall(GET(url, headers)).execute()
+        val response = client.get(url, headers)
         val doc = response.asJsoup()
         val html = doc.html()
 
@@ -253,9 +262,7 @@ abstract class SeaNovel :
         url = "/novels/$novelSlug/chapters/$chapterId"
         name = title
         chapter_number = id.toFloat()
-        date_upload = runCatching {
-            java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US).parse(date)?.time
-        }.getOrNull() ?: 0L
+        date_upload = dateFormatter.tryParseDateTime(date)
     }
 
     @Serializable

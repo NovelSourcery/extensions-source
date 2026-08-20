@@ -1,9 +1,9 @@
 package eu.kanade.tachiyomi.novelextension.ar.novelarab
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Page
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 
 @Source
 abstract class NovelArab : MadaraNovel() {
@@ -11,7 +11,7 @@ abstract class NovelArab : MadaraNovel() {
     override val reverseChapterListDefault = true
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        val response = client.get(baseUrl + page.url, headers)
         val doc = response.asJsoup()
 
         checkCaptcha(doc, baseUrl + page.url)

@@ -1,7 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.lightnoveltranslation
 
-import eu.kanade.tachiyomi.network.GET
-import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -9,15 +7,16 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.network.post
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.formattedText
 import okhttp3.FormBody
 import okhttp3.HttpUrl
-import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.Jsoup
 
 @Source
 abstract class LightNovelTranslation :
@@ -30,9 +29,9 @@ abstract class LightNovelTranslation :
      * "/" is a pre-existing full-path entry and is resolved unchanged. */
     private val mangaPath = SlugPath("/novel/")
 
-    private fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/read/page/$page?sortby=most-liked", headers)
+    private fun buildPopularMangaUrl(page: Int): String = "$baseUrl/read/page/$page?sortby=most-liked"
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.newCall(buildPopularMangaRequest(page)).execute())
+    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.get(buildPopularMangaUrl(page), headers))
 
     private fun parseMangaListResponse(response: Response): MangasPage {
         val doc = response.asJsoup()
@@ -57,23 +56,20 @@ abstract class LightNovelTranslation :
         return MangasPage(mangas, hasNextPage)
     }
 
-    private fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/read/page/$page?sortby=most-recent", headers)
+    private fun buildLatestUpdatesUrl(page: Int): String = "$baseUrl/read/page/$page?sortby=most-recent"
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(client.newCall(buildLatestUpdatesRequest(page)).execute())
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(client.get(buildLatestUpdatesUrl(page), headers))
 
-    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val body = FormBody.Builder()
-            .add("field-search", query)
-            .build()
-        return POST("$baseUrl/read", headers, body)
-    }
+    private fun buildSearchMangaBody(query: String): FormBody = FormBody.Builder()
+        .add("field-search", query)
+        .build()
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val mangas = parseMangaListResponse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute()).mangas
+        val mangas = parseMangaListResponse(client.post("$baseUrl/read", headers, buildSearchMangaBody(query))).mangas
         return MangasPage(mangas, false)
     }
 
-    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPath.resolve(manga.url), headers)
+    private fun buildMangaDetailsUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -82,7 +78,7 @@ abstract class LightNovelTranslation :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list both live on the same novel page - fetch it once.
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val response = client.get(buildMangaDetailsUrl(manga), headers)
         val doc = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc, response) else manga
@@ -91,7 +87,7 @@ abstract class LightNovelTranslation :
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private fun parseMangaDetails(doc: org.jsoup.nodes.Document, response: Response): SManga = SManga.create().apply {
+    private suspend fun parseMangaDetails(doc: org.jsoup.nodes.Document, response: Response): SManga = SManga.create().apply {
         thumbnail_url = doc.selectFirst("div.novel-image img")?.attr("src")
         title = doc.selectFirst("div.novel_title h3")?.text() ?: ""
 
@@ -109,7 +105,7 @@ abstract class LightNovelTranslation :
 
         val descUrl = response.request.url.toString().replace("?tab=table_contents", "")
         try {
-            val descDoc = client.newCall(GET(descUrl, headers)).execute().asJsoup()
+            val descDoc = client.get(descUrl, headers).asJsoup()
             description = descDoc.selectFirst("div.novel_text")?.formattedText()
         } catch (e: Exception) {
             description = ""
@@ -139,18 +135,18 @@ abstract class LightNovelTranslation :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPath.slug(url.encodedPath) }
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val response = client.get(buildMangaDetailsUrl(manga), headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.asJsoup(), response).apply { this.url = manga.url }
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        val response = client.get(baseUrl + chapter.url, headers)
         return listOf(Page(0, response.request.url.encodedPath))
     }
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        val response = client.get(baseUrl + page.url, headers)
         val doc = response.asJsoup()
 
         val content = doc.selectFirst("div.text_story") ?: return ""
@@ -158,6 +154,4 @@ abstract class LightNovelTranslation :
 
         return content.html()
     }
-
-    private fun Response.asJsoup() = Jsoup.parse(body.string(), request.url.toString())
 }

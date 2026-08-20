@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.lnmtl
 
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -10,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.Json
@@ -21,7 +21,6 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
 
@@ -68,19 +67,16 @@ abstract class LNMTL :
 
     // ======================== Browse ========================
 
-    private fun novelListRequest(page: Int, orderBy: String): Request {
-        val url = "$baseUrl/novel".toHttpUrl().newBuilder()
-            .addQueryParameter("orderBy", orderBy)
-            .addQueryParameter("order", "desc")
-            .addQueryParameter("filter", "all")
-            .addQueryParameter("page", page.toString())
-            .build()
-        return GET(url, headers)
-    }
+    private fun novelListUrl(page: Int, orderBy: String): HttpUrl = "$baseUrl/novel".toHttpUrl().newBuilder()
+        .addQueryParameter("orderBy", orderBy)
+        .addQueryParameter("order", "desc")
+        .addQueryParameter("filter", "all")
+        .addQueryParameter("page", page.toString())
+        .build()
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelListing(client.newCall(novelListRequest(page, "favourites")).execute())
+    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelListing(client.get(novelListUrl(page, "favourites"), headers))
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelListing(client.newCall(novelListRequest(page, "date")).execute())
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelListing(client.get(novelListUrl(page, "date"), headers))
 
     private fun parseNovelListing(response: Response): MangasPage {
         val doc = response.asJsoup()
@@ -106,7 +102,7 @@ abstract class LNMTL :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val indexUrl = searchIndexUrl()
-        val body = client.newCall(GET(indexUrl, headers)).execute().use { it.body.string() }
+        val body = client.get(indexUrl, headers).use { it.body.string() }
         val all = json.parseToJsonElement(body).jsonArray
 
         fun normalize(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
@@ -130,8 +126,8 @@ abstract class LNMTL :
         return MangasPage(matches.subList(from, to), to < matches.size)
     }
 
-    private fun searchIndexUrl(): String {
-        val home = client.newCall(GET(baseUrl, headers)).execute().use { it.asJsoup() }
+    private suspend fun searchIndexUrl(): String {
+        val home = client.get(baseUrl, headers).use { it.asJsoup() }
         val prefetchRegex = Regex("""prefetch:\s*'(/[^']+\.json)""")
         for (script in home.select("footer script")) {
             val match = prefetchRegex.find(script.data()) ?: continue
@@ -146,12 +142,12 @@ abstract class LNMTL :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPath.slug(url.encodedPath) }
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val response = client.get(buildMangaDetailsUrl(manga), headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.asJsoup()).apply { this.url = manga.url }
     }
 
-    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPath.resolve(manga.url), headers)
+    private fun buildMangaDetailsUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -160,7 +156,7 @@ abstract class LNMTL :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter volumes list both live on the same novel page - fetch it once.
-        val doc = client.newCall(buildMangaDetailsRequest(manga)).execute().asJsoup()
+        val doc = client.get(buildMangaDetailsUrl(manga), headers).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
@@ -191,7 +187,7 @@ abstract class LNMTL :
     // The novel page embeds `lnmtl.volumes = [...]`; each volume's chapters live behind a
     // paginated `/chapter?volumeId=X&page=N` JSON endpoint. Building the full chapter list means
     // walking every volume's every page - there is no single "give me everything" endpoint.
-    private fun parseChapterList(doc: Document): List<SChapter> {
+    private suspend fun parseChapterList(doc: Document): List<SChapter> {
         val volumesJson = doc.select("script").map { it.data() }
             .firstNotNullOfOrNull { Regex("""lnmtl\.volumes\s*=\s*(\[.+?])\s*;""").find(it) }
             ?: return emptyList()
@@ -207,7 +203,7 @@ abstract class LNMTL :
                     .addQueryParameter("volumeId", volumeId)
                     .addQueryParameter("page", page.toString())
                     .build()
-                val pageBody = client.newCall(GET(url, headers)).execute().use { it.body.string() }
+                val pageBody = client.get(url, headers).use { it.body.string() }
                 val pageJson = json.parseToJsonElement(pageBody).jsonObject
                 lastPage = pageJson["last_page"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 1
                 val data = pageJson["data"]?.jsonArray ?: break
@@ -243,7 +239,7 @@ abstract class LNMTL :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.newCall(GET("$baseUrl${page.url}", headers)).execute().use { it.asJsoup() }
+        val doc = client.get("$baseUrl${page.url}", headers).use { it.asJsoup() }
         return extractChapterText(doc)
     }
 

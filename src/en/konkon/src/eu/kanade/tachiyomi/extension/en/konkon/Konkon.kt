@@ -17,6 +17,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.stripChapterNumberPrefix
@@ -67,7 +68,7 @@ abstract class Konkon :
         val url = "$apiBase/novels_trending".toHttpUrl().newBuilder()
             .addQueryParameter("limit", "10")
             .build()
-        val body = client.newCall(GET(url, headers)).execute().body.string()
+        val body = client.get(url, headers).body.string()
         return parseNovelArrayResponse(body, key = "data", hasMore = false)
     }
 
@@ -76,7 +77,7 @@ abstract class Konkon :
             .addQueryParameter("per_page", "15")
             .addQueryParameter("page", page.toString())
             .build()
-        val body = client.newCall(GET(url, headers)).execute().body.string()
+        val body = client.get(url, headers).body.string()
         return try {
             val root = json.parseToJsonElement(body).jsonObject
             val data = root["data"]?.jsonArray ?: JsonArray(emptyList())
@@ -96,7 +97,7 @@ abstract class Konkon :
             .addQueryParameter("page", "1")
             .addQueryParameter("per_page", "1")
             .build()
-        val body = client.newCall(GET(requestUrl, headers)).execute().body.string()
+        val body = client.get(requestUrl, headers).body.string()
         return try {
             val root = json.parseToJsonElement(body).jsonObject
             val data = root["data"]?.jsonObject ?: return null
@@ -122,7 +123,7 @@ abstract class Konkon :
             val url = "$apiBase/search".toHttpUrl().newBuilder()
                 .addQueryParameter("q", term)
                 .build()
-            val body = client.newCall(GET(url, headers)).execute().body.string()
+            val body = client.get(url, headers).body.string()
             return parseNovelArrayResponse(body, key = "results", hasMore = false)
         }
 
@@ -212,7 +213,7 @@ abstract class Konkon :
         SManga.create()
     }
 
-    private fun fetchAllChapters(slug: String, firstData: JsonObject?): List<SChapter> {
+    private suspend fun fetchAllChapters(slug: String, firstData: JsonObject?): List<SChapter> {
         if (slug.isBlank() || firstData == null) return emptyList()
 
         val chapterMap = linkedMapOf<String, ChapterRecord>()
@@ -296,7 +297,7 @@ abstract class Konkon :
                 ?: page.url.substringAfterLast('/')
             "$apiBase/chapters/$chapterId"
         }
-        val response = client.newCall(GET(contentUrl, headers)).execute()
+        val response = client.get(contentUrl, headers, ensureSuccess = false)
         val body = response.body.string()
         val resolvedUrl = response.request.url
 
@@ -354,7 +355,7 @@ abstract class Konkon :
      * (cached from the details/chapter list responses, or fetched fresh) and
      * only POST when it differs from the desired one.
      */
-    private fun syncBookmark(manga: SManga, desired: Boolean) {
+    private suspend fun syncBookmark(manga: SManga, desired: Boolean) {
         if (!supportsFavoritesTracking) return
         val slug = extractSlug(manga.url)
         if (slug.isBlank()) return
@@ -369,12 +370,12 @@ abstract class Konkon :
     }
 
     /** Reads meta.is_bookmarked from the novel details endpoint. Null when not logged in. */
-    private fun fetchBookmarkState(slug: String): Boolean? = try {
+    private suspend fun fetchBookmarkState(slug: String): Boolean? = try {
         val url = "$apiBase/novels/$slug".toHttpUrl().newBuilder()
             .addQueryParameter("page", "1")
             .addQueryParameter("per_page", "1")
             .build()
-        val response = client.newCall(GET(url, headers)).execute()
+        val response = client.get(url, headers)
         val root = json.parseToJsonElement(response.use { it.body.string() }).jsonObject
         val state = root["meta"]?.jsonObject?.bool("is_bookmarked")
         state?.also { synchronized(bookmarkStateCache) { bookmarkStateCache[slug] = it } }
@@ -534,14 +535,14 @@ abstract class Konkon :
             .sortedBy { it.sortKey }
     }
 
-    private fun fetchNovelData(slug: String, page: Int, perPage: Int, volumeId: Int? = null): JsonObject? {
+    private suspend fun fetchNovelData(slug: String, page: Int, perPage: Int, volumeId: Int? = null): JsonObject? {
         return try {
             val builder = "$apiBase/novels/$slug".toHttpUrl().newBuilder()
                 .addQueryParameter("page", page.toString())
                 .addQueryParameter("per_page", perPage.toString())
             volumeId?.let { builder.addQueryParameter("volume_id", it.toString()) }
 
-            val response = client.newCall(GET(builder.build().toString(), headers)).execute()
+            val response = client.get(builder.build().toString(), headers, ensureSuccess = false)
             if (!response.isSuccessful) return null
             val root = json.parseToJsonElement(response.body.string()).jsonObject
             cacheBookmarkState(slug, root)

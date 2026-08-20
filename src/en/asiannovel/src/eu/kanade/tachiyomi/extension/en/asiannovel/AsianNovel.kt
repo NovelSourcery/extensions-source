@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.serialization.Serializable
@@ -40,7 +41,7 @@ abstract class AsianNovel :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val pageStr = if (page > 1) "page/$page/" else ""
-        val response = client.newCall(GET("$baseUrl/$pageStr?s=&post_type=fcn_story&orderby=comment_count&order=desc", headers)).execute()
+        val response = client.get("$baseUrl/$pageStr?s=&post_type=fcn_story&orderby=comment_count&order=desc", headers)
         return parseSearchResults(response.asJsoup())
     }
 
@@ -48,7 +49,7 @@ abstract class AsianNovel :
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val pageStr = if (page > 1) "page/$page/" else ""
-        val response = client.newCall(GET("$baseUrl/$pageStr?s=&post_type=fcn_story&orderby=modified&order=desc", headers)).execute()
+        val response = client.get("$baseUrl/$pageStr?s=&post_type=fcn_story&orderby=modified&order=desc", headers)
         return parseSearchResults(response.asJsoup())
     }
 
@@ -168,7 +169,7 @@ abstract class AsianNovel :
             }
         }
 
-        val response = client.newCall(GET(url, headers)).execute()
+        val response = client.get(url, headers)
         return parseSearchResults(response.asJsoup())
     }
 
@@ -183,7 +184,8 @@ abstract class AsianNovel :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list both live on the same story page - fetch it once.
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val request = buildMangaDetailsRequest(manga)
+        val response = client.get(request.url, request.headers)
         val document = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(document, response) else manga
@@ -256,7 +258,8 @@ abstract class AsianNovel :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPath.slug(url.encodedPath) }
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val request = buildMangaDetailsRequest(manga)
+        val response = client.get(request.url, request.headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val document = response.asJsoup()
         return parseMangaDetails(document, response)
@@ -265,15 +268,14 @@ abstract class AsianNovel :
     // ======================== Pages ========================
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        val response = client.get(baseUrl + chapter.url, headers)
         return listOf(Page(0, response.request.url.toString()))
     }
 
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val request = GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
-        val response = client.newCall(request).execute()
+        val response = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
         val document = response.asJsoup()
 
         val contentSection = document.selectFirst("#chapter-content, .chapter__content")

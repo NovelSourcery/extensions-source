@@ -8,12 +8,12 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import okhttp3.HttpUrl
 import okhttp3.Request
-import okhttp3.Response
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import org.jsoup.nodes.TextNode
@@ -34,7 +34,8 @@ abstract class ReadFromNet :
     protected open fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/allbooks/page/$page/", headers)
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val doc = client.newCall(buildPopularMangaRequest(page)).execute().asJsoup()
+        val popularRequest = buildPopularMangaRequest(page)
+        val doc = client.get(popularRequest.url, popularRequest.headers).asJsoup()
         val novels = parseNovels(doc, isSearch = false)
         val hasNextPage = doc.selectFirst("div.navigation a:contains(Next)") != null
         return MangasPage(novels, hasNextPage)
@@ -44,7 +45,8 @@ abstract class ReadFromNet :
     protected open fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/last_added_books/page/$page/", headers)
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val doc = client.newCall(buildLatestUpdatesRequest(page)).execute().asJsoup()
+        val latestRequest = buildLatestUpdatesRequest(page)
+        val doc = client.get(latestRequest.url, latestRequest.headers).asJsoup()
         val novels = parseNovels(doc, isSearch = false)
         val hasNextPage = doc.selectFirst("div.navigation a:contains(Next)") != null
         return MangasPage(novels, hasNextPage)
@@ -57,7 +59,8 @@ abstract class ReadFromNet :
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val doc = client.newCall(buildSearchMangaRequest(page, query, filters)).execute().asJsoup()
+        val searchRequest = buildSearchMangaRequest(page, query, filters)
+        val doc = client.get(searchRequest.url, searchRequest.headers).asJsoup()
         // LN Reader: search uses "div.text > article.box" selector
         val novels = parseNovels(doc, isSearch = true)
         return MangasPage(novels, false) // Search doesn't support pagination
@@ -103,7 +106,8 @@ abstract class ReadFromNet :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list both live on the same novel page - fetch it once.
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val mangaDetailsRequest = buildMangaDetailsRequest(manga)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers)
         val novelPath = response.request.url.encodedPath
         val doc = response.asJsoup()
 
@@ -115,7 +119,7 @@ abstract class ReadFromNet :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val mangaUrl = url.encodedPath.removePrefix("/")
-        val response = client.newCall(GET(url, headers)).execute()
+        val response = client.get(url, headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.asJsoup()).apply { this.url = mangaUrl }
     }
@@ -194,13 +198,14 @@ abstract class ReadFromNet :
     // ======================== Pages ========================
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        val response = client.get(baseUrl + chapter.url, headers)
         return listOf(Page(0, response.request.url.toString()))
     }
     // ======================== Novel Content ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)).execute()
+        val pageUrl = if (page.url.startsWith("http")) page.url else baseUrl + page.url
+        val response = client.get(pageUrl, headers)
         val doc = response.asJsoup()
 
         val textElement = doc.selectFirst("#textToRead") ?: return ""
@@ -240,6 +245,4 @@ abstract class ReadFromNet :
             }
         }
     }
-
-    private fun Response.asJsoup(): Document = Jsoup.parse(body.string(), request.url.toString())
 }

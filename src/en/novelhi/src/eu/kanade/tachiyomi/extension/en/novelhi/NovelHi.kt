@@ -9,7 +9,9 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.stripChapterNumberPrefix
@@ -86,7 +88,10 @@ abstract class NovelHi :
         return MangasPage(novels, novels.isNotEmpty())
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseList(client.newCall(listRequest(page, null, null, null, null)).execute())
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val request = listRequest(page, null, null, null, null)
+        return parseList(client.get(request.url, request.headers))
+    }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage = getPopularManga(page)
 
@@ -94,7 +99,8 @@ abstract class NovelHi :
         val genre = filters.filterIsInstance<GenreFilter>().firstOrNull()?.selected()
         val status = filters.filterIsInstance<StatusFilter>().firstOrNull()?.selected()
         val period = filters.filterIsInstance<PeriodFilter>().firstOrNull()?.selected()
-        return parseList(client.newCall(listRequest(page, query.takeIf { it.isNotBlank() }, genre, status, period)).execute())
+        val request = listRequest(page, query.takeIf { it.isNotBlank() }, genre, status, period)
+        return parseList(client.get(request.url, request.headers))
     }
 
     protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
@@ -106,7 +112,8 @@ abstract class NovelHi :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list's bookId both live on the same novel page - fetch it once.
-        val doc = Jsoup.parse(client.newCall(buildMangaDetailsRequest(manga)).execute().body.string(), baseUrl)
+        val detailsRequest = buildMangaDetailsRequest(manga)
+        val doc = client.get(detailsRequest.url, detailsRequest.headers).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
 
@@ -125,9 +132,9 @@ abstract class NovelHi :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = mangaPathTemplate.slug(url.encodedPath)
-        val response = client.newCall(GET(baseUrl + mangaPathTemplate.resolve(slug), headers)).execute()
+        val response = client.get(baseUrl + mangaPathTemplate.resolve(slug), headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
-        val doc = Jsoup.parse(response.body.string(), baseUrl)
+        val doc = response.asJsoup()
         return parseMangaDetails(doc).apply { this.url = slug }
     }
 
@@ -144,7 +151,7 @@ abstract class NovelHi :
         val createTime: String = "",
     )
 
-    private fun parseChaptersForManga(manga: SManga, detailsDoc: org.jsoup.nodes.Document): List<SChapter> {
+    private suspend fun parseChaptersForManga(manga: SManga, detailsDoc: org.jsoup.nodes.Document): List<SChapter> {
         val novelPath = mangaPathTemplate.resolve(manga.url).trim('/')
         val bookId = detailsDoc.selectFirst("#bookId")?.attr("value")?.takeIf { it.isNotBlank() }
             ?: return emptyList()
@@ -154,7 +161,7 @@ abstract class NovelHi :
             .addQueryParameter("curr", "1")
             .addQueryParameter("limit", "42121")
             .build()
-        val data = json.decodeFromString<ChapterResponse>(client.newCall(GET(url, headers)).execute().body.string()).data
+        val data = json.decodeFromString<ChapterResponse>(client.get(url, headers).body.string()).data
 
         return data?.list.orEmpty().mapNotNull { ch ->
             val num = ch.indexNum.ifBlank { return@mapNotNull null }
@@ -178,20 +185,17 @@ abstract class NovelHi :
 
     override suspend fun fetchPageText(page: Page): String {
         val chapterUrl = baseUrl + "/" + page.url.trimStart('/')
-        val doc = Jsoup.parse(client.newCall(GET(chapterUrl, headers)).execute().body.string(), baseUrl)
+        val doc = client.get(chapterUrl, headers).asJsoup()
         val path = doc.selectFirst("#chapterContentPath")?.attr("value")
         val token = doc.selectFirst("#chapterContentToken")?.attr("value")
         if (path.isNullOrBlank() || token.isNullOrBlank()) return ""
 
         val contentUrl = if (path.startsWith("http")) path else baseUrl + "/" + path.trimStart('/')
-        val req = GET(
-            "$contentUrl?token=$token",
-            headers.newBuilder()
-                .add("Referer", chapterUrl)
-                .add("X-Requested-With", "XMLHttpRequest")
-                .build(),
-        )
-        val raw = json.decodeFromString<ContentResponse>(client.newCall(req).execute().body.string())
+        val contentHeaders = headers.newBuilder()
+            .add("Referer", chapterUrl)
+            .add("X-Requested-With", "XMLHttpRequest")
+            .build()
+        val raw = json.decodeFromString<ContentResponse>(client.get("$contentUrl?token=$token", contentHeaders).body.string())
             .data?.content ?: return ""
 
         // Site encodes letters with ROT13 (HTML tags left intact).

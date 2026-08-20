@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.formattedText
 import kotlinx.serialization.json.Json
@@ -52,9 +53,15 @@ abstract class NovelBuddy :
 
     // Browse
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseApiResponse(client.newCall(searchApiRequest(page, sort = "views")).execute())
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val request = searchApiRequest(page, sort = "views")
+        return parseApiResponse(client.get(request.url, request.headers))
+    }
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseApiResponse(client.newCall(searchApiRequest(page, sort = "latest")).execute())
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val request = searchApiRequest(page, sort = "latest")
+        return parseApiResponse(client.get(request.url, request.headers))
+    }
 
     private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val url = "$apiUrl/titles/search".toHttpUrl().newBuilder()
@@ -85,7 +92,10 @@ abstract class NovelBuddy :
         return GET(url.build(), headers)
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseApiResponse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val request = buildSearchMangaRequest(page, query, filters)
+        return parseApiResponse(client.get(request.url, request.headers))
+    }
 
     private fun searchApiRequest(page: Int, sort: String): Request {
         val url = "$apiUrl/titles/search".toHttpUrl().newBuilder()
@@ -129,7 +139,8 @@ abstract class NovelBuddy :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath.trimStart('/')
         val tempManga = SManga.create().apply { this.url = path }
-        val response = client.newCall(buildMangaDetailsRequest(tempManga)).execute()
+        val mangaDetailsRequest = buildMangaDetailsRequest(tempManga)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response).apply { this.url = path }
     }
@@ -141,7 +152,8 @@ abstract class NovelBuddy :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list both come from the same novel page - fetch it once.
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val mangaDetailsRequest = buildMangaDetailsRequest(manga)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers)
 
         val updatedManga = if (fetchDetails) parseMangaDetails(response) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(response) else chapters
@@ -191,7 +203,7 @@ abstract class NovelBuddy :
     private fun JsonObject.names(key: String): String = this[key]?.jsonArray?.mapNotNull { it.jsonObject["name"]?.jsonPrimitive?.contentOrNull }
         ?.joinToString().orEmpty()
 
-    private fun parseChapterList(response: Response): List<SChapter> {
+    private suspend fun parseChapterList(response: Response): List<SChapter> {
         val script = response.asJsoup().selectFirst("#__NEXT_DATA__")?.html()
             ?: return emptyList()
         val initialManga = script.initialManga() ?: return emptyList()
@@ -204,7 +216,7 @@ abstract class NovelBuddy :
             .apply { if (!cv.isNullOrBlank()) addQueryParameter("cv", cv) }
             .build()
         val apiChapters = runCatching {
-            json.parseToJsonElement(client.newCall(GET(chaptersApi, headers)).execute().body.string())
+            json.parseToJsonElement(client.get(chaptersApi, headers).body.string())
                 .jsonObject["data"]?.jsonObject?.get("chapters")?.jsonArray
         }.getOrNull()
 
@@ -254,7 +266,7 @@ abstract class NovelBuddy :
         var content = ""
         if (mangaId != null && chapterId != null) {
             content = runCatching {
-                val apiResponse = client.newCall(GET("$apiUrl/titles/$mangaId/chapters/$chapterId", headers)).execute()
+                val apiResponse = client.get("$apiUrl/titles/$mangaId/chapters/$chapterId", headers)
                 json.parseToJsonElement(apiResponse.body.string())
                     .jsonObject["data"]?.jsonObject?.get("chapter")?.jsonObject
                     ?.get("content")?.jsonPrimitive?.contentOrNull.orEmpty()
@@ -262,7 +274,7 @@ abstract class NovelBuddy :
         }
 
         if (content.isBlank()) {
-            val document = client.newCall(GET(buildUrl(page.url), headers)).execute().asJsoup()
+            val document = client.get(buildUrl(page.url), headers).asJsoup()
             val script = document.selectFirst("#__NEXT_DATA__")?.html()
             content = if (script != null) {
                 runCatching {

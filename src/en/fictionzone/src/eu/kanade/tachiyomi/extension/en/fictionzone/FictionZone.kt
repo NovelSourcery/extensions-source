@@ -6,7 +6,6 @@ import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
@@ -17,7 +16,10 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.network.post
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.setAltTitles
 import kotlinx.coroutines.async
@@ -51,7 +53,9 @@ import org.jsoup.parser.Parser
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
-import java.text.SimpleDateFormat
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 @Source
@@ -92,7 +96,7 @@ abstract class FictionZone :
 
     private val json: Json by injectLazy()
 
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    private val dateFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.US)
 
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
@@ -175,7 +179,8 @@ abstract class FictionZone :
     private fun buildPopularMangaRequest(page: Int): Request = apiRequest("/platform/browse?page=$page&page_size=20&sort_by=bookmark_count&sort_order=desc&include_genres=true")
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val jsonString = client.newCall(buildPopularMangaRequest(page)).execute().body.string()
+        val request = buildPopularMangaRequest(page)
+        val jsonString = client.post(request.url, request.headers, request.body!!).body.string()
         val jsonObject = json.parseToJsonElement(jsonString).jsonObject
         val data = jsonObject["data"]?.jsonObject ?: return MangasPage(emptyList(), false)
         return parseBrowseData(data)
@@ -239,7 +244,8 @@ abstract class FictionZone :
     private fun buildLatestUpdatesRequest(page: Int): Request = apiRequest("/platform/browse?page=$page&page_size=20&sort_by=created_at&sort_order=desc&include_genres=true")
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val jsonString = client.newCall(buildLatestUpdatesRequest(page)).execute().body.string()
+        val request = buildLatestUpdatesRequest(page)
+        val jsonString = client.post(request.url, request.headers, request.body!!).body.string()
         val jsonObject = json.parseToJsonElement(jsonString).jsonObject
         val data = jsonObject["data"]?.jsonObject ?: return MangasPage(emptyList(), false)
         return parseBrowseData(data)
@@ -324,7 +330,8 @@ abstract class FictionZone :
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val response = client.newCall(buildSearchMangaRequest(page, query, filters)).execute()
+        val request = buildSearchMangaRequest(page, query, filters)
+        val response = client.post(request.url, request.headers, request.body!!)
         val jsonString = response.body.string()
         val jsonObject = json.parseToJsonElement(jsonString).jsonObject
         val data = jsonObject["data"]?.jsonObject ?: return MangasPage(emptyList(), false)
@@ -360,7 +367,8 @@ abstract class FictionZone :
         val path = url.encodedPath
         // Omniportal entries are proxied external sources with no direct site page to paste.
         if (!path.startsWith("/novel/")) return null
-        val response = client.newCall(buildMangaDetailsRequest(SManga.create().apply { this.url = path })).execute()
+        val request = buildMangaDetailsRequest(SManga.create().apply { this.url = path })
+        val response = client.post(request.url, request.headers, request.body!!, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response).apply { this.url = path }
     }
@@ -441,7 +449,7 @@ abstract class FictionZone :
         }
     }
 
-    private fun loadChapterList(manga: SManga): List<SChapter> {
+    private suspend fun loadChapterList(manga: SManga): List<SChapter> {
         val isOmniportal = manga.url.startsWith("/omniportal/")
 
         val (request, novelId, sourceId, sourceKey) = if (isOmniportal) {
@@ -452,14 +460,14 @@ abstract class FictionZone :
             Quadruple(req, "", srcId, srcKey)
         } else {
             val detailsRequest = buildMangaDetailsRequest(manga)
-            val detailsResponse = client.newCall(detailsRequest).execute()
+            val detailsResponse = client.post(detailsRequest.url, detailsRequest.headers, detailsRequest.body!!)
             val detailsJson = json.parseToJsonElement(detailsResponse.body.string()).jsonObject
             val id = detailsJson["data"]!!.jsonObject["id"]!!.jsonPrimitive.content
             val req = apiRequest("/platform/chapter-lists?novel_id=$id")
             Quadruple(req, id, "", "")
         }
 
-        val response = client.newCall(request).execute()
+        val response = client.post(request.url, request.headers, request.body!!)
         val jsonString = response.body.string()
         val jsonObject = json.parseToJsonElement(jsonString).jsonObject
         val data = jsonObject["data"]?.jsonObject ?: return emptyList()
@@ -473,7 +481,7 @@ abstract class FictionZone :
                     val pageReq = apiRequest(
                         "/omniportal/novels/chapters?source_id=$sourceId&source_key=$sourceKey&translate=en&engine=google-trans&page=$p",
                     )
-                    val pageRes = client.newCall(pageReq).execute()
+                    val pageRes = client.post(pageReq.url, pageReq.headers, pageReq.body!!)
                     val pageData = json.parseToJsonElement(pageRes.body.string()).jsonObject["data"]?.jsonObject
                     pageData?.get("chapters")?.jsonArray?.let { chapters.addAll(it) }
                 } catch (_: Exception) {
@@ -499,12 +507,11 @@ abstract class FictionZone :
                     "/novel/$slug/$chapterId?novel_id=$novelId"
                 }
 
-                date_upload = try {
-                    val dateStr = obj["published_date"]?.jsonPrimitive?.contentOrNull
-                    if (dateStr != null) dateFormat.parse(dateStr)?.time ?: 0L else 0L
-                } catch (e: Exception) {
-                    0L
-                }
+                date_upload = obj["published_date"]?.jsonPrimitive?.contentOrNull?.let { dateStr ->
+                    runCatching {
+                        LocalDate.parse(dateStr, dateFormat).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                    }.getOrDefault(0L)
+                } ?: 0L
 
                 chapter_number = obj["chapter_number"]?.jsonPrimitive?.double?.toFloat() ?: -1f
             }
@@ -520,7 +527,10 @@ abstract class FictionZone :
         // Details and chapters live on different endpoints - fire both concurrently when both
         // are needed.
         val detailsDeferred = if (fetchDetails) {
-            async { parseMangaDetails(client.newCall(buildMangaDetailsRequest(manga)).execute()) }
+            async {
+                val request = buildMangaDetailsRequest(manga)
+                parseMangaDetails(client.post(request.url, request.headers, request.body!!))
+            }
         } else {
             null
         }
@@ -586,11 +596,9 @@ abstract class FictionZone :
     /**
      * Scrape the chapter content from the HTML page.
      */
-    private fun fetchFromHtml(fullUrl: String): String {
-        val response = client.newCall(GET(fullUrl, headers)).execute()
-        val html = response.body?.string() ?: throw Exception("Empty response from chapter page")
-
-        val doc = Jsoup.parse(html)
+    private suspend fun fetchFromHtml(fullUrl: String): String {
+        val response = client.get(fullUrl, headers)
+        val doc = response.asJsoup()
 
         // Find the main content container
         var contentElement = doc.selectFirst(".chapter-text")
@@ -630,7 +638,7 @@ abstract class FictionZone :
     /**
      * Fetch chapter content via the API .
      */
-    private fun fetchFromApi(chapterUrl: String): String {
+    private suspend fun fetchFromApi(chapterUrl: String): String {
         val apiPath = when {
             chapterUrl.startsWith("/omniportal/") -> {
                 val parts = chapterUrl.substringBefore('?').trim('/').split("/")
@@ -645,7 +653,7 @@ abstract class FictionZone :
         }
 
         val request = apiRequest(apiPath, "GET", includeAuth = true)
-        val response = client.newCall(request).execute()
+        val response = client.post(request.url, request.headers, request.body!!)
         val jsonString = response.body.string()
         val jsonObject = json.parseToJsonElement(jsonString).jsonObject
 

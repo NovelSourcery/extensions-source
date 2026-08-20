@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.parseAs
 import kotlinx.serialization.json.JsonArray
@@ -49,12 +50,12 @@ abstract class Azora :
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseMangasPage(buildListRequest(page, "new", query), page)
 
     private suspend fun parseMangasPage(request: Request, page: Int): MangasPage {
-        val body = client.newCall(request).execute().parseAs<PostsResponse>()
+        val body = client.get(request.url, request.headers).parseAs<PostsResponse>()
         return MangasPage(body.novelPosts.map { it.toSManga() }, body.novelTotalCount > page * perPage)
     }
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.newCall(GET(url, headers)).execute()
+        val response = client.get(url, headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         // Raw body needed for the <astro-island> regex extraction below, in addition to Jsoup
         // parsing for the HTML fallback path - asJsoup() would consume it without giving the
@@ -70,7 +71,7 @@ abstract class Azora :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val slug = manga.url.removePrefix("/series/").trim('/')
-        val html = client.newCall(GET(baseUrl + manga.url, headers)).execute().body.string()
+        val html = client.get(baseUrl + manga.url, headers).body.string()
         val post = extractPost(html)
         post?.let { postIdCache[it.slug] = it.id }
 
@@ -111,7 +112,7 @@ abstract class Azora :
     private suspend fun resolvePostId(slug: String): Int? {
         postIdCache[slug]?.let { return it }
         val post = runCatching {
-            val html = client.newCall(GET("$baseUrl/series/$slug", headers)).execute().body.string()
+            val html = client.get("$baseUrl/series/$slug", headers).body.string()
             extractPost(html)
         }.getOrNull() ?: return null
         postIdCache[slug] = post.id
@@ -119,7 +120,7 @@ abstract class Azora :
     }
 
     private suspend fun fetchChapterList(postId: Int, slug: String): List<SChapter> {
-        val response = client.newCall(GET("$apiUrl/api/chapters?postId=$postId&skip=0&take=all&order=desc", headers)).execute()
+        val response = client.get("$apiUrl/api/chapters?postId=$postId&skip=0&take=all&order=desc", headers)
         return response.parseAs<ChaptersResponse>().post.chapters
             .filter { it.isAccessible && !it.isLocked && !it.isPermanentlyLocked && it.price <= 0 }
             .map { it.toSChapter(slug) }
@@ -129,7 +130,7 @@ abstract class Azora :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.newCall(GET(baseUrl + page.url, headers)).execute().asJsoup()
+        val doc = client.get(baseUrl + page.url, headers).asJsoup()
         val content = doc.selectFirst("div.novel-reader-content") ?: return ""
         return content.select("p")
             .mapNotNull { p -> p.text().takeIf { it.isNotBlank() } }

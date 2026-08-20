@@ -4,6 +4,12 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
+class SearchRequestDto(
+    val title: String,
+    val page: String,
+)
+
+@Serializable
 class ReleasesResponse(
     val releases: List<ReleaseDto> = emptyList(),
 )

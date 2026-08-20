@@ -6,6 +6,7 @@ import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import okhttp3.Request
 import org.jsoup.nodes.Element
 
@@ -20,7 +21,8 @@ abstract class HizoManga : MadaraNovel() {
     override fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request = GET("$baseUrl/page/$page/?per_page=100&s=${query.replace(" ", "+")}&post_type=wp-manga", headers)
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val doc = client.newCall(buildPopularMangaRequest(page)).execute().asJsoup()
+        val request = buildPopularMangaRequest(page)
+        val doc = client.get(request.url, request.headers).asJsoup()
         val mangas = parseNovels(doc)
         val hasNextPage = doc.selectFirst(".pagination a:contains(next)") != null ||
             doc.selectFirst("a.next.page-numbers") != null ||
@@ -32,7 +34,7 @@ abstract class HizoManga : MadaraNovel() {
     }
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        val response = client.get(baseUrl + page.url, headers)
         val doc = response.asJsoup()
 
         checkCaptcha(doc, baseUrl + page.url)

@@ -9,7 +9,9 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.serialization.Serializable
@@ -18,7 +20,6 @@ import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 
 @Source
@@ -42,7 +43,8 @@ abstract class ShanghaiFantasy :
     )
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val response = client.newCall(buildPopularMangaRequest(page)).execute()
+        val request = buildPopularMangaRequest(page)
+        val response = client.get(request.url, request.headers)
         return parseMangaListResponse(response)
     }
 
@@ -57,13 +59,6 @@ abstract class ShanghaiFantasy :
         }
         return MangasPage(mangas, mangas.isNotEmpty())
     }
-
-    // endregion
-
-    // region Latest (not supported)
-
-    protected open fun buildLatestUpdatesRequest(page: Int): Request = buildPopularMangaRequest(page)
-    override suspend fun getLatestUpdates(page: Int): MangasPage = getPopularManga(page)
 
     // endregion
 
@@ -88,9 +83,12 @@ abstract class ShanghaiFantasy :
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val response = client.newCall(buildSearchMangaRequest(page, query, filters)).execute()
+        val request = buildSearchMangaRequest(page, query, filters)
+        val response = client.get(request.url, request.headers)
         return parseMangaListResponse(response)
     }
+
+    override suspend fun getLatestUpdates(page: Int): MangasPage = getPopularManga(page)
 
     // endregion
 
@@ -104,7 +102,8 @@ abstract class ShanghaiFantasy :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val request = buildMangaDetailsRequest(manga)
+        val response = client.get(request.url, request.headers)
         val doc = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
@@ -137,11 +136,11 @@ abstract class ShanghaiFantasy :
 
     // region Chapters
 
-    private fun fetchChapterList(doc: Document): List<SChapter> {
+    private suspend fun fetchChapterList(doc: Document): List<SChapter> {
         val novelId = doc.selectFirst("#chapterList")?.attr("data-cat") ?: return emptyList()
 
         val chaptersUrl = "$baseUrl/wp-json/fiction/v1/chapters?category=$novelId&order=asc&page=1&per_page=9999"
-        val chapResponse = client.newCall(GET(chaptersUrl, headers)).execute()
+        val chapResponse = client.get(chaptersUrl, headers)
         val chapters = json.decodeFromString<List<ShanghaiChapter>>(chapResponse.body.string())
 
         return chapters.mapIndexedNotNull { index, ch ->
@@ -161,7 +160,7 @@ abstract class ShanghaiFantasy :
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.newCall(GET(url, headers)).execute()
+        val response = client.get(url, headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         return parseMangaDetails(doc).apply { this.url = mangaPath.slug(url.encodedPath) }
@@ -170,12 +169,12 @@ abstract class ShanghaiFantasy :
     // region Pages
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        val response = client.get(baseUrl + chapter.url, headers)
         return listOf(Page(0, response.request.url.toString()))
     }
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.newCall(GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)).execute().asJsoup()
+        val doc = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers).asJsoup()
         val title = doc.selectFirst("div.my-5")?.text() ?: ""
         val content = doc.selectFirst("div.flex:nth-child(4)") ?: return ""
         content.children().first()?.before("<h1>$title</h1>")
@@ -183,12 +182,6 @@ abstract class ShanghaiFantasy :
         content.select("p").filter { it.text().isBlank() }.forEach { it.remove() }
         return content.html()
     }
-
-    // endregion
-
-    // region Helpers
-
-    private fun Response.asJsoup(): Document = Jsoup.parse(body.string(), request.url.toString())
 
     // endregion
 

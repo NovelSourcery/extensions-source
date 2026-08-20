@@ -412,14 +412,15 @@ abstract class MadaraNovel :
         val maxPage = pageLinks.mapNotNull { it.attr("data-page").toIntOrNull() }.maxOrNull() ?: 1
         if (maxPage <= 1) return firstHtml
 
-        val html = StringBuilder(firstHtml)
-        for (page in 2..maxPage) {
-            val query = pageLinks.firstOrNull { it.attr("data-page") == page.toString() }
-                ?.attr("href")?.substringAfter('?', "") ?: continue
-            val pageUrl = if (query.isEmpty()) ajaxUrl else "$ajaxUrl?$query"
-            html.append(client.newCall(POST(pageUrl, newHeaders, FormBody.Builder().build())).execute().body.string())
+        return buildString {
+            append(firstHtml)
+            for (page in 2..maxPage) {
+                val query = pageLinks.firstOrNull { it.attr("data-page") == page.toString() }
+                    ?.attr("href")?.substringAfter('?', "") ?: continue
+                val pageUrl = if (query.isEmpty()) ajaxUrl else "$ajaxUrl?$query"
+                append(client.newCall(POST(pageUrl, newHeaders, FormBody.Builder().build())).execute().body.string())
+            }
         }
-        return html.toString()
     }
 
     private fun parseChaptersFromHtml(html: String): List<SChapter> {
@@ -766,21 +767,22 @@ abstract class MadaraNovel :
 
     private fun recordHighestTracked(mangaUrl: String, value: Float) {
         val raw = preferences.getString(PREF_HIGHEST_CACHE, "") ?: ""
-        val rebuilt = StringBuilder()
         var replaced = false
-        raw.split('\n').filter { it.isNotEmpty() }.forEach { line ->
-            val sep = line.indexOf('|')
-            if (sep > 0 && line.substring(0, sep) == mangaUrl) {
-                if (!replaced) {
-                    rebuilt.append(mangaUrl).append('|').append(value).append('\n')
-                    replaced = true
+        val rebuilt = buildString {
+            raw.split('\n').filter { it.isNotEmpty() }.forEach { line ->
+                val sep = line.indexOf('|')
+                if (sep > 0 && line.substring(0, sep) == mangaUrl) {
+                    if (!replaced) {
+                        append(mangaUrl).append('|').append(value).append('\n')
+                        replaced = true
+                    }
+                } else {
+                    append(line).append('\n')
                 }
-            } else {
-                rebuilt.append(line).append('\n')
             }
+            if (!replaced) append(mangaUrl).append('|').append(value).append('\n')
         }
-        if (!replaced) rebuilt.append(mangaUrl).append('|').append(value).append('\n')
-        preferences.edit().putString(PREF_HIGHEST_CACHE, rebuilt.toString()).apply()
+        preferences.edit().putString(PREF_HIGHEST_CACHE, rebuilt).apply()
     }
 
     // ======================== Settings ========================

@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.novelarchive
 
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -10,12 +9,12 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.parseAs
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Request
 
 // NOTE: manga.url is already stored as a bare opaque id (no site-path prefix at all - see
 // createSMangaFromJson/toSManga below) and is combined with different prefixes for the webview
@@ -28,7 +27,7 @@ abstract class NovelArchive :
 
     override val supportsLatest = true
 
-    private fun buildListRequest(page: Int, sort: String, query: String, filters: FilterList): Request {
+    private fun buildListUrl(page: Int, sort: String, query: String, filters: FilterList): HttpUrl {
         val url = "$baseUrl/api/novels".toHttpUrl().newBuilder()
             .addQueryParameter("page", page.toString())
             .addQueryParameter("per_page", "24")
@@ -49,22 +48,22 @@ abstract class NovelArchive :
                 else -> {}
             }
         }
-        return GET(url.build(), headers)
+        return url.build()
     }
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val result = client.newCall(buildListRequest(page, "popular", "", FilterList())).execute().parseAs<NovelListResponse>()
+        val result = client.get(buildListUrl(page, "popular", "", FilterList()), headers).parseAs<NovelListResponse>()
         return MangasPage(result.novels.map { it.toSManga() }, result.pagination.hasNext)
     }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val result = client.newCall(buildListRequest(page, "recent", "", FilterList())).execute().parseAs<NovelListResponse>()
+        val result = client.get(buildListUrl(page, "recent", "", FilterList()), headers).parseAs<NovelListResponse>()
         return MangasPage(result.novels.map { it.toSManga() }, result.pagination.hasNext)
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val sort = filters.filterIsInstance<SortFilter>().firstOrNull()?.toUriPart() ?: "recent"
-        val result = client.newCall(buildListRequest(page, sort, query, filters)).execute().parseAs<NovelListResponse>()
+        val result = client.get(buildListUrl(page, sort, query, filters), headers).parseAs<NovelListResponse>()
         return MangasPage(result.novels.map { it.toSManga() }, result.pagination.hasNext)
     }
 
@@ -95,7 +94,7 @@ abstract class NovelArchive :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val id = url.encodedPath.removePrefix("/novel/").trim('/')
         if (id.isBlank()) return null
-        val response = client.newCall(GET("$baseUrl/api/novels/$id", headers)).execute()
+        val response = client.get("$baseUrl/api/novels/$id", headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return response.parseAs<NovelDetailResponse>().novel.toSManga()
     }
@@ -127,7 +126,7 @@ abstract class NovelArchive :
         }.trim()
     }
 
-    private fun buildMangaDetailsRequest(manga: SManga): Request = GET("$baseUrl/api/novels/${manga.url}", headers)
+    private fun buildMangaDetailsUrl(manga: SManga): String = "$baseUrl/api/novels/${manga.url}"
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -136,7 +135,7 @@ abstract class NovelArchive :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list both live in the same API response - fetch it once.
-        val dto = client.newCall(buildMangaDetailsRequest(manga)).execute().parseAs<NovelDetailResponse>().novel
+        val dto = client.get(buildMangaDetailsUrl(manga), headers).parseAs<NovelDetailResponse>().novel
 
         val updatedManga = if (fetchDetails) dto.toSManga() else manga
 
@@ -166,7 +165,7 @@ abstract class NovelArchive :
 
     override suspend fun fetchPageText(page: Page): String {
         val (novelId, number) = page.url.split("/")
-        val response = client.newCall(GET("$baseUrl/api/novels/$novelId/chapters/$number", headers)).execute()
+        val response = client.get("$baseUrl/api/novels/$novelId/chapters/$number", headers)
         val content = response.parseAs<ChapterContentResponse>().chapter.content.orEmpty()
         return content.split("\n")
             .map { it.trim() }

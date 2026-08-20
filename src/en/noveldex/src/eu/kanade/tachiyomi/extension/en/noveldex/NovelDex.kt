@@ -5,7 +5,6 @@ import android.content.SharedPreferences
 import android.util.Base64
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
@@ -16,6 +15,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.jsonInstance
@@ -35,8 +35,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.jsoup.Jsoup
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
-import java.text.SimpleDateFormat
-import java.util.Locale
+import kotlin.time.Instant
 
 /**
  * NovelDex.io - Novel reading extension
@@ -53,8 +52,6 @@ abstract class NovelDex :
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
-
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
 
     // Stored value is "<type>/<slug>" (e.g. "novel/some-title") - the type prefix can't be
     // dropped, it's needed to rebuild a working URL, so it rides along inside the "slug".
@@ -74,7 +71,7 @@ abstract class NovelDex :
      * (Next.js resolves this server-side instead of an HTTP redirect). Follow the chain so stale
      * library urls keep working without requiring the user to migrate the entry.
      */
-    private fun resolveRedirects(initialBody: String): Pair<String, String?> {
+    private suspend fun resolveRedirects(initialBody: String): Pair<String, String?> {
         var body = initialBody
         var finalPath: String? = null
         var hops = 0
@@ -82,7 +79,7 @@ abstract class NovelDex :
             val path = REDIRECT_REGEX.find(body)?.groupValues?.get(1) ?: break
             finalPath = path
             hops++
-            body = client.newCall(GET("$baseUrl$path", rscHeaders())).execute().body.string()
+            body = client.get("$baseUrl$path", rscHeaders()).body.string()
         }
         return body to finalPath
     }
@@ -95,7 +92,7 @@ abstract class NovelDex :
             .addQueryParameter("limit", "24")
             .addQueryParameter("sort", "popular")
             .build()
-        return parseApiResponse(client.newCall(GET(url, headers)).execute().body.string())
+        return parseApiResponse(client.get(url, headers).body.string())
     }
 
     // ======================== Latest ========================
@@ -106,7 +103,7 @@ abstract class NovelDex :
             .addQueryParameter("limit", "24")
             // no sort param = recently updated
             .build()
-        return parseApiResponse(client.newCall(GET(url, headers)).execute().body.string())
+        return parseApiResponse(client.get(url, headers).body.string())
     }
 
     // ======================== Search ========================
@@ -186,7 +183,7 @@ abstract class NovelDex :
             if (statusList.isNotEmpty()) addQueryParameter("status", statusList.joinToString(","))
         }.build()
 
-        return parseApiResponse(client.newCall(GET(url, headers)).execute().body.string())
+        return parseApiResponse(client.get(url, headers).body.string())
     }
 
     private fun parseApiResponse(body: String): MangasPage {
@@ -257,7 +254,7 @@ abstract class NovelDex :
 
     // ======================== Details ========================
 
-    private fun parseMangaDetails(rawBody: String): SManga {
+    private suspend fun parseMangaDetails(rawBody: String): SManga {
         val (body, redirectedPath) = resolveRedirects(rawBody)
 
         // RSC response contains a JSON fragment with series data
@@ -395,7 +392,7 @@ abstract class NovelDex :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and chapters both come from the same detail-page RSC response - fetch it once.
-        val response = client.newCall(GET("$baseUrl${mangaPath.resolve(manga.url)}", rscHeaders())).execute()
+        val response = client.get("$baseUrl${mangaPath.resolve(manga.url)}", rscHeaders())
         val rawBody = response.body.string()
         val requestPath = response.request.url.encodedPath
 
@@ -404,7 +401,7 @@ abstract class NovelDex :
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private fun parseChapterListBody(rawBody: String, requestPath: String): List<SChapter> {
+    private suspend fun parseChapterListBody(rawBody: String, requestPath: String): List<SChapter> {
         val (body, redirectedPath) = resolveRedirects(rawBody)
         val requestUrl = redirectedPath ?: requestPath
 
@@ -449,7 +446,7 @@ abstract class NovelDex :
                 for (page in 2..totalPages) {
                     try {
                         val pageUrl = "$baseUrl/series/$seriesType/$novelSlug?page=$page"
-                        val pageResponse = client.newCall(GET(pageUrl, rscHeaders())).execute()
+                        val pageResponse = client.get(pageUrl, rscHeaders())
                         val pageBody = pageResponse.body.string()
 
                         val pageChaptersMatch = Regex(""""chapters"\s*:\s*(\[.*?\])(?=\s*[,}])""", RegexOption.DOT_MATCHES_ALL)
@@ -484,8 +481,8 @@ abstract class NovelDex :
         // FALLBACK: If detail page RSC returned no chapters, try chapter/1 page
         if (chapters.isEmpty() && novelSlug.isNotEmpty() && !requestUrl.contains("/chapter/")) {
             try {
-                val chapterOneRequest = GET("$baseUrl/series/$seriesType/$novelSlug/chapter/1", rscHeaders())
-                val chapterOneResponse = client.newCall(chapterOneRequest).execute()
+                val chapterOneUrl = "$baseUrl/series/$seriesType/$novelSlug/chapter/1"
+                val chapterOneResponse = client.get(chapterOneUrl, rscHeaders())
                 val chapterOneBody = chapterOneResponse.body.string()
 
                 val ch1AllChapters = Regex(""""allChapters"\s*:\s*(\[.*?\])(?=\s*[,}])""", RegexOption.DOT_MATCHES_ALL)
@@ -505,7 +502,7 @@ abstract class NovelDex :
                     .addQueryParameter("limit", "1")
                     .addQueryParameter("slug", novelSlug)
                     .build()
-                val apiResponse = client.newCall(GET(apiUrl, headers)).execute()
+                val apiResponse = client.get(apiUrl, headers)
                 val apiBody = apiResponse.body.string()
                 val apiRoot = json.parseToJsonElement(apiBody).jsonObject
                 val dataArray = apiRoot["data"]?.jsonArray
@@ -551,13 +548,7 @@ abstract class NovelDex :
                         url = "/series/$seriesType/$novelSlug/chapter/$number"
                         name = if (isLocked) "\uD83D\uDD12 $chTitle" else chTitle
                         chapter_number = number.toFloat()
-                        date_upload = publishedAt?.let {
-                            try {
-                                dateFormat.parse(it)?.time ?: 0L
-                            } catch (_: Exception) {
-                                0L
-                            }
-                        } ?: 0L
+                        date_upload = publishedAt?.let { Instant.parseOrNull(it)?.toEpochMilliseconds() } ?: 0L
                     },
                 )
             } catch (_: Exception) {}
@@ -568,7 +559,7 @@ abstract class NovelDex :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
-        val response = client.newCall(GET(baseUrl + path, rscHeaders())).execute()
+        val response = client.get(baseUrl + path, rscHeaders(), ensureSuccess = false)
         if (!response.isSuccessful) return null
         val manga = parseMangaDetails(response.body.string())
         if (manga.url.isBlank()) manga.url = mangaPath.slug(path)
@@ -592,7 +583,7 @@ abstract class NovelDex :
         // NovelDex uses Next.js App Router — chapter content lives in RSC T-tags,
         // NOT in the visible HTML DOM (which only has loading skeletons).
         try {
-            val rscResponse = client.newCall(GET("$baseUrl$chapterPath", rscHeaders())).execute()
+            val rscResponse = client.get("$baseUrl$chapterPath", rscHeaders())
             val (rscBody, _) = resolveRedirects(rscResponse.body.string())
             val xorContent = extractFromXorEncryption(rscBody)
             if (!xorContent.isNullOrBlank()) return xorContent
@@ -603,7 +594,7 @@ abstract class NovelDex :
 
         // Approach 2: Normal HTML fetch (fallback)
         try {
-            val htmlResponse = client.newCall(GET("$baseUrl$chapterPath", headers)).execute()
+            val htmlResponse = client.get("$baseUrl$chapterPath", headers)
             val htmlBody = htmlResponse.body.string()
             val doc = Jsoup.parse(htmlBody)
 

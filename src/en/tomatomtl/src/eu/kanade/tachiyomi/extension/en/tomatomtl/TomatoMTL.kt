@@ -8,7 +8,6 @@ import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.GET
-import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
@@ -20,6 +19,8 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.network.post
 import keiyoushi.source.KeiSource
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -39,10 +40,10 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
-import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -112,17 +113,12 @@ abstract class TomatoMTL :
 
     // ======================== Popular ========================
 
-    private fun buildPopularMangaRequest(page: Int): Request {
-        // Garden popular novels API - using garden-stats.php
-        return GET(
-            "$baseUrl/api/garden-stats.php?action=popular&period=all&page=$page&page_size=20",
-            headers,
-        )
-    }
+    private fun buildPopularMangaUrl(page: Int): String = // Garden popular novels API - using garden-stats.php
+        "$baseUrl/api/garden-stats.php?action=popular&period=all&page=$page&page_size=20"
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseStatsResponse(client.newCall(buildPopularMangaRequest(page)).execute().body.string())
+    override suspend fun getPopularManga(page: Int): MangasPage = parseStatsResponse(client.get(buildPopularMangaUrl(page), headers).body.string())
 
-    private fun parseStatsResponse(body: String): MangasPage {
+    private suspend fun parseStatsResponse(body: String): MangasPage {
         val jsonResult = json.parseToJsonElement(body).jsonObject
 
         val success = jsonResult["success"]?.jsonPrimitive?.contentOrNull
@@ -189,7 +185,7 @@ abstract class TomatoMTL :
     /**
      * Batch translate titles using Google Translate API
      */
-    private fun translateTitles(titles: List<String>): List<String> {
+    private suspend fun translateTitles(titles: List<String>): List<String> {
         if (titles.isEmpty()) return emptyList()
 
         val chineseRegex = Regex("[\\u4e00-\\u9fff]")
@@ -215,14 +211,17 @@ abstract class TomatoMTL :
             val requestBody = json.encodeToString(JsonArray.serializer(), bodyArray)
                 .toRequestBody("application/json+protobuf".toMediaType())
 
-            val request = Request.Builder()
-                .url("https://translate-pa.googleapis.com/v1/translateHtml")
-                .post(requestBody)
-                .header("Content-Type", "application/json+protobuf")
-                .header("x-goog-api-key", "AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520")
+            val translateHeaders = Headers.Builder()
+                .add("Content-Type", "application/json+protobuf")
+                .add("x-goog-api-key", "AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520")
                 .build()
 
-            val response = client.newCall(request).execute()
+            val response = client.post(
+                "https://translate-pa.googleapis.com/v1/translateHtml",
+                translateHeaders,
+                requestBody,
+                ensureSuccess = false,
+            )
             val responseBody = response.body.string()
 
             if (!response.isSuccessful) {
@@ -248,16 +247,13 @@ abstract class TomatoMTL :
 
     // ======================== Latest ========================
 
-    private fun buildLatestUpdatesRequest(page: Int): Request = GET(
-        "$baseUrl/api/garden-stats.php?action=recent&period=all&page=$page&page_size=20",
-        headers,
-    )
+    private fun buildLatestUpdatesUrl(page: Int): String = "$baseUrl/api/garden-stats.php?action=recent&period=all&page=$page&page_size=20"
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseStatsResponse(client.newCall(buildLatestUpdatesRequest(page)).execute().body.string())
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseStatsResponse(client.get(buildLatestUpdatesUrl(page), headers).body.string())
 
     // ======================== Search ========================
 
-    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    private suspend fun performSearchMangaRequest(page: Int, query: String, filters: FilterList): Response {
         val offset = (page - 1) * 20
 
         val sourceFilter = filters.find { it is SourceFilter } as? SourceFilter
@@ -267,11 +263,11 @@ abstract class TomatoMTL :
             // Garden source search or browse
             if (query.isNotEmpty()) {
                 val searchUrl = "$gardenApiBase/source/$selectedSource/search?keyword=${URLEncoder.encode(query, "UTF-8")}&page=$page"
-                return GET(searchUrl, headers)
+                return client.get(searchUrl, headers)
             } else {
                 // Browse garden source home (first tab by default)
                 val homeUrl = "$gardenApiBase/source/$selectedSource/home/0?page=$page"
-                return GET(homeUrl, headers)
+                return client.get(homeUrl, headers)
             }
         }
 
@@ -306,12 +302,12 @@ abstract class TomatoMTL :
                 "limit=18&" +
                 "genre_type=0"
 
-            return GET(url, headers)
+            return client.get(url, headers)
         }
 
         // search-proxy.php requires a non-empty query; with no query/category/source, show recent
         if (query.isBlank()) {
-            return GET("$baseUrl/api/garden-stats.php?action=recent&period=all&page=$page&page_size=20", headers)
+            return client.get("$baseUrl/api/garden-stats.php?action=recent&period=all&page=$page&page_size=20", headers)
         }
 
         // Regular search using search-proxy.php
@@ -345,12 +341,12 @@ abstract class TomatoMTL :
         }
 
         val requestBody = bodyJson.toString().toRequestBody("application/json".toMediaType())
-        return POST("$baseUrl/api/search-proxy.php", headers, requestBody)
+        return client.post("$baseUrl/api/search-proxy.php", headers, requestBody)
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseSearchMangaResponse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseSearchMangaResponse(performSearchMangaRequest(page, query, filters))
 
-    private fun parseSearchMangaResponse(response: Response): MangasPage {
+    private suspend fun parseSearchMangaResponse(response: Response): MangasPage {
         val responseBody = response.body.string()
         val requestUrl = response.request.url.toString()
 
@@ -398,7 +394,7 @@ abstract class TomatoMTL :
      * Parse garden API search/browse response.
      * Garden API returns books with: url, title, author, cover
      */
-    private fun parseGardenApiResponse(iv: String, enc: String, requestUrl: String): MangasPage {
+    private suspend fun parseGardenApiResponse(iv: String, enc: String, requestUrl: String): MangasPage {
         val decrypted = decryptContent(iv, enc)
         Log.d("TomatoMTL", "Garden API decrypted: ${decrypted.take(500)}...")
 
@@ -491,7 +487,7 @@ abstract class TomatoMTL :
         }
     }
 
-    private fun parseSearchResponse(jsonResult: JsonObject): MangasPage {
+    private suspend fun parseSearchResponse(jsonResult: JsonObject): MangasPage {
         val searchTabs = jsonResult["search_tabs"]?.jsonArray
         if (searchTabs.isNullOrEmpty()) {
             return MangasPage(emptyList(), false)
@@ -549,7 +545,7 @@ abstract class TomatoMTL :
         return MangasPage(mangas, hasMore)
     }
 
-    private fun parseCategoriesResponse(iv: String, enc: String): MangasPage {
+    private suspend fun parseCategoriesResponse(iv: String, enc: String): MangasPage {
         val decrypted = decryptContent(iv, enc)
 
         return try {
@@ -612,7 +608,7 @@ abstract class TomatoMTL :
      *   "next_offset": 18
      * }
      */
-    private fun parseCategoriesV1bResponse(responseBody: String): MangasPage {
+    private suspend fun parseCategoriesV1bResponse(responseBody: String): MangasPage {
         return try {
             val jsonResult = json.parseToJsonElement(responseBody).jsonObject
             val success = jsonResult["success"]?.jsonPrimitive?.booleanOrNull ?: false
@@ -667,7 +663,7 @@ abstract class TomatoMTL :
      * Parse categories_v2 HTML response.
      * The page contains embedded JSON in a <script> tag: const books = [{book_id, book_name, thumb_url, author, score}, ...]
      */
-    private fun parseCategoriesV2Html(html: String): MangasPage {
+    private suspend fun parseCategoriesV2Html(html: String): MangasPage {
         return try {
             val doc = Jsoup.parse(html)
             val scripts = doc.select("script")
@@ -794,13 +790,13 @@ abstract class TomatoMTL :
 
     // ======================== Details ========================
 
-    private fun buildMangaDetailsRequest(manga: SManga): Request = GET("$baseUrl${manga.url}", headers)
+    private fun buildMangaDetailsUrl(manga: SManga): String = "$baseUrl${manga.url}"
 
     // Garden novels aren't real browsable pages on the site (require login), so only regular
     // /book/ pages can be resolved directly from a pasted URL.
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
-        val response = client.newCall(GET(url.toString(), headers)).execute()
+        val response = client.get(url.toString(), headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetailsHtml(response).apply { this.url = path }
     }
@@ -828,7 +824,7 @@ abstract class TomatoMTL :
 
         // Regular novels: details page and catalog API are separate fetches - run concurrently.
         val detailsDeferred = if (fetchDetails) {
-            async { parseMangaDetailsHtml(client.newCall(buildMangaDetailsRequest(manga)).execute()) }
+            async { parseMangaDetailsHtml(client.get(buildMangaDetailsUrl(manga), headers)) }
         } else {
             null
         }
@@ -853,7 +849,7 @@ abstract class TomatoMTL :
         return manga
     }
 
-    private fun fetchGardenMangaDetailsInternal(manga: SManga): SManga {
+    private suspend fun fetchGardenMangaDetailsInternal(manga: SManga): SManga {
         try {
             val pathParts = manga.url.removePrefix("/garden/").split("/")
             if (pathParts.size < 2) return manga
@@ -866,7 +862,7 @@ abstract class TomatoMTL :
 
             val detailUrl = "$gardenApiBase/source/$source/detail?url=${URLEncoder.encode(novelUrl, "UTF-8")}"
 
-            val response = client.newCall(GET(detailUrl, headers)).execute()
+            val response = client.get(detailUrl, headers)
             val responseBody = response.body.string()
 
             try {
@@ -988,7 +984,7 @@ abstract class TomatoMTL :
     /**
      * Translate a single title using Google Translate API
      */
-    private fun translateSingleTitle(title: String): String {
+    private suspend fun translateSingleTitle(title: String): String {
         if (title.isBlank()) return title
 
         val chineseRegex = Regex("[\\u4e00-\\u9fff]")
@@ -1002,7 +998,7 @@ abstract class TomatoMTL :
         }
     }
 
-    private fun parseMangaDetailsHtml(response: Response): SManga {
+    private suspend fun parseMangaDetailsHtml(response: Response): SManga {
         val html = response.body.string()
         val document = Jsoup.parse(html, response.request.url.toString())
 
@@ -1135,7 +1131,7 @@ abstract class TomatoMTL :
 
     // ======================== Chapters ========================
 
-    private fun fetchGardenChapterListInternal(manga: SManga): List<SChapter> {
+    private suspend fun fetchGardenChapterListInternal(manga: SManga): List<SChapter> {
         return run fromCallable@{
             try {
                 val pathParts = manga.url.removePrefix("/garden/").split("/")
@@ -1148,7 +1144,7 @@ abstract class TomatoMTL :
                 val chaptersUrl = "$gardenApiBase/source/$source/chapters?url=${URLEncoder.encode(novelUrl, "UTF-8")}"
                 Log.d("TomatoMTL", "Fetching garden chapters from: $chaptersUrl")
 
-                val response = client.newCall(GET(chaptersUrl, headers)).execute()
+                val response = client.get(chaptersUrl, headers)
                 val responseBody = response.body.string()
 
                 val chapters = mutableListOf<SChapter>()
@@ -1255,7 +1251,7 @@ abstract class TomatoMTL :
         }
     }
 
-    private fun parseChapterListHtml(response: Response): List<SChapter> {
+    private suspend fun parseChapterListHtml(response: Response): List<SChapter> {
         val document = response.asJsoup()
         val chapters = mutableListOf<SChapter>()
         val chapterNames = mutableListOf<String>()
@@ -1319,20 +1315,20 @@ abstract class TomatoMTL :
     /**
      * Fetch chapter list for non-garden novels using the catalog API
      */
-    private fun fetchRegularChapterListInternal(manga: SManga): List<SChapter> {
+    private suspend fun fetchRegularChapterListInternal(manga: SManga): List<SChapter> {
         return run fromCallable@{
             try {
                 val bookId = manga.url.removePrefix("/book/").split("/").firstOrNull()
                 if (bookId.isNullOrBlank()) {
                     return@fromCallable parseChapterListHtml(
-                        client.newCall(GET("$baseUrl${manga.url}", headers)).execute(),
+                        client.get("$baseUrl${manga.url}", headers),
                     )
                 }
 
                 val catalogUrl = "$baseUrl/catalog/$bookId"
                 Log.d("TomatoMTL", "Fetching catalog: $catalogUrl")
 
-                val response = client.newCall(GET(catalogUrl, headers)).execute()
+                val response = client.get(catalogUrl, headers)
                 val responseBody = response.body.string()
 
                 val chapters = mutableListOf<SChapter>()
@@ -1389,7 +1385,7 @@ abstract class TomatoMTL :
 
                 if (chapters.isEmpty()) {
                     return@fromCallable parseChapterListHtml(
-                        client.newCall(GET("$baseUrl${manga.url}", headers)).execute(),
+                        client.get("$baseUrl${manga.url}", headers),
                     )
                 }
 
@@ -1455,7 +1451,7 @@ abstract class TomatoMTL :
         }
     }
 
-    private fun fetchGardenChapter(chapterUrl: String): String {
+    private suspend fun fetchGardenChapter(chapterUrl: String): String {
         val pathString = if (chapterUrl.startsWith("http")) {
             chapterUrl.substringAfter("/garden/", "")
         } else {
@@ -1491,7 +1487,7 @@ abstract class TomatoMTL :
         // API endpoint: GET /api/source/{source}/chapter?url={encoded_chapter_url}
         val apiUrl = "$gardenApiBase/source/$source/chapter?url=${URLEncoder.encode(chapterApiUrl, "UTF-8")}"
 
-        val apiResponse = client.newCall(GET(apiUrl, headers)).execute()
+        val apiResponse = client.get(apiUrl, headers, ensureSuccess = false)
         val responseBody = apiResponse.body.string()
 
         return try {
@@ -1560,7 +1556,7 @@ abstract class TomatoMTL :
             .joinToString("\n")
     }
 
-    private fun fetchRegularChapter(chapterUrl: String): String {
+    private suspend fun fetchRegularChapter(chapterUrl: String): String {
         val fullUrl = if (chapterUrl.startsWith("http")) chapterUrl else "$baseUrl$chapterUrl"
 
         val pathParts = fullUrl.removePrefix("$baseUrl/book/").split("/")
@@ -1570,7 +1566,7 @@ abstract class TomatoMTL :
 
         val catalogUrl = "$baseUrl/catalog/$bookId"
         return try {
-            val catalogResponse = client.newCall(GET(catalogUrl, headers)).execute()
+            val catalogResponse = client.get(catalogUrl, headers)
             val catalogBody = catalogResponse.body.string()
 
             // Catalog is encrypted
@@ -1590,9 +1586,9 @@ abstract class TomatoMTL :
         }
     }
 
-    private fun fetchChapterFromHtml(chapterUrl: String): String {
+    private suspend fun fetchChapterFromHtml(chapterUrl: String): String {
         val fullUrl = if (chapterUrl.startsWith("http")) chapterUrl else "$baseUrl$chapterUrl"
-        val pageResponse = client.newCall(GET(fullUrl, headers)).execute()
+        val pageResponse = client.get(fullUrl, headers)
         val pageHtml = pageResponse.body.string()
 
         // First, try to extract encryptedData from script tags in raw HTML
@@ -1622,7 +1618,7 @@ abstract class TomatoMTL :
         return "Could not find chapter content"
     }
 
-    private fun processAndTranslate(content: String): String {
+    private suspend fun processAndTranslate(content: String): String {
         val translationMode = getTranslationMode()
 
         if (translationMode != "none" && needsTranslation(content)) {
@@ -1680,7 +1676,7 @@ abstract class TomatoMTL :
             .joinToString("\n") { "<p>$it</p>" }
     }
 
-    private fun translateContent(content: String, mode: String): String = when (mode) {
+    private suspend fun translateContent(content: String, mode: String): String = when (mode) {
         "google" -> translateWithGoogle(content)
         "google2" -> translateWithGoogle2(content)
         "gemini" -> translateWithGemini(content)
@@ -1690,7 +1686,7 @@ abstract class TomatoMTL :
         else -> formatContent(content)
     }
 
-    private fun translateWithGoogle(content: String): String {
+    private suspend fun translateWithGoogle(content: String): String {
         try {
             val paragraphs = try {
                 json.parseToJsonElement(content).jsonArray
@@ -1719,14 +1715,17 @@ abstract class TomatoMTL :
             val requestBody = json.encodeToString(JsonArray.serializer(), bodyArray)
                 .toRequestBody("application/json+protobuf".toMediaType())
 
-            val request = Request.Builder()
-                .url("https://translate-pa.googleapis.com/v1/translateHtml")
-                .post(requestBody)
-                .header("Content-Type", "application/json+protobuf")
-                .header("x-goog-api-key", "AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520")
+            val translateHeaders = Headers.Builder()
+                .add("Content-Type", "application/json+protobuf")
+                .add("x-goog-api-key", "AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520")
                 .build()
 
-            val response = client.newCall(request).execute()
+            val response = client.post(
+                "https://translate-pa.googleapis.com/v1/translateHtml",
+                translateHeaders,
+                requestBody,
+                ensureSuccess = false,
+            )
             val responseBody = response.body.string()
 
             if (!response.isSuccessful) {
@@ -1749,7 +1748,7 @@ abstract class TomatoMTL :
         }
     }
 
-    private fun translateWithGoogle2(content: String): String {
+    private suspend fun translateWithGoogle2(content: String): String {
         try {
             val text = try {
                 json.parseToJsonElement(content).jsonArray
@@ -1765,12 +1764,7 @@ abstract class TomatoMTL :
                 "&query.display_language=en-US&data_types=TRANSLATION&data_types=1" +
                 "&key=AIzaSyDLEeFI5OtFBwYBIoK_jj5m32rZK5CkCXA&query.text=$encodedText"
 
-            val request = Request.Builder()
-                .url(url)
-                .get()
-                .build()
-
-            val response = client.newCall(request).execute()
+            val response = client.get(url, Headers.Builder().build())
             val responseBody = response.body.string()
 
             val responseJson = json.parseToJsonElement(responseBody).jsonObject
@@ -1787,12 +1781,12 @@ abstract class TomatoMTL :
         }
     }
 
-    private fun translateWithGemini(content: String): String {
+    private suspend fun translateWithGemini(content: String): String {
         // Gemini AI translation (currently under maintenance per website)
         return translateWithGoogle(content)
     }
 
-    private fun translateWithLongcat(content: String): String {
+    private suspend fun translateWithLongcat(content: String): String {
         try {
             val paragraphs = try {
                 json.parseToJsonElement(content).jsonArray
@@ -1825,13 +1819,16 @@ abstract class TomatoMTL :
                 )
             }.toString().toRequestBody("application/json".toMediaType())
 
-            val request = Request.Builder()
-                .url("https://api.longcat.chat/openai/v1/chat/completions")
-                .post(requestBody)
-                .header("Authorization", "Bearer ${getLongcatApiKey()}")
+            val longcatHeaders = Headers.Builder()
+                .add("Authorization", "Bearer ${getLongcatApiKey()}")
                 .build()
 
-            val response = client.newCall(request).execute()
+            val response = client.post(
+                "https://api.longcat.chat/openai/v1/chat/completions",
+                longcatHeaders,
+                requestBody,
+                ensureSuccess = false,
+            )
             val responseBody = response.body.string()
 
             if (!response.isSuccessful) {
@@ -1855,7 +1852,7 @@ abstract class TomatoMTL :
         }
     }
 
-    private fun translateWithBing(content: String): String {
+    private suspend fun translateWithBing(content: String): String {
         try {
             val text = try {
                 json.parseToJsonElement(content).jsonArray
@@ -1875,16 +1872,13 @@ abstract class TomatoMTL :
                 )
             }.toString().toRequestBody("application/json".toMediaType())
 
-            val request = Request.Builder()
-                .url(
-                    "https://api.cognitive.microsofttranslator.com/translate?" +
-                        "from=&to=en&api-version=3.0&textType=html&includeSentenceLength=true",
-                )
-                .post(requestBody)
-                .header("Content-Type", "application/json; charset=utf-8")
+            val bingUrl = "https://api.cognitive.microsofttranslator.com/translate?" +
+                "from=&to=en&api-version=3.0&textType=html&includeSentenceLength=true"
+            val bingHeaders = Headers.Builder()
+                .add("Content-Type", "application/json; charset=utf-8")
                 .build()
 
-            val response = client.newCall(request).execute()
+            val response = client.post(bingUrl, bingHeaders, requestBody, ensureSuccess = false)
             val responseBody = response.body.string()
 
             if (!response.isSuccessful) {
@@ -1913,7 +1907,7 @@ abstract class TomatoMTL :
         }
     }
 
-    private fun translateWithYandex(content: String): String {
+    private suspend fun translateWithYandex(content: String): String {
         try {
             val text = try {
                 json.parseToJsonElement(content).jsonArray
@@ -1926,15 +1920,10 @@ abstract class TomatoMTL :
             if (text.isBlank()) return formatContent(content)
 
             val encodedText = URLEncoder.encode(text, "UTF-8")
-            val request = Request.Builder()
-                .url(
-                    "https://translate.yandex.net/api/v1/tr.json/translate?" +
-                        "lang=zh-en&text=$encodedText&format=html",
-                )
-                .get()
-                .build()
+            val yandexUrl = "https://translate.yandex.net/api/v1/tr.json/translate?" +
+                "lang=zh-en&text=$encodedText&format=html"
 
-            val response = client.newCall(request).execute()
+            val response = client.get(yandexUrl, Headers.Builder().build(), ensureSuccess = false)
             val responseBody = response.body.string()
 
             if (!response.isSuccessful) {
@@ -2111,6 +2100,8 @@ abstract class TomatoMTL :
         return match?.id ?: source
     }
 
+    // Intentionally kept blocking: getFilterList() (a synchronous override) fires this off via a
+    // bare Thread{} when the source cache is empty, so it cannot call a suspend function here.
     private fun refreshSources() {
         try {
             val response = client.newCall(GET("$gardenApiBase/sources", headers)).execute()

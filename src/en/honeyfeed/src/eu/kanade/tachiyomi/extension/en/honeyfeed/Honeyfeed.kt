@@ -9,7 +9,9 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.coroutines.async
@@ -19,7 +21,6 @@ import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 
 @Source
@@ -44,7 +45,8 @@ abstract class Honeyfeed :
     private fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/ranking/monthly?page=$page", headers)
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val doc = client.newCall(buildPopularMangaRequest(page)).execute().asJsoup()
+        val request = buildPopularMangaRequest(page)
+        val doc = client.get(request.url, request.headers).asJsoup()
         val mangas = parseNovelList(doc)
         return MangasPage(mangas, mangas.isNotEmpty())
     }
@@ -56,7 +58,8 @@ abstract class Honeyfeed :
     private fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/novels?page=$page", headers)
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val doc = client.newCall(buildLatestUpdatesRequest(page)).execute().asJsoup()
+        val request = buildLatestUpdatesRequest(page)
+        val doc = client.get(request.url, request.headers).asJsoup()
         val mangas = parseNovelList(doc)
         return MangasPage(mangas, mangas.isNotEmpty())
     }
@@ -98,7 +101,8 @@ abstract class Honeyfeed :
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val doc = client.newCall(buildSearchMangaRequest(page, query, filters)).execute().asJsoup()
+        val request = buildSearchMangaRequest(page, query, filters)
+        val doc = client.get(request.url, request.headers).asJsoup()
         val mangas = parseNovelList(doc)
         return MangasPage(mangas, mangas.isNotEmpty())
     }
@@ -115,12 +119,12 @@ abstract class Honeyfeed :
     ): SMangaUpdate = coroutineScope {
         // Details and chapters live on different pages - fire both concurrently when both are needed.
         val detailsDeferred = if (fetchDetails) {
-            async { parseMangaDetails(client.newCall(GET(baseUrl + mangaPath.resolve(manga.url), headers)).execute()) }
+            async { parseMangaDetails(client.get(baseUrl + mangaPath.resolve(manga.url), headers)) }
         } else {
             null
         }
         val chaptersDeferred = if (fetchChapters) {
-            async { parseChapterList(client.newCall(GET(baseUrl + mangaPath.resolve(manga.url) + "/chapters", headers)).execute()) }
+            async { parseChapterList(client.get(baseUrl + mangaPath.resolve(manga.url) + "/chapters", headers)) }
         } else {
             null
         }
@@ -167,7 +171,7 @@ abstract class Honeyfeed :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
-        val response = client.newCall(GET(baseUrl + path, headers)).execute()
+        val response = client.get(baseUrl + path, headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response).apply { this.url = mangaPath.slug(path) }
     }
@@ -177,12 +181,12 @@ abstract class Honeyfeed :
     // region Pages
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.newCall(GET(if (chapter.url.startsWith("http")) chapter.url else baseUrl + chapter.url, headers)).execute()
+        val response = client.get(if (chapter.url.startsWith("http")) chapter.url else baseUrl + chapter.url, headers)
         return listOf(Page(0, response.request.url.toString()))
     }
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.newCall(GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)).execute().asJsoup()
+        val doc = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers).asJsoup()
         val title = doc.selectFirst("h1")?.text() ?: ""
         val body = doc.selectFirst(".wrap-body") ?: return ""
         body.select("#wrap-button-remove-blur").remove()
@@ -206,8 +210,6 @@ abstract class Honeyfeed :
             }
         }
     }
-
-    private fun Response.asJsoup(): Document = Jsoup.parse(body.string(), request.url.toString())
 
     // endregion
 

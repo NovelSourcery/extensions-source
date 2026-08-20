@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.wetriedtls
 
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -10,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.setAltTitles
@@ -21,9 +21,7 @@ import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Response
 import org.jsoup.Jsoup
-import java.text.SimpleDateFormat
-import java.util.Locale
-import java.util.TimeZone
+import kotlin.time.Instant
 
 @Source
 abstract class WeTriedTls :
@@ -36,10 +34,6 @@ abstract class WeTriedTls :
     override fun Headers.Builder.configureHeaders(): Headers.Builder = this
         .set("Referer", "$baseUrl/")
         .set("Origin", baseUrl)
-
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ROOT).apply {
-        timeZone = TimeZone.getTimeZone("UTC")
-    }
 
     private fun queryUrl(page: Int, query: String, orderBy: String, status: String) = "$apiUrl/query".toHttpUrl().newBuilder()
         .addQueryParameter("page", page.toString())
@@ -58,14 +52,14 @@ abstract class WeTriedTls :
         return MangasPage(entries, result.meta.nextPageUrl != null)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.newCall(GET(queryUrl(page, "", "total_views", "All"), headers)).execute())
+    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.get(queryUrl(page, "", "total_views", "All"), headers))
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(client.newCall(GET(queryUrl(page, "", "latest", "All"), headers)).execute())
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(client.get(queryUrl(page, "", "latest", "All"), headers))
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val status = filters.filterIsInstance<StatusFilter>().firstOrNull()?.toUriPart() ?: "All"
         val orderBy = filters.filterIsInstance<SortFilter>().firstOrNull()?.toUriPart() ?: "created_at"
-        return parseMangaListResponse(client.newCall(GET(queryUrl(page, query, orderBy, status), headers)).execute())
+        return parseMangaListResponse(client.get(queryUrl(page, query, orderBy, status), headers))
     }
 
     // manga.url is just the slug; strip any wrapping path/id so old stored urls still resolve.
@@ -82,7 +76,7 @@ abstract class WeTriedTls :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = extractSlug(url.encodedPath)
-        val response = client.newCall(GET("$apiUrl/series/$slug", headers)).execute()
+        val response = client.get("$apiUrl/series/$slug", headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return fetchNovelDetails(SManga.create().apply { this.url = slug })
     }
@@ -103,7 +97,7 @@ abstract class WeTriedTls :
     }
 
     private suspend fun fetchNovelDetails(manga: SManga): SManga {
-        val response = client.newCall(GET("$apiUrl/series/${extractSlug(manga.url)}", headers)).execute()
+        val response = client.get("$apiUrl/series/${extractSlug(manga.url)}", headers)
         val dto = response.parseAs<SeriesDto>()
         return SManga.create().apply {
             title = dto.title
@@ -138,9 +132,7 @@ abstract class WeTriedTls :
         val chapters = mutableListOf<SChapter>()
         var page = 1
         while (true) {
-            val response = client.newCall(
-                GET("$apiUrl/chapters/$seriesSlug?page=$page&perPage=100", headers),
-            ).execute()
+            val response = client.get("$apiUrl/chapters/$seriesSlug?page=$page&perPage=100", headers)
             val result = response.parseAs<ChaptersResponse>()
             result.data.forEach { dto ->
                 chapters.add(
@@ -148,7 +140,7 @@ abstract class WeTriedTls :
                         name = dto.chapterTitle?.takeIf { it.isNotBlank() } ?: dto.chapterName
                         url = "$seriesSlug/${dto.chapterSlug}"
                         chapter_number = dto.index.toFloatOrNull() ?: -1f
-                        date_upload = dto.createdAt?.let { dateFormat.parse(it)?.time } ?: 0L
+                        date_upload = dto.createdAt?.let { Instant.parseOrNull(it)?.toEpochMilliseconds() } ?: 0L
                     },
                 )
             }
@@ -161,7 +153,7 @@ abstract class WeTriedTls :
     override fun getChapterUrl(chapter: SChapter): String = "$baseUrl/series/${chapter.url}"
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.newCall(GET("$baseUrl/series/${chapter.url}", headers)).execute()
+        val response = client.get("$baseUrl/series/${chapter.url}", headers)
         return listOf(Page(0, response.request.url.toString()))
     }
 
@@ -169,7 +161,7 @@ abstract class WeTriedTls :
         val (seriesSlug, chapterSlug) = page.url.removePrefix(baseUrl).trim('/').split("/").let {
             it[it.size - 2] to it[it.size - 1]
         }
-        val response = client.newCall(GET("$apiUrl/chapter/$seriesSlug/$chapterSlug", headers)).execute()
+        val response = client.get("$apiUrl/chapter/$seriesSlug/$chapterSlug", headers)
         return response.parseAs<ChapterContentResponse>().chapter.chapterContent.orEmpty()
     }
 

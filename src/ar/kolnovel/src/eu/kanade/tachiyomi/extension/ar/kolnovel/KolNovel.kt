@@ -1,9 +1,9 @@
 package eu.kanade.tachiyomi.novelextension.ar.kolnovel
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Page
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 
 /**
  * Kol Novel uses CSS style-based obfuscation to hide spam paragraphs.
@@ -14,7 +14,7 @@ abstract class KolNovel : LightNovelWPNovel() {
     override val reverseChapters = true
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        val response = client.get(baseUrl + page.url, headers)
         val doc = response.asJsoup()
 
         // Remove code blocks

@@ -1,11 +1,11 @@
 package eu.kanade.tachiyomi.novelextension.en.systemtranslation
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import okhttp3.Headers
 
 @Source
@@ -16,7 +16,7 @@ abstract class SystemTranslation : LightNovelWPNovel() {
     // Latest updates from homepage
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val url = if (page == 1) baseUrl else "$baseUrl/page/$page/"
-        val response = client.newCall(GET(url, headers)).execute()
+        val response = client.get(url, headers)
         val doc = response.asJsoup()
 
         // Parse latest novels from homepage using div.listupd article.bs structure

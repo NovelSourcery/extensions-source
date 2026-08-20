@@ -4,7 +4,6 @@ import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.CheckBoxPreference
 import androidx.preference.PreferenceScreen
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
@@ -15,20 +14,18 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
-import okhttp3.Request
 import okhttp3.Response
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.net.URLEncoder
-import java.text.SimpleDateFormat
-import java.util.Locale
-import java.util.TimeZone
+import kotlin.time.Instant
 
 @Source
 abstract class Wattpad :
@@ -54,19 +51,16 @@ abstract class Wattpad :
 
     // region Browse (Popular / Latest / Search)
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseStories(client.newCall(browseRequest("hot", page)).execute())
+    override suspend fun getPopularManga(page: Int): MangasPage = parseStories(client.get(browseUrl("hot", page), headers))
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseStories(client.newCall(browseRequest("new", page)).execute())
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseStories(client.get(browseUrl("new", page), headers))
 
-    private fun browseRequest(filter: String, page: Int, category: Int = 0): Request {
+    private fun browseUrl(filter: String, page: Int, category: Int = 0): String {
         val offset = (page - 1) * LIMIT
         val mature = if (includeMature) 1 else 0
         val categoryParam = if (category > 0) "&category=$category" else ""
-        return GET(
-            "$baseUrl/v4/stories?fields=stories(id,title,cover,url),total,nextUrl" +
-                "&filter=$filter&language=1&mature=$mature$categoryParam&limit=$LIMIT&offset=$offset",
-            headers,
-        )
+        return "$baseUrl/v4/stories?fields=stories(id,title,cover,url),total,nextUrl" +
+            "&filter=$filter&language=1&mature=$mature$categoryParam&limit=$LIMIT&offset=$offset"
     }
 
     private fun parseStories(response: Response): MangasPage {
@@ -82,18 +76,15 @@ abstract class Wattpad :
         if (query.isBlank()) {
             val category = filters.filterIsInstance<CategoryFilter>().firstOrNull()?.selectedId ?: 0
             val sort = if (completed) "complete" else filters.filterIsInstance<SortFilter>().firstOrNull()?.value ?: "hot"
-            return parseStories(client.newCall(browseRequest(sort, page, category)).execute())
+            return parseStories(client.get(browseUrl(sort, page, category), headers))
         }
 
         val offset = (page - 1) * LIMIT
         val statusParam = if (completed) "&filter=complete" else ""
         val q = URLEncoder.encode(query, "UTF-8")
-        val request = GET(
-            "$baseUrl/v4/search/stories?query=$q$statusParam&free=1" +
-                "&fields=stories(title,cover,url),nextUrl&limit=$LIMIT&mature=true&offset=$offset",
-            headers,
-        )
-        return parseStories(client.newCall(request).execute())
+        val url = "$baseUrl/v4/search/stories?query=$q$statusParam&free=1" +
+            "&fields=stories(title,cover,url),nextUrl&limit=$LIMIT&mature=true&offset=$offset"
+        return parseStories(client.get(url, headers))
     }
 
     // endregion
@@ -106,7 +97,7 @@ abstract class Wattpad :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
-        val response = client.newCall(storyInfoRequest(path)).execute()
+        val response = client.get(storyInfoUrl(path), headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val story = json.decodeFromString<StoryDetails>(response.body.string())
         return parseMangaDetails(story).apply { this.url = mangaPath.slug(path) }
@@ -117,13 +108,10 @@ abstract class Wattpad :
         return if (partId != null) "$baseUrl/$partId" else baseUrl
     }
 
-    private fun storyInfoRequest(mangaUrl: String): Request {
+    private fun storyInfoUrl(mangaUrl: String): String {
         val id = storyId(mangaUrl)
-        return GET(
-            "$baseUrl/api/v3/stories/$id?fields=id,title,description,cover,completed," +
-                "isPaywalled,user(name,fullname),tags,parts(id,title,createDate,restricted)",
-            headers,
-        )
+        return "$baseUrl/api/v3/stories/$id?fields=id,title,description,cover,completed," +
+            "isPaywalled,user(name,fullname),tags,parts(id,title,createDate,restricted)"
     }
 
     private fun storyId(mangaUrl: String): String = STORY_ID_REGEX.find(mangaUrl)?.groupValues?.get(1)
@@ -136,7 +124,7 @@ abstract class Wattpad :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and chapters both come from the same story-info endpoint - fetch it once.
-        val story = json.decodeFromString<StoryDetails>(client.newCall(storyInfoRequest(mangaPath.resolve(manga.url))).execute().body.string())
+        val story = json.decodeFromString<StoryDetails>(client.get(storyInfoUrl(mangaPath.resolve(manga.url)), headers).body.string())
 
         val updatedManga = if (fetchDetails) parseMangaDetails(story) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(story) else chapters
@@ -167,11 +155,7 @@ abstract class Wattpad :
         }.reversed()
     }
 
-    private fun parseDate(dateStr: String): Long = try {
-        DATE_FORMAT.parse(dateStr)?.time ?: 0L
-    } catch (_: Exception) {
-        0L
-    }
+    private fun parseDate(dateStr: String): Long = Instant.parseOrNull(dateStr)?.toEpochMilliseconds() ?: 0L
 
     // endregion
 
@@ -181,7 +165,7 @@ abstract class Wattpad :
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val html = client.newCall(GET(url, headers)).execute().body.string()
+        val html = client.get(url, headers).body.string()
         if (html.trimStart().startsWith("{\"result\":\"ERROR\"")) {
             return "<p>This chapter is locked or unavailable.</p>"
         }
@@ -294,9 +278,6 @@ abstract class Wattpad :
         private const val PREF_EXCLUDE_LOCKED = "wattpad_exclude_locked"
         private val STORY_ID_REGEX = Regex("""/(?:story/)?(\d+)""")
         private val PART_ID_REGEX = Regex("""id=(\d+)""")
-        private val DATE_FORMAT = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
-            timeZone = TimeZone.getTimeZone("UTC")
-        }
 
         // id values from https://api.wattpad.com/v4/categories
         private val CATEGORIES = listOf(

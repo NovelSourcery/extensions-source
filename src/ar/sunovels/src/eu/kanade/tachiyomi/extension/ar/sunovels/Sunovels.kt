@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.coroutines.async
@@ -30,7 +31,7 @@ abstract class Sunovels :
      * pre-existing full-path entry and is resolved unchanged. */
     private val mangaPath = SlugPath("/novel/")
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parsePopularOrLatestResponse(client.newCall(GET("$baseUrl/library?page=$page", headers)).execute())
+    override suspend fun getPopularManga(page: Int): MangasPage = parsePopularOrLatestResponse(client.get("$baseUrl/library?page=$page", headers))
 
     private fun parsePopularOrLatestResponse(response: Response): MangasPage {
         val body = response.body?.string() ?: return MangasPage(emptyList(), false)
@@ -80,11 +81,11 @@ abstract class Sunovels :
         return MangasPage(novels.distinctBy { it.url }, hasNextPage)
     }
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parsePopularOrLatestResponse(client.newCall(GET("$baseUrl/library?page=$page&sort=latest", headers)).execute())
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parsePopularOrLatestResponse(client.get("$baseUrl/library?page=$page&sort=latest", headers))
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val q = java.net.URLEncoder.encode(query, "UTF-8")
-        val response = client.newCall(GET("$baseUrl/search/?title=$q&page=$page", headers)).execute()
+        val response = client.get("$baseUrl/search/?title=$q&page=$page", headers)
         val body = response.body?.string() ?: return MangasPage(emptyList(), false)
         val doc = Jsoup.parse(body, response.request.url.toString())
         val novels = mutableListOf<SManga>()
@@ -146,12 +147,18 @@ abstract class Sunovels :
         fetchChapters: Boolean,
     ): SMangaUpdate = coroutineScope {
         val detailsDeferred = if (fetchDetails) {
-            async { parseMangaDetails(client.newCall(buildMangaDetailsRequest(manga)).execute()) }
+            async {
+                val request = buildMangaDetailsRequest(manga)
+                parseMangaDetails(client.get(request.url, request.headers))
+            }
         } else {
             null
         }
         val chaptersDeferred = if (fetchChapters) {
-            async { parseChapterList(client.newCall(buildChapterListRequest(manga)).execute()) }
+            async {
+                val request = buildChapterListRequest(manga)
+                parseChapterList(client.get(request.url, request.headers))
+            }
         } else {
             null
         }
@@ -319,18 +326,19 @@ abstract class Sunovels :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = mangaPath.slug(url.encodedPath)
         val manga = SManga.create().apply { this.url = path }
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val request = buildMangaDetailsRequest(manga)
+        val response = client.get(request.url, request.headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response).apply { this.url = path }
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        val response = client.get(baseUrl + chapter.url, headers)
         return listOf(Page(0, response.request.url.encodedPath))
     }
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET("$baseUrl${page.url}", headers)).execute()
+        val response = client.get("$baseUrl${page.url}", headers)
         val doc = response.asJsoup()
         val content = doc.selectFirst(
             ".chapter-content, .content, .entry-content, .post-content, article, .text",

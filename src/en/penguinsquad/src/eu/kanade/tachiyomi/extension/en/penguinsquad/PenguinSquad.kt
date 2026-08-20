@@ -15,6 +15,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.extractNextJs
@@ -27,9 +28,10 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Element
-import java.text.SimpleDateFormat
+import java.time.LocalDateTime
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.util.Locale
-import java.util.TimeZone
 
 @Source
 abstract class PenguinSquad :
@@ -56,12 +58,16 @@ abstract class PenguinSquad :
 
     protected open fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/novels", headers)
 
-    override suspend fun getPopularManga(page: Int): MangasPage = MangasPage(client.newCall(buildPopularMangaRequest(page)).execute().asJsoup().parseNovelCards(), false)
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val popularRequest = buildPopularMangaRequest(page)
+        return MangasPage(client.get(popularRequest.url, popularRequest.headers).asJsoup().parseNovelCards(), false)
+    }
 
     protected open fun buildLatestUpdatesRequest(page: Int): Request = GET(baseUrl, headers)
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val doc = client.newCall(buildLatestUpdatesRequest(page)).execute().asJsoup()
+        val latestRequest = buildLatestUpdatesRequest(page)
+        val doc = client.get(latestRequest.url, latestRequest.headers).asJsoup()
         val section = doc.select("section")
             .firstOrNull { it.selectFirst("h2")?.ownText() == "Newly Added" }
             ?: doc
@@ -84,7 +90,8 @@ abstract class PenguinSquad :
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val response = client.newCall(buildSearchMangaRequest(page, query, filters)).execute()
+        val searchRequest = buildSearchMangaRequest(page, query, filters)
+        val response = client.get(searchRequest.url, searchRequest.headers)
         val cards = response.asJsoup().parseNovelCards()
             .filter { query.isBlank() || it.title.contains(query, ignoreCase = true) }
         return MangasPage(cards, false)
@@ -111,7 +118,8 @@ abstract class PenguinSquad :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list both live on the same novel page - fetch it once.
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val mangaDetailsRequest = buildMangaDetailsRequest(manga)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers)
         val doc = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc, response) else manga
@@ -151,7 +159,8 @@ abstract class PenguinSquad :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val mangaDetailsRequest = buildMangaDetailsRequest(manga)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.asJsoup(), response)
     }
@@ -195,16 +204,16 @@ abstract class PenguinSquad :
             .sortedByDescending { it.chapter_number }
     }
 
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).apply {
-        timeZone = TimeZone.getTimeZone("UTC")
-    }
+    private val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
 
     // published_at looks like "2024-10-06T00:00:00+00:00", sometimes with millis.
     // Offsets are always +00:00, so parse the date-time part as UTC.
     private fun parseDate(date: String?): Long {
         if (date.isNullOrBlank()) return 0L
         val normalized = date.substringBefore('+').substringBefore('.')
-        return runCatching { dateFormat.parse(normalized)?.time }.getOrNull() ?: 0L
+        return runCatching {
+            LocalDateTime.parse(normalized, dateFormatter).atZone(ZoneOffset.UTC).toInstant().toEpochMilli()
+        }.getOrDefault(0L)
     }
 
     // ---- Chapter content ----
@@ -212,7 +221,7 @@ abstract class PenguinSquad :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        val response = client.get(baseUrl + page.url, headers)
         val content = response.asJsoup().selectFirst("div.reader-content")
             ?: throw Exception("Chapter content not found – this may be a premium chapter")
         return content.html()

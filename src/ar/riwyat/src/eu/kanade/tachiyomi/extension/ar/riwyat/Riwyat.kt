@@ -7,6 +7,7 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SManga
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import okhttp3.Headers
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
@@ -79,11 +80,20 @@ abstract class Riwyat : MadaraNovel() {
         .headers(mobileHeaders())
         .build()
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseCeneleNovels(client.newCall(buildPopularMangaRequest(page)).execute().asJsoup())
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val request = buildPopularMangaRequest(page)
+        return parseCeneleNovels(client.get(request.url, request.headers).asJsoup())
+    }
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseCeneleNovels(client.newCall(buildLatestUpdatesRequest(page)).execute().asJsoup())
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val request = buildLatestUpdatesRequest(page)
+        return parseCeneleNovels(client.get(request.url, request.headers).asJsoup())
+    }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseCeneleNovels(client.newCall(buildSearchMangaRequest(page, query, filters)).execute().asJsoup())
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val request = buildSearchMangaRequest(page, query, filters)
+        return parseCeneleNovels(client.get(request.url, request.headers).asJsoup())
+    }
 
     override fun buildChapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, mobileHeaders())
 
@@ -138,7 +148,7 @@ abstract class Riwyat : MadaraNovel() {
 
     override suspend fun fetchPageText(page: Page): String {
         val pageUrl = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val response = client.newCall(GET(pageUrl, headers)).execute()
+        val response = client.get(pageUrl, headers)
         val doc = response.asJsoup()
 
         val contentElement = doc.selectFirst(".reading-content.current .text-left")

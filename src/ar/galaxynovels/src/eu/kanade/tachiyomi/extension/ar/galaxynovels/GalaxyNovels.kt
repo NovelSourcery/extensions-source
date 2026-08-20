@@ -11,11 +11,13 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
@@ -76,7 +78,10 @@ abstract class GalaxyNovels :
         return GET(url, headers)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelList(client.newCall(buildPopularMangaRequest(page)).execute())
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val request = buildPopularMangaRequest(page)
+        return parseNovelList(client.get(request.url, request.headers))
+    }
 
     private fun buildLatestUpdatesRequest(page: Int): Request {
         val url = "$baseUrl/recent/".toHttpUrl().newBuilder()
@@ -85,7 +90,10 @@ abstract class GalaxyNovels :
         return GET(url, headers)
     }
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelList(client.newCall(buildLatestUpdatesRequest(page)).execute())
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val request = buildLatestUpdatesRequest(page)
+        return parseNovelList(client.get(request.url, request.headers))
+    }
 
     private fun parseNovelList(response: Response): MangasPage {
         val doc = response.asJsoup()
@@ -148,7 +156,8 @@ abstract class GalaxyNovels :
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val response = client.newCall(buildSearchMangaRequest(page, query, filters)).execute()
+        val searchRequest = buildSearchMangaRequest(page, query, filters)
+        val response = client.get(searchRequest.url, searchRequest.headers)
         val doc = response.asJsoup()
 
         val novels = doc.select("article.wor-library-card, article.wor-novel-card").mapNotNull { card ->
@@ -182,7 +191,7 @@ abstract class GalaxyNovels :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
-        val response = client.newCall(GET(url, headers)).execute()
+        val response = client.get(url, headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         return parseMangaDetails(doc).apply { this.url = path }
@@ -232,7 +241,7 @@ abstract class GalaxyNovels :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val doc = client.newCall(GET(baseUrl + manga.url, headers)).execute().asJsoup()
+        val doc = client.get(baseUrl + manga.url, headers).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) fetchChapterList(manga, doc) else chapters
@@ -240,14 +249,14 @@ abstract class GalaxyNovels :
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private fun fetchChapterList(manga: SManga, doc: org.jsoup.nodes.Document): List<SChapter> {
+    private suspend fun fetchChapterList(manga: SManga, doc: org.jsoup.nodes.Document): List<SChapter> {
         val novelId = doc.selectFirst("[data-novel-id]")?.attr("data-novel-id")
             ?: doc.selectFirst("[data-wor-current-novel]")?.attr("data-novel-id")
 
         val response = if (novelId != null) {
-            client.newCall(GET("$baseUrl/wp-content/uploads/wor-reader-cache/chapters/novel-$novelId.json", headers)).execute()
+            client.get("$baseUrl/wp-content/uploads/wor-reader-cache/chapters/novel-$novelId.json", headers)
         } else {
-            client.newCall(GET(baseUrl + manga.url, headers)).execute()
+            client.get(baseUrl + manga.url, headers)
         }
         val body = response.body.string()
 
@@ -312,7 +321,7 @@ abstract class GalaxyNovels :
     // ======================== Chapter Content ========================
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        val response = client.get(baseUrl + chapter.url, headers)
         return listOf(Page(0, response.request.url.encodedPath))
     }
 
@@ -323,22 +332,21 @@ abstract class GalaxyNovels :
             baseUrl + page.url
         }
 
-        val request = Request.Builder()
-            .url(url)
-            .header("Cookie", "wor_reader_js=1")
-            .header("Referer", "$baseUrl/")
-            .header(
+        val requestHeaders = Headers.Builder()
+            .add("Cookie", "wor_reader_js=1")
+            .add("Referer", "$baseUrl/")
+            .add(
                 "Accept",
                 "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             )
-            .header("Accept-Language", "ar,en-US;q=0.7,en;q=0.3")
-            .header("Sec-Fetch-Dest", "document")
-            .header("Sec-Fetch-Mode", "navigate")
-            .header("Sec-Fetch-Site", "same-origin")
-            .header("Upgrade-Insecure-Requests", "1")
+            .add("Accept-Language", "ar,en-US;q=0.7,en;q=0.3")
+            .add("Sec-Fetch-Dest", "document")
+            .add("Sec-Fetch-Mode", "navigate")
+            .add("Sec-Fetch-Site", "same-origin")
+            .add("Upgrade-Insecure-Requests", "1")
             .build()
 
-        val response = client.newCall(request).execute()
+        val response = client.get(url, requestHeaders)
         val doc = response.asJsoup()
 
         val content = doc.selectFirst(
@@ -411,12 +419,12 @@ abstract class GalaxyNovels :
     // ======================== Data Classes ========================
 
     @Serializable
-    data class ChaptersResponse(
+    class ChaptersResponse(
         val chapters: List<ChapterData> = emptyList(),
     )
 
     @Serializable
-    data class ChapterData(
+    class ChapterData(
         val id: Long = 0,
         val position: Int = 0,
         val number: String = "",

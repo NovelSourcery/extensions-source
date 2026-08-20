@@ -3,7 +3,6 @@ package eu.kanade.tachiyomi.novelextension.en.royalroad
 import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
@@ -15,6 +14,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.serialization.Serializable
@@ -23,12 +23,12 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Request
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
+import kotlin.time.Instant
 
 @Source
 abstract class RoyalRoad :
@@ -54,7 +54,7 @@ abstract class RoyalRoad :
 
     // Novel source implementation
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)).execute()
+        val response = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
         val body = response.body.string()
         val url = response.request.url.toString()
 
@@ -186,23 +186,23 @@ abstract class RoyalRoad :
     }
 
     // Popular novels
-    protected open fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/fictions/search?page=$page&orderBy=popularity", headers)
+    protected open fun buildPopularMangaUrl(page: Int): String = "$baseUrl/fictions/search?page=$page&orderBy=popularity"
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val doc = client.newCall(buildPopularMangaRequest(page)).execute().asJsoup()
+        val doc = client.get(buildPopularMangaUrl(page), headers).asJsoup()
         return parseNovelsFromSearch(doc)
     }
 
     // Latest updates
-    protected open fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/fictions/search?page=$page&orderBy=last_update", headers)
+    protected open fun buildLatestUpdatesUrl(page: Int): String = "$baseUrl/fictions/search?page=$page&orderBy=last_update"
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val doc = client.newCall(buildLatestUpdatesRequest(page)).execute().asJsoup()
+        val doc = client.get(buildLatestUpdatesUrl(page), headers).asJsoup()
         return parseNovelsFromSearch(doc)
     }
 
     // Search
-    protected open fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    protected open fun buildSearchMangaUrl(page: Int, query: String, filters: FilterList): String {
         val params = mutableMapOf<String, String>()
         params["page"] = page.toString()
 
@@ -308,7 +308,7 @@ abstract class RoyalRoad :
             urlBuilder.addQueryParameter(key, value)
         }
 
-        return GET(urlBuilder.build().toString(), headers)
+        return urlBuilder.build().toString()
     }
 
     private fun MutableMap<String, String>.appendList(key: String, value: String) {
@@ -317,7 +317,7 @@ abstract class RoyalRoad :
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val doc = client.newCall(buildSearchMangaRequest(page, query, filters)).execute().asJsoup()
+        val doc = client.get(buildSearchMangaUrl(page, query, filters), headers).asJsoup()
         return parseNovelsFromSearch(doc)
     }
 
@@ -377,7 +377,7 @@ abstract class RoyalRoad :
     }
 
     // Manga details + Chapters
-    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPath.resolve(manga.url), headers)
+    protected open fun buildMangaDetailsUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -386,7 +386,7 @@ abstract class RoyalRoad :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list script both live on the same fiction page - fetch it once.
-        val doc = client.newCall(buildMangaDetailsRequest(manga)).execute().asJsoup()
+        val doc = client.get(buildMangaDetailsUrl(manga), headers).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
@@ -471,24 +471,19 @@ abstract class RoyalRoad :
         }
     }
 
-    private fun parseDate(dateString: String): Long = try {
-        java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
-            .parse(dateString)?.time ?: 0L
-    } catch (e: Exception) {
-        0L
-    }
+    private fun parseDate(dateString: String): Long = Instant.parseOrNull(dateString)?.toEpochMilliseconds() ?: 0L
 
     // Page list - return single page with the chapter URL
     override suspend fun getPageList(chapter: SChapter): List<Page> {
         // chapter.url already contains 'fiction/' prefix, e.g., 'fiction/137985/chapter/12345678'
-        val response = client.newCall(GET(absoluteUrl(chapter.url), headers)).execute()
+        val response = client.get(absoluteUrl(chapter.url), headers)
         return listOf(Page(0, response.request.url.toString(), null))
     }
 
     override fun getMangaUrl(manga: SManga): String = absoluteUrl(mangaPath.resolve(manga.url))
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.newCall(GET(url, headers)).execute()
+        val response = client.get(url, headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         return parseMangaDetails(doc).apply { this.url = mangaPath.slug(url.encodedPath) }

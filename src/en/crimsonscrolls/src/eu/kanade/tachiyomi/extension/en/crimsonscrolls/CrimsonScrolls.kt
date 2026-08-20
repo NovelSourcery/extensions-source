@@ -13,7 +13,9 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.formattedText
@@ -24,12 +26,12 @@ import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.Jsoup
-import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
-import java.text.SimpleDateFormat
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 @Source
@@ -46,7 +48,7 @@ abstract class CrimsonScrolls :
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
 
-    private val dateFormat = SimpleDateFormat("MMMM d, yyyy", Locale.US)
+    private val dateFormat = DateTimeFormatter.ofPattern("MMMM d, yyyy", Locale.US)
 
     /** [SManga.url] stored as bare slug under "/novel/"; a stored value starting with "/" is a
      * pre-existing full-path entry and is resolved unchanged. */
@@ -63,7 +65,7 @@ abstract class CrimsonScrolls :
     // Browse
 
     private fun parseBrowse(response: Response): MangasPage {
-        val doc = Jsoup.parse(response.body.string(), baseUrl)
+        val doc = response.asJsoup()
         val mangas = doc.select("article.cs-browse-card").mapNotNull { card ->
             val link = card.selectFirst(".cs-browse-card__body h2 a, a.cs-browse-card__cover")
                 ?: return@mapNotNull null
@@ -82,7 +84,7 @@ abstract class CrimsonScrolls :
         return MangasPage(mangas, hasNextPage = false)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseBrowse(client.newCall(GET("$baseUrl/novels/recently-updated/", headers)).execute())
+    override suspend fun getPopularManga(page: Int): MangasPage = parseBrowse(client.get("$baseUrl/novels/recently-updated/", headers))
 
     override suspend fun getLatestUpdates(page: Int): MangasPage = getPopularManga(page)
 
@@ -90,7 +92,7 @@ abstract class CrimsonScrolls :
         val url = "$baseUrl/novels/".toHttpUrl().newBuilder()
             .addQueryParameter("s", query)
             .build()
-        return parseBrowse(client.newCall(GET(url, headers)).execute())
+        return parseBrowse(client.get(url, headers))
     }
 
     // Details + Chapters
@@ -104,7 +106,8 @@ abstract class CrimsonScrolls :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list both live on the same novel page - fetch it once.
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val detailsRequest = buildMangaDetailsRequest(manga)
+        val response = client.get(detailsRequest.url, detailsRequest.headers)
 
         val updatedManga = if (fetchDetails) parseMangaDetails(response) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(response) else chapters
@@ -113,7 +116,7 @@ abstract class CrimsonScrolls :
     }
 
     private fun parseMangaDetails(response: Response): SManga {
-        val doc = Jsoup.parse(response.body.string(), baseUrl)
+        val doc = response.asJsoup()
         return SManga.create().apply {
             title = doc.selectFirst("h1")?.text().orEmpty()
             thumbnail_url = doc.selectFirst(".cs-cover img")?.let {
@@ -149,8 +152,8 @@ abstract class CrimsonScrolls :
         val date: String = "",
     )
 
-    private fun parseChapterList(response: Response): List<SChapter> {
-        val doc = Jsoup.parse(response.body.string(), baseUrl)
+    private suspend fun parseChapterList(response: Response): List<SChapter> {
+        val doc = response.asJsoup()
         val novelId = doc.selectFirst("[data-novel-chapters]")?.attr("data-novel-chapters")
             ?.takeIf { it.isNotBlank() } ?: return emptyList()
 
@@ -169,7 +172,7 @@ abstract class CrimsonScrolls :
                     .build()
                 val data = runCatching {
                     json.decodeFromString<ChapterPage>(
-                        client.newCall(GET(apiUrl, headers)).execute().body.string(),
+                        client.get(apiUrl, headers).body.string(),
                     )
                 }.getOrNull() ?: break
 
@@ -194,7 +197,7 @@ abstract class CrimsonScrolls :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
-        val response = client.newCall(GET(baseUrl + path, headers)).execute()
+        val response = client.get(baseUrl + path, headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response).apply { setSlugUrl(mangaPath, path) }
     }
@@ -202,13 +205,13 @@ abstract class CrimsonScrolls :
     // Pages / Content
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        val response = client.get(baseUrl + chapter.url, headers)
         return listOf(Page(0, response.request.url.encodedPath))
     }
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val doc = client.newCall(GET(url, headers)).execute().asJsoup()
+        val doc = client.get(url, headers).asJsoup()
         val article = doc.selectFirst("article.cs-reader") ?: doc.selectFirst("#chapter-display") ?: return ""
         // Strip reader chrome, ads, tier gate, comments and inline copy-protection watermarks,
         // leaving only the story paragraphs.
@@ -220,11 +223,11 @@ abstract class CrimsonScrolls :
         return article.formattedText()
     }
 
-    private fun Response.asJsoup(): Document = Jsoup.parse(body.string(), request.url.toString())
-
     private fun parseDate(date: String): Long {
         if (date.isBlank()) return 0L
-        return runCatching { dateFormat.parse(date)?.time ?: 0L }.getOrDefault(0L)
+        return runCatching {
+            LocalDate.parse(date, dateFormat).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        }.getOrDefault(0L)
     }
 
     // Settings

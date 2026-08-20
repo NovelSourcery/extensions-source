@@ -3,8 +3,6 @@ package eu.kanade.tachiyomi.novelextension.en.scribblehub
 import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
-import eu.kanade.tachiyomi.network.GET
-import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
@@ -16,13 +14,14 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.network.post
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.JsonElement
 import okhttp3.FormBody
 import okhttp3.Headers
 import okhttp3.HttpUrl
-import okhttp3.Request
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
@@ -52,33 +51,32 @@ abstract class ScribbleHub :
     private val mangaPath = SlugPath("/series/")
 
     // Popular novels
-    protected open fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/series-finder/?sf=1&sort=ratings&order=desc&pg=$page", headers)
+    protected open fun buildPopularMangaUrl(page: Int): String = "$baseUrl/series-finder/?sf=1&sort=ratings&order=desc&pg=$page"
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val doc = client.newCall(buildPopularMangaRequest(page)).execute().asJsoup()
+        val doc = client.get(buildPopularMangaUrl(page), headers).asJsoup()
         return parseNovelsFromSearch(doc)
     }
 
     // Latest updates
-    protected open fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/latest-series/?pg=$page", headers)
+    protected open fun buildLatestUpdatesUrl(page: Int): String = "$baseUrl/latest-series/?pg=$page"
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val doc = client.newCall(buildLatestUpdatesRequest(page)).execute().asJsoup()
+        val doc = client.get(buildLatestUpdatesUrl(page), headers).asJsoup()
         return parseNovelsFromSearch(doc)
     }
 
     // Search
-    protected open fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request = if (query.isNotEmpty()) {
+    protected open fun buildSearchMangaUrl(page: Int, query: String, filters: FilterList): String = if (query.isNotEmpty()) {
         // Text search - ScribbleHub uses 'pgi' for text search pagination
-        GET("$baseUrl/?s=${query.replace(" ", "+")}&post_type=fictionposts&pgi=$page", headers)
+        "$baseUrl/?s=${query.replace(" ", "+")}&post_type=fictionposts&pgi=$page"
     } else {
         // Filter search - uses pg parameter
-        val url = buildFilterUrl(page, filters)
-        GET(url, headers)
+        buildFilterUrl(page, filters)
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val doc = client.newCall(buildSearchMangaRequest(page, query, filters)).execute().asJsoup()
+        val doc = client.get(buildSearchMangaUrl(page, query, filters), headers).asJsoup()
         return parseNovelsFromSearch(doc)
     }
 
@@ -124,7 +122,7 @@ abstract class ScribbleHub :
     }
 
     // Manga details + Chapters
-    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPath.resolve(manga.url), headers)
+    protected open fun buildMangaDetailsUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -133,7 +131,7 @@ abstract class ScribbleHub :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list (via novel id) both come from the same novel page.
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val response = client.get(buildMangaDetailsUrl(manga), headers)
         val doc = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
@@ -170,7 +168,7 @@ abstract class ScribbleHub :
         description = doc.select(".wi_fic_desc").text()
     }
 
-    private fun fetchChapterList(doc: Document, urlPath: String): List<SChapter> {
+    private suspend fun fetchChapterList(doc: Document, urlPath: String): List<SChapter> {
         // Extract novel ID from the page - try multiple methods
         val novelId = extractNovelId(doc, urlPath)
         if (novelId.isEmpty()) return emptyList()
@@ -182,8 +180,7 @@ abstract class ScribbleHub :
             .add("mypostid", novelId)
             .build()
 
-        val chaptersRequest = POST("$baseUrl/wp-admin/admin-ajax.php", headers, formBody)
-        val chaptersResponse = client.newCall(chaptersRequest).execute()
+        val chaptersResponse = client.post("$baseUrl/wp-admin/admin-ajax.php", headers, formBody)
         val chaptersHtml = chaptersResponse.body.string()
 
         val chaptersDoc = Jsoup.parse(chaptersHtml)
@@ -254,7 +251,7 @@ abstract class ScribbleHub :
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.newCall(GET(url, headers)).execute()
+        val response = client.get(url, headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         return parseMangaDetails(doc).apply { this.url = mangaPath.slug(url.encodedPath) }
@@ -262,13 +259,13 @@ abstract class ScribbleHub :
 
     // Page list
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        val response = client.get(baseUrl + chapter.url, headers)
         return listOf(Page(0, response.request.url.toString(), null))
     }
 
     // Novel source implementation
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)).execute()
+        val response = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
         val body = response.body.string()
         val doc = Jsoup.parse(body, page.url)
 

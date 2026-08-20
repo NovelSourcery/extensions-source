@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.JsonElement
@@ -42,7 +43,8 @@ abstract class NovelHall :
     protected open fun buildPopularMangaRequest(page: Int): Request = GET(if (page <= 1) "$baseUrl/all2022.html" else "$baseUrl/all2022-$page.html", headers)
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val response = client.newCall(buildPopularMangaRequest(page)).execute()
+        val popularRequest = buildPopularMangaRequest(page)
+        val response = client.get(popularRequest.url, popularRequest.headers)
         val document = response.asJsoup()
         return parseNovelList(document, response.request.url.toString())
     }
@@ -96,7 +98,8 @@ abstract class NovelHall :
 
     // lastupdate.html is a single static page with no pagination.
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val response = client.newCall(buildLatestUpdatesRequest(page)).execute()
+        val latestRequest = buildLatestUpdatesRequest(page)
+        val response = client.get(latestRequest.url, latestRequest.headers)
         val document = response.asJsoup()
         return MangasPage(parseNovelList(document).mangas, false)
     }
@@ -137,7 +140,7 @@ abstract class NovelHall :
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val request = buildSearchMangaRequest(page, query, filters)
         val requestUrl = request.url.toString()
-        val response = client.newCall(request).execute()
+        val response = client.get(request.url, request.headers)
 
         if (requestUrl.contains("/genre/") || requestUrl.contains("/type/") ||
             requestUrl.contains("/lastupdate") || requestUrl.contains("all2022")
@@ -181,7 +184,8 @@ abstract class NovelHall :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list both live on the same novel page - fetch it once.
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val mangaDetailsRequest = buildMangaDetailsRequest(manga)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers)
         val document = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(document, response) else manga
@@ -252,7 +256,8 @@ abstract class NovelHall :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val mangaDetailsRequest = buildMangaDetailsRequest(manga)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val document = response.asJsoup()
         return parseMangaDetails(document, response)
@@ -260,13 +265,13 @@ abstract class NovelHall :
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
         val url = if (chapter.url.startsWith("http")) chapter.url else baseUrl + chapter.url
-        val response = client.newCall(GET(url, headers)).execute()
+        val response = client.get(url, headers)
         return listOf(Page(0, response.request.url.toString()))
     }
 
     override suspend fun fetchPageText(page: Page): String {
-        val request = GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
-        val response = client.newCall(request).execute()
+        val pageUrl = if (page.url.startsWith("http")) page.url else baseUrl + page.url
+        val response = client.get(pageUrl, headers)
         val document = response.asJsoup()
 
         // Parse chapter content from #htmlContent div

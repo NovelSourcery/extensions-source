@@ -13,6 +13,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -71,17 +72,23 @@ abstract class GenesisStudio :
         return GET(url, headers)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelsList(client.newCall(novelsListRequest()).execute(), null)
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val request = novelsListRequest()
+        return parseNovelsList(client.get(request.url, request.headers), null)
+    }
 
     // No separate "latest" feed exists (single unpaginated catalog call); supportsLatest is
     // false so this is never actually invoked, but KeiSource requires an implementation.
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelsList(client.newCall(novelsListRequest()).execute(), null)
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val request = novelsListRequest()
+        return parseNovelsList(client.get(request.url, request.headers), null)
+    }
 
     // The catalog is a single unpaginated call; the query rides in the URL fragment (never sent
     // over the wire) so parseNovelsList can filter client-side without a second request.
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val request = novelsListRequest().let { it.newBuilder().url(it.url.newBuilder().fragment(query).build()).build() }
-        return parseNovelsList(client.newCall(request).execute(), request.url.fragment)
+        return parseNovelsList(client.get(request.url, request.headers), request.url.fragment)
     }
 
     private fun parseNovelsList(response: Response, query: String?): MangasPage {
@@ -119,11 +126,13 @@ abstract class GenesisStudio :
     // class kdoc), so first look the slug up in the catalog to recover the packed manga.url.
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = url.encodedPath.substringAfter("/novels/", "").trim('/').takeIf { it.isNotBlank() } ?: return null
-        val listResponse = client.newCall(novelsListRequest()).execute()
+        val listRequest = novelsListRequest()
+        val listResponse = client.get(listRequest.url, listRequest.headers, ensureSuccess = false)
         if (!listResponse.isSuccessful) return null
         val matched = parseNovelsList(listResponse, null).mangas
             .firstOrNull { it.url.split('|').getOrNull(2) == slug } ?: return null
-        val response = client.newCall(buildMangaDetailsRequest(matched)).execute()
+        val detailsRequest = buildMangaDetailsRequest(matched)
+        val response = client.get(detailsRequest.url, detailsRequest.headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response)
     }
@@ -146,12 +155,18 @@ abstract class GenesisStudio :
     ): SMangaUpdate = coroutineScope {
         // Details and chapters live on different API endpoints - fire both concurrently.
         val detailsDeferred = if (fetchDetails) {
-            async { parseMangaDetails(client.newCall(buildMangaDetailsRequest(manga)).execute()) }
+            async {
+                val request = buildMangaDetailsRequest(manga)
+                parseMangaDetails(client.get(request.url, request.headers))
+            }
         } else {
             null
         }
         val chaptersDeferred = if (fetchChapters) {
-            async { parseChapterList(client.newCall(buildChapterListRequest(manga)).execute()) }
+            async {
+                val request = buildChapterListRequest(manga)
+                parseChapterList(client.get(request.url, request.headers))
+            }
         } else {
             null
         }
@@ -225,7 +240,7 @@ abstract class GenesisStudio :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, getChapterUrl(chapter)))
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(page.url, headers)).execute()
+        val response = client.get(page.url, headers)
         val html = response.body.string()
         val matches = PUSH_REGEX.findAll(html).map { it.groupValues[1] }.toList()
 

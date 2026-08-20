@@ -22,12 +22,13 @@ import keiyoushi.annotation.Source
 import keiyoushi.lib.chapterutils.checkCloudflare
 import keiyoushi.lib.chapterutils.paginatedChapterList
 import keiyoushi.lib.chapterutils.shouldReturnExisting
+import keiyoushi.network.get
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.toJsonString
-import keiyoushi.utils.tryParse
+import keiyoushi.utils.tryParseDateTime
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -42,7 +43,7 @@ import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.io.File
-import java.text.SimpleDateFormat
+import java.time.format.DateTimeFormatter
 
 /**
  * NovelFire novel source - ported from LN Reader plugin
@@ -74,7 +75,7 @@ abstract class NovelFire :
     override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = rateLimit(minimumDelayMillis, recommendedPermits)
 
     override val isNovelSource = true
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+    private val dateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
 
     // SharedPreferences for tag caching and settings
     private val preferences: SharedPreferences by lazy {
@@ -119,8 +120,8 @@ abstract class NovelFire :
      * Fetch all tags from the NovelFire AJAX endpoint and cache them.
      * Called lazily on first search that uses tags.
      */
-    private fun fetchAndCacheTags(): List<TagItem> = try {
-        val response = client.newCall(GET("$baseUrl/ajax/getTags?term=", headers)).execute()
+    private suspend fun fetchAndCacheTags(): List<TagItem> = try {
+        val response = client.get("$baseUrl/ajax/getTags?term=", headers)
         val tagResponse = response.body.string().parseAs<TagResponse>()
         val tags = tagResponse.data
         if (tags.isNotEmpty()) {
@@ -139,7 +140,7 @@ abstract class NovelFire :
      * Get tags, using cache if available, otherwise fetching from network.
      * Refreshes cache if older than 7 days.
      */
-    private fun getTags(): List<TagItem> {
+    private suspend fun getTags(): List<TagItem> {
         val cached = loadCachedTags()
         if (cached.isNotEmpty()) {
             val cacheTime = preferences.getLong(TAGS_CACHE_TIME_KEY, 0L)
@@ -211,7 +212,7 @@ abstract class NovelFire :
     override fun getChapterUrl(chapter: SChapter): String = absoluteUrl(chapter.url)
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(absoluteUrl(page.url), headers)).execute()
+        val response = client.get(absoluteUrl(page.url), headers)
         return parseChapterContent(response)
     }
 
@@ -222,8 +223,8 @@ abstract class NovelFire :
 
     // ======================== Popular/Browse/Search ========================
 
-    private fun fetchNovelList(request: Request): MangasPage {
-        val response = client.newCall(request).execute()
+    private suspend fun fetchNovelList(request: Request): MangasPage {
+        val response = client.get(request.url, request.headers)
         val doc = response.asJsoup()
         checkCloudflare(doc)
         return parseNovelList(doc)
@@ -235,7 +236,7 @@ abstract class NovelFire :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = fetchNovelList(buildSearchRequest(page, query, filters))
 
-    private fun buildSearchRequest(page: Int, query: String, filters: FilterList): Request {
+    private suspend fun buildSearchRequest(page: Int, query: String, filters: FilterList): Request {
         // If there's a search query, use the simple search endpoint
         if (query.isNotEmpty()) {
             return GET("$baseUrl/search?keyword=${java.net.URLEncoder.encode(query, "UTF-8")}&page=$page", headers)
@@ -366,7 +367,7 @@ abstract class NovelFire :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath.toNovelPath()
-        val response = client.newCall(GET(absoluteUrl(path), headers)).execute()
+        val response = client.get(absoluteUrl(path), headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         checkCloudflare(doc)
@@ -437,7 +438,7 @@ abstract class NovelFire :
     ): SMangaUpdate {
         // Manga details and the chapter list both live on the same novel page - fetch it once
         // regardless of which flag(s) are set, rather than issuing the request twice.
-        val response = client.newCall(GET(absoluteUrl(mangaPath.resolve(manga.url)), headers)).execute()
+        val response = client.get(absoluteUrl(mangaPath.resolve(manga.url)), headers)
         val doc = response.asJsoup()
         checkCloudflare(doc)
 
@@ -524,7 +525,7 @@ abstract class NovelFire :
         return null
     }
 
-    private fun getAllChaptersFromAjax(novelPath: String, postId: String): List<SChapter> {
+    private suspend fun getAllChaptersFromAjax(novelPath: String, postId: String): List<SChapter> {
         val timestamp = System.currentTimeMillis()
         val ajaxUrl = "$baseUrl/listChapterDataAjax".toHttpUrl().newBuilder()
             .addQueryParameter("post_id", postId)
@@ -556,7 +557,7 @@ abstract class NovelFire :
             .addQueryParameter("_", timestamp.toString())
             .build()
 
-        val response = client.newCall(GET(ajaxUrl.toString(), headers)).execute()
+        val response = client.get(ajaxUrl.toString(), headers)
         val responseBody = response.body.string()
 
         // Check for rate limiting
@@ -586,10 +587,10 @@ abstract class NovelFire :
     }
 
     /** Fetches and parses a single chapter-list page. Returns chapters (unsorted) and whether a next page exists. */
-    private fun fetchSingleHtmlPage(novelPath: String, page: Int): Pair<List<SChapter>, Boolean> {
+    private suspend fun fetchSingleHtmlPage(novelPath: String, page: Int): Pair<List<SChapter>, Boolean> {
         val pageUrl = "$baseUrl/$novelPath/chapters?page=$page"
         Log.d(TAG, "html fetch: GET $pageUrl")
-        val response = client.newCall(GET(pageUrl, headers)).execute()
+        val response = client.get(pageUrl, headers)
         val body = response.body.string()
         if (body.contains("You are being rate limited")) throw NovelFireThrottlingError()
         val doc = Jsoup.parse(body)
@@ -598,7 +599,7 @@ abstract class NovelFire :
             val linkElement = element.selectFirst("a") ?: return@mapNotNull null
             val chapterName = linkElement.attr("title").ifEmpty { linkElement.text() }
             val chapterUrl = linkElement.absUrl("href").ifEmpty { linkElement.attr("href") }
-            val chapterDate: Long = dateFormat.tryParse(
+            val chapterDate: Long = dateFormat.tryParseDateTime(
                 linkElement.selectFirst(".chapter-update[datetime]")?.attr("datetime"),
             )
             chapterUrl.takeIf { it.isNotEmpty() }?.let {

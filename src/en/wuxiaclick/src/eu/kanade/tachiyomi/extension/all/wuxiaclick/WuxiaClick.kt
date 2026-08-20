@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.novelextension.en.wuxiaclick
+﻿package eu.kanade.tachiyomi.novelextension.en.wuxiaclick
 
 import android.app.Application
 import android.content.SharedPreferences
@@ -15,6 +15,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -218,7 +219,10 @@ abstract class WuxiaClick :
         return MangasPage(novels, hasNextPage)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.newCall(buildPopularMangaRequest(page)).execute())
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val request = buildPopularMangaRequest(page)
+        return parseMangaListResponse(client.get(request.url, request.headers))
+    }
 
     // ======================== Latest ========================
 
@@ -228,7 +232,10 @@ abstract class WuxiaClick :
         return GET("$apiUrl/search/?search=&offset=$offset&limit=12&order=-last_chapter", headers)
     }
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(client.newCall(buildLatestUpdatesRequest(page)).execute())
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val request = buildLatestUpdatesRequest(page)
+        return parseMangaListResponse(client.get(request.url, request.headers))
+    }
 
     // ======================== Search ========================
 
@@ -331,7 +338,10 @@ abstract class WuxiaClick :
         return GET(url, headers)
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseMangaListResponse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val request = buildSearchMangaRequest(page, query, filters)
+        return parseMangaListResponse(client.get(request.url, request.headers))
+    }
 
     override fun getMangaUrl(manga: SManga): String {
         val slug = extractNovelSlug(manga.url)
@@ -367,8 +377,8 @@ abstract class WuxiaClick :
         )
     }
 
-    private fun fetchMangaDetails(slug: String): SManga {
-        val response = client.newCall(GET("$apiUrl/novels/$slug/", headers)).execute()
+    private suspend fun fetchMangaDetails(slug: String): SManga {
+        val response = client.get("$apiUrl/novels/$slug/", headers)
         val body = response.body.string()
         // Prefer parsing __NEXT_DATA__ if present
         val doc = org.jsoup.Jsoup.parse(body)
@@ -447,8 +457,8 @@ abstract class WuxiaClick :
         }
     }
 
-    private fun fetchChapterList(slug: String): List<SChapter> {
-        val response = client.newCall(GET("$apiUrl/chapters/$slug/", headers)).execute()
+    private suspend fun fetchChapterList(slug: String): List<SChapter> {
+        val response = client.get("$apiUrl/chapters/$slug/", headers)
         val chapters = json.decodeFromString<List<ChapterInfo>>(response.body.string())
 
         return chapters.map { chapter ->
@@ -465,15 +475,15 @@ abstract class WuxiaClick :
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
         val slug = chapter.url.removePrefix("/chapter/")
-        val response = client.newCall(GET("$apiUrl/getchapter/$slug/", headers)).execute()
+        val response = client.get("$apiUrl/getchapter/$slug/", headers)
         return listOf(Page(0, response.request.url.toString()))
     }
 
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val request = GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
-        val response = client.newCall(request).execute()
+        val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
+        val response = client.get(url, headers)
         val chapter = json.decodeFromString<ChapterContent>(response.body.string())
 
         val text = chapter.text
@@ -665,7 +675,7 @@ abstract class WuxiaClick :
     // ======================== Data Classes ========================
 
     @Serializable
-    data class SearchResponse(
+    class SearchResponse(
         val count: Int,
         val next: String? = null,
         val previous: String? = null,
@@ -673,7 +683,7 @@ abstract class WuxiaClick :
     )
 
     @Serializable
-    data class NovelSearchResult(
+    class NovelSearchResult(
         val name: String,
         val image: String? = null,
         val slug: String,
@@ -688,7 +698,7 @@ abstract class WuxiaClick :
     )
 
     @Serializable
-    data class NovelDetail(
+    class NovelDetail(
         val slug: String,
         val name: String,
         val description: String? = null,
@@ -713,20 +723,20 @@ abstract class WuxiaClick :
     }
 
     @Serializable
-    data class Author(
+    class Author(
         val name: String,
         val slug: String? = null,
     )
 
     @Serializable
-    data class Category(
+    class Category(
         val name: String,
         val slug: String,
         val title: String? = null,
     )
 
     @Serializable
-    data class Tag(
+    class Tag(
         val id: Int? = null,
         val name: String,
         val slug: String,
@@ -734,7 +744,7 @@ abstract class WuxiaClick :
     )
 
     @Serializable
-    data class ChapterInfo(
+    class ChapterInfo(
         val id: Int,
         val index: Int,
         val title: String,
@@ -743,7 +753,7 @@ abstract class WuxiaClick :
     )
 
     @Serializable
-    data class ChapterContent(
+    class ChapterContent(
         val index: Int? = null,
         val title: String,
         val text: String,

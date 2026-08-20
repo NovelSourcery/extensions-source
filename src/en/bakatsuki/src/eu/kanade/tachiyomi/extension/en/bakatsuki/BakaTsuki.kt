@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.parseAs
 import kotlinx.serialization.json.JsonArray
@@ -65,9 +66,15 @@ abstract class BakaTsuki :
         return MangasPage(mangas, cmcontinue != null)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseCategoryResponse(client.newCall(categoryRequest(page, "Category:Completed Project")).execute())
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val request = categoryRequest(page, "Category:Completed Project")
+        return parseCategoryResponse(client.get(request.url, request.headers))
+    }
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseCategoryResponse(client.newCall(categoryRequest(page, "Category:Active Projects")).execute())
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val request = categoryRequest(page, "Category:Active Projects")
+        return parseCategoryResponse(client.get(request.url, request.headers))
+    }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         if (query.isBlank()) return getPopularManga(page)
@@ -77,7 +84,7 @@ abstract class BakaTsuki :
             .addQueryParameter("limit", "50")
             .addQueryParameter("namespace", "0")
             .addQueryParameter("format", "json")
-        val array = client.newCall(GET(requestUrl.build(), headers)).execute().parseAs<JsonArray>()
+        val array = client.get(requestUrl.build(), headers).parseAs<JsonArray>()
         val titles = array.getOrNull(1)?.jsonArray ?: return MangasPage(emptyList(), false)
         val mangas = titles.mapNotNull { it.jsonPrimitive.content }
             .filter { !it.contains(":") }
@@ -107,7 +114,8 @@ abstract class BakaTsuki :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val title = url.queryParameter("title")?.replace(" ", "_") ?: return null
-        val response = client.newCall(parseRequest(title)).execute()
+        val request = parseRequest(title)
+        val response = client.get(request.url, request.headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response).apply { this.url = title }
     }
@@ -119,7 +127,8 @@ abstract class BakaTsuki :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list both come from the same MediaWiki "parse" call.
-        val response = client.newCall(parseRequest(manga.url)).execute()
+        val request = parseRequest(manga.url)
+        val response = client.get(request.url, request.headers)
 
         val updatedManga = if (fetchDetails) parseMangaDetails(response) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(response) else chapters
@@ -180,7 +189,8 @@ abstract class BakaTsuki :
     override fun getChapterUrl(chapter: SChapter): String = pagePrefix + chapter.url.replace(" ", "_")
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.newCall(parseRequest(chapter.url)).execute()
+        val request = parseRequest(chapter.url)
+        val response = client.get(request.url, request.headers)
         return listOf(Page(0, response.request.url.toString()))
     }
 
@@ -190,7 +200,8 @@ abstract class BakaTsuki :
         } else {
             page.url
         }
-        val result = client.newCall(parseRequest(title)).execute().parseAs<ParseResponse>().orThrow(title)
+        val request = parseRequest(title)
+        val result = client.get(request.url, request.headers).parseAs<ParseResponse>().orThrow(title)
         val doc = Jsoup.parse(result.text.content, "$baseUrl/project/")
         doc.select(".wikitable, .mw-editsection, .printfooter, #toc, .toc, .navbox, .reference, style, script").remove()
         doc.select("img").forEach { img ->

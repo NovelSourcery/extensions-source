@@ -8,7 +8,9 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.serialization.decodeFromString
@@ -52,8 +54,9 @@ abstract class FlameComics :
     private val buildIdLock = Any()
 
     private fun fetchBuildId(): String {
-        val html = client.newCall(GET(baseUrl, headers)).execute().use { it.body.string() }
-        val nextData = Jsoup.parse(html).selectFirst("#__NEXT_DATA__")?.data()
+        // Stays synchronous: called from buildIdOutdatedInterceptor, a synchronous OkHttp Interceptor.
+        val response = client.newCall(GET(baseUrl, headers)).execute()
+        val nextData = response.asJsoup().selectFirst("#__NEXT_DATA__")?.data()
             ?: throw Exception("Could not find __NEXT_DATA__")
         return json.parseToJsonElement(nextData).jsonObject["buildId"]
             ?.jsonPrimitive?.contentOrNull
@@ -125,17 +128,20 @@ abstract class FlameComics :
     }
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val novels = novelsFrom(client.newCall(browseRequest()).execute()).sortedByDescending { it.likes ?: 0 }
+        val request = browseRequest()
+        val novels = novelsFrom(client.get(request.url, request.headers)).sortedByDescending { it.likes ?: 0 }
         return MangasPage(novels.map { it.toSManga() }, false)
     }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val novels = novelsFrom(client.newCall(browseRequest()).execute()).sortedByDescending { it.last_edit ?: 0L }
+        val request = browseRequest()
+        val novels = novelsFrom(client.get(request.url, request.headers)).sortedByDescending { it.last_edit ?: 0L }
         return MangasPage(novels.map { it.toSManga() }, false)
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val response = client.newCall(searchBrowseRequest(query)).execute()
+        val request = searchBrowseRequest(query)
+        val response = client.get(request.url, request.headers)
         val requestedQuery = response.request.url.fragment.orEmpty()
         val novels = novelsFrom(response).filter { it.title.contains(requestedQuery, ignoreCase = true) }
         return MangasPage(novels.map { it.toSManga() }, false)
@@ -147,7 +153,8 @@ abstract class FlameComics :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val request = buildMangaDetailsRequest(manga)
+        val response = client.get(request.url, request.headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val data = json.decodeFromString<NovelDetailsPageData>(response.body.string()).pageProps
         return parseMangaDetails(data.novels).apply { this.url = manga.url }
@@ -164,7 +171,8 @@ abstract class FlameComics :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list both come from the same novel page - fetch it once.
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val request = buildMangaDetailsRequest(manga)
+        val response = client.get(request.url, request.headers)
         val data = json.decodeFromString<NovelDetailsPageData>(response.body.string()).pageProps
 
         val updatedManga = if (fetchDetails) parseMangaDetails(data.novels) else manga
@@ -225,7 +233,7 @@ abstract class FlameComics :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(dataApiUrl("${page.url}.json"), headers)).execute()
+        val response = client.get(dataApiUrl("${page.url}.json"), headers)
         val data = json.decodeFromString<ChapterContentPageData>(response.body.string()).pageProps.chapter
         return data.content
     }

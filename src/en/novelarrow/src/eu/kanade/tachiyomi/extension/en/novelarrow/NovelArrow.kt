@@ -9,7 +9,9 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.serialization.decodeFromString
@@ -19,7 +21,6 @@ import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.Jsoup
 
 /**
  * novelarrow.com — the successor to the dead novelbin.com. Built on Next.js, so novel details,
@@ -72,21 +73,30 @@ abstract class NovelArrow :
 
     private fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/genre/action?page=$page", headers)
 
-    override suspend fun getPopularManga(page: Int): MangasPage = browseParse(client.newCall(buildPopularMangaRequest(page)).execute())
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val request = buildPopularMangaRequest(page)
+        return browseParse(client.get(request.url, request.headers))
+    }
 
     private fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/genre/action?page=$page", headers)
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = browseParse(client.newCall(buildLatestUpdatesRequest(page)).execute())
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val request = buildLatestUpdatesRequest(page)
+        return browseParse(client.get(request.url, request.headers))
+    }
 
     private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val genre = (filters.firstOrNull { it is GenreFilter } as? GenreFilter)?.selected() ?: "action"
         return GET("$baseUrl/genre/$genre?page=$page", headers)
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = browseParse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val request = buildSearchMangaRequest(page, query, filters)
+        return browseParse(client.get(request.url, request.headers))
+    }
 
     private fun browseParse(response: Response): MangasPage {
-        val doc = Jsoup.parse(response.body.string(), baseUrl)
+        val doc = response.asJsoup()
         val mangas = doc.select("a[href^=/novel/]:has(img)")
             .distinctBy { it.attr("href") }
             .mapNotNull { a ->
@@ -112,7 +122,8 @@ abstract class NovelArrow :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val updatedManga = if (fetchDetails) {
-            parseMangaDetails(client.newCall(buildMangaDetailsRequest(manga)).execute().body.string())
+            val mangaDetailsRequest = buildMangaDetailsRequest(manga)
+            parseMangaDetails(client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers).body.string())
         } else {
             manga
         }
@@ -178,9 +189,9 @@ abstract class NovelArrow :
 
     // The novel page's flight only embeds a slice of chapters; the api-web endpoint returns the
     // full list in one call (limit == total, single page), so use it instead.
-    private fun loadChapterList(manga: SManga): List<SChapter> {
+    private suspend fun loadChapterList(manga: SManga): List<SChapter> {
         val slug = mangaPathTemplate.resolve(manga.url).substringAfter("/novel/").trim('/').substringBefore('/')
-        val response = client.newCall(GET("$baseUrl/api-web/novels/$slug/chapters?sort=asc", headers)).execute()
+        val response = client.get("$baseUrl/api-web/novels/$slug/chapters?sort=asc", headers)
         val data = json.decodeFromString<ChapterListResponse>(response.body.string())
         // API returns oldest-first; number ascending then present newest-first.
         return data.items.mapIndexed { index, item ->
@@ -207,7 +218,8 @@ abstract class NovelArrow :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = mangaPathTemplate.slug(url.encodedPath)
         val tempManga = SManga.create().apply { this.url = slug }
-        val response = client.newCall(buildMangaDetailsRequest(tempManga)).execute()
+        val mangaDetailsRequest = buildMangaDetailsRequest(tempManga)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.body.string()).apply { this.url = slug }
     }
@@ -218,7 +230,7 @@ abstract class NovelArrow :
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val flight = client.newCall(GET(url, rscHeaders())).execute().body.string()
+        val flight = client.get(url, rscHeaders()).body.string()
 
         val refId = CONTENT_REF.firstGroup(flight) ?: return ""
         // Flight text chunk: "<id>:T<hexByteLength>,<content>". Cut exactly hexByteLength UTF-8

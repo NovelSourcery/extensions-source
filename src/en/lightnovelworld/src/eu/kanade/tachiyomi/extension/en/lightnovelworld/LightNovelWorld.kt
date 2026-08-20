@@ -15,6 +15,7 @@ import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.lib.chapterutils.paginatedChapterList
 import keiyoushi.lib.chapterutils.shouldReturnExisting
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.parseAs
@@ -64,9 +65,9 @@ abstract class LightNovelWorld :
 
     // ======================== Popular/Latest/Search ========================
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseAdvancedSearch(client.newCall(GET("$baseUrl/advanced-search/?sort=rank&order=asc&page=$page", headers)).execute())
+    override suspend fun getPopularManga(page: Int): MangasPage = parseAdvancedSearch(client.get("$baseUrl/advanced-search/?sort=rank&order=asc&page=$page", headers))
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseAdvancedSearch(client.newCall(GET("$baseUrl/advanced-search/?sort=updates&order=desc&page=$page", headers)).execute())
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseAdvancedSearch(client.get("$baseUrl/advanced-search/?sort=updates&order=desc&page=$page", headers))
 
     @Serializable
     class SearchResponse(val novels: List<SearchNovel> = emptyList())
@@ -86,7 +87,7 @@ abstract class LightNovelWorld :
                 .addQueryParameter("q", query)
                 .addQueryParameter("search_type", "title")
                 .build()
-            val response = client.newCall(GET(url, headers)).execute()
+            val response = client.get(url, headers)
             val result = response.body.string().parseAs<SearchResponse>()
             val novels = result.novels.map { novel ->
                 SManga.create().apply {
@@ -140,7 +141,7 @@ abstract class LightNovelWorld :
             }
         }
 
-        return parseAdvancedSearch(client.newCall(GET(url.build(), headers)).execute())
+        return parseAdvancedSearch(client.get(url.build(), headers))
     }
 
     private fun parseAdvancedSearch(response: Response): MangasPage {
@@ -252,7 +253,7 @@ abstract class LightNovelWorld :
     ): SMangaUpdate = coroutineScope {
         // Manga details and the chapter list live on different pages - fire both requests
         // concurrently when both are needed, rather than awaiting them sequentially.
-        val detailsDeferred = if (fetchDetails) async { parseMangaDetails(client.newCall(GET(baseUrl + mangaPath.resolve(manga.url), headers)).execute()) } else null
+        val detailsDeferred = if (fetchDetails) async { parseMangaDetails(client.get(baseUrl + mangaPath.resolve(manga.url), headers)) } else null
         val chaptersDeferred = if (fetchChapters) async { fetchLightNovelWorldChapterList(manga, chapters) } else null
         SMangaUpdate(
             manga = detailsDeferred?.await() ?: manga,
@@ -261,7 +262,8 @@ abstract class LightNovelWorld :
     }
 
     private suspend fun fetchLightNovelWorldChapterList(manga: SManga, existingChapters: List<SChapter>): List<SChapter> {
-        val response = client.newCall(buildChapterListRequest(manga)).execute()
+        val chapterListRequest = buildChapterListRequest(manga)
+        val response = client.get(chapterListRequest.url, chapterListRequest.headers)
         val page1Doc = response.asJsoup()
         val basePath = response.request.url.encodedPath
 
@@ -285,7 +287,7 @@ abstract class LightNovelWorld :
                 val doc = if (page == 1) {
                     page1Doc
                 } else {
-                    val pageResponse = client.newCall(GET("$baseUrl$basePath?page=$page", headers)).execute()
+                    val pageResponse = client.get("$baseUrl$basePath?page=$page", headers)
                     pageResponse.asJsoup()
                 }
                 Pair(parseChapterPage(doc), page < totalPages)
@@ -339,7 +341,7 @@ abstract class LightNovelWorld :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPath.slug(url.encodedPath) }
-        val response = client.newCall(GET(baseUrl + mangaPath.resolve(manga.url), headers)).execute()
+        val response = client.get(baseUrl + mangaPath.resolve(manga.url), headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response).apply { this.url = manga.url }
     }
@@ -347,7 +349,7 @@ abstract class LightNovelWorld :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        val response = client.get(baseUrl + page.url, headers)
         val doc = response.asJsoup()
 
         val content = doc.selectFirst("#chapterText")

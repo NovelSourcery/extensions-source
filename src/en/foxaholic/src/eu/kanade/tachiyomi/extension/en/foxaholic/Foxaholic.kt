@@ -1,10 +1,10 @@
 package eu.kanade.tachiyomi.novelextension.en.foxaholic
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Page
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
-import org.jsoup.Jsoup
+import keiyoushi.network.get
 import org.jsoup.nodes.Element
 
 @Source
@@ -14,9 +14,9 @@ abstract class Foxaholic : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
-        val htmlString = response.body.string()
-        val doc = Jsoup.parse(htmlString)
+        val response = client.get(baseUrl + page.url, headers)
+        val doc = response.asJsoup()
+        val htmlString = doc.outerHtml()
 
         android.util.Log.d("Foxaholic", "=== RECEIVED HTML ===")
         android.util.Log.d("Foxaholic", "HTML length: ${htmlString.length}")

@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.leafstudio
 
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -10,12 +9,12 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Request
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
@@ -46,30 +45,29 @@ abstract class LeafStudio :
 
     // ======================== Browse / Search ========================
 
-    private fun buildPopularMangaRequest(page: Int): Request {
+    private fun buildPopularMangaUrl(page: Int): String {
         val path = if (page > 1) "/novels/page/$page" else "/novels"
-        return GET("$baseUrl$path", headers)
+        return "$baseUrl$path"
     }
 
-    private fun buildLatestUpdatesRequest(page: Int): Request = buildPopularMangaRequest(page)
+    private fun buildLatestUpdatesUrl(page: Int): String = buildPopularMangaUrl(page)
 
-    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    private fun buildSearchMangaUrl(page: Int, query: String, filters: FilterList): HttpUrl {
         val path = if (page > 1) "/novels/page/$page" else "/novels"
-        val url = "$baseUrl$path".toHttpUrl().newBuilder()
+        return "$baseUrl$path".toHttpUrl().newBuilder()
             .addQueryParameter("search", query)
             .addQueryParameter("type", "")
             .addQueryParameter("language", "")
             .addQueryParameter("status", "")
             .addQueryParameter("sort", "")
             .build()
-        return GET(url, headers)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelList(client.newCall(buildPopularMangaRequest(page)).execute().asJsoup())
+    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelList(client.get(buildPopularMangaUrl(page), headers).asJsoup())
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelList(client.newCall(buildLatestUpdatesRequest(page)).execute().asJsoup())
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelList(client.get(buildLatestUpdatesUrl(page), headers).asJsoup())
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseNovelList(client.newCall(buildSearchMangaRequest(page, query, filters)).execute().asJsoup())
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseNovelList(client.get(buildSearchMangaUrl(page, query, filters), headers).asJsoup())
 
     private fun parseNovelList(document: Document): MangasPage {
         val mangas = document.select("a.novel-item").map { element ->
@@ -85,7 +83,7 @@ abstract class LeafStudio :
 
     // ======================== Details + Chapters ========================
 
-    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPath.resolve(manga.url), headers)
+    private fun buildMangaDetailsUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -94,7 +92,7 @@ abstract class LeafStudio :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list both live on the same novel page - fetch it once.
-        val doc = client.newCall(buildMangaDetailsRequest(manga)).execute().asJsoup()
+        val doc = client.get(buildMangaDetailsUrl(manga), headers).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
@@ -135,7 +133,7 @@ abstract class LeafStudio :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPath.slug(url.encodedPath) }
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val response = client.get(buildMangaDetailsUrl(manga), headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.asJsoup()).apply { this.url = manga.url }
     }
@@ -146,13 +144,13 @@ abstract class LeafStudio :
     // Single text page fetched once in fetchPageText, matching the ReadNovelFull multisrc idiom.
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
+        val response = client.get(baseUrl + chapter.url, headers)
         return listOf(Page(0, response.request.url.encodedPath))
     }
 
     override suspend fun fetchPageText(page: Page): String {
         val pageUrl = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val response = client.newCall(GET(pageUrl, headers)).execute()
+        val response = client.get(pageUrl, headers)
         val document = response.asJsoup()
         return document.select("article > p.chapter_content").joinToString("") { paragraphToHtml(it) }
     }

@@ -15,6 +15,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.getPreferencesLazy
@@ -53,11 +54,17 @@ abstract class NovelLib :
 
     protected open fun buildPopularMangaRequest(page: Int): Request = browseRequest(page, "", "popularity", "Descending", "", "")
 
-    override suspend fun getPopularManga(page: Int): MangasPage = browseParse(client.newCall(buildPopularMangaRequest(page)).execute())
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val popularRequest = buildPopularMangaRequest(page)
+        return browseParse(client.get(popularRequest.url, popularRequest.headers))
+    }
 
     protected open fun buildLatestUpdatesRequest(page: Int): Request = browseRequest(page, "", "newest", "Descending", "", "")
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = browseParse(client.newCall(buildLatestUpdatesRequest(page)).execute())
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val latestRequest = buildLatestUpdatesRequest(page)
+        return browseParse(client.get(latestRequest.url, latestRequest.headers))
+    }
 
     // ======================== Search ========================
 
@@ -80,7 +87,10 @@ abstract class NovelLib :
         return browseRequest(page, query, sortBy, direction, status, genre)
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = browseParse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val searchRequest = buildSearchMangaRequest(page, query, filters)
+        return browseParse(client.get(searchRequest.url, searchRequest.headers))
+    }
 
     private fun browseRequest(page: Int, query: String, sortBy: String, direction: String, status: String, genre: String): Request {
         val url = "$baseUrl/novel/browse".toHttpUrl().newBuilder()
@@ -133,7 +143,8 @@ abstract class NovelLib :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val updatedManga = if (fetchDetails) {
-            val doc = client.newCall(buildMangaDetailsRequest(manga)).execute().asJsoup()
+            val mangaDetailsRequest = buildMangaDetailsRequest(manga)
+            val doc = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers).asJsoup()
             parseMangaDetails(doc)
         } else {
             manga
@@ -188,9 +199,9 @@ abstract class NovelLib :
         }.trim()
     }
 
-    private fun parseChaptersForManga(manga: SManga): List<SChapter> {
+    private suspend fun parseChaptersForManga(manga: SManga): List<SChapter> {
         val slug = mangaPathTemplate.resolve(manga.url).substringAfter("/novel/").substringBefore("/").substringBefore("?")
-        val response = client.newCall(GET("$baseUrl/novel/details-content/$slug", headers)).execute()
+        val response = client.get("$baseUrl/novel/details-content/$slug", headers)
         val doc = response.asJsoup()
 
         val chapterNumberRegex = Regex("""Ch\.?\s*(\d+(?:\.\d+)?)""", RegexOption.IGNORE_CASE)
@@ -215,7 +226,8 @@ abstract class NovelLib :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val tempManga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
-        val response = client.newCall(buildMangaDetailsRequest(tempManga)).execute()
+        val mangaDetailsRequest = buildMangaDetailsRequest(tempManga)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         return parseMangaDetails(doc).apply { this.url = tempManga.url }
@@ -226,7 +238,7 @@ abstract class NovelLib :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        val response = client.get(baseUrl + page.url, headers)
         val doc = response.asJsoup()
 
         val content = doc.selectFirst("article.reading-container div.content")

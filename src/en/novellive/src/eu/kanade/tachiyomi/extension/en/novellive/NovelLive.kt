@@ -13,6 +13,7 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.lib.chapterutils.paginatedChapterList
+import keiyoushi.network.get
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.formattedText
 import keiyoushi.utils.stripChapterNumberPrefix
@@ -101,14 +102,14 @@ abstract class NovelLive : ReadNovelFull() {
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)).execute().asJsoup()) else manga
+        val updatedManga = if (fetchDetails) mangaDetailsParse(client.get(baseUrl + mangaPathTemplate.resolve(manga.url), headers).asJsoup()) else manga
         val updatedChapters = if (fetchChapters) fetchNovelLiveChapterList(manga, chapters) else chapters
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
     private suspend fun fetchNovelLiveChapterList(manga: SManga, existingChapters: List<SChapter>): List<SChapter> {
         val novelPath = mangaPathTemplate.resolve(manga.url).trimEnd('/')
-        val detailDoc = client.newCall(GET(baseUrl + novelPath, headers)).execute().asJsoup()
+        val detailDoc = client.get(baseUrl + novelPath, headers).asJsoup()
         val options = detailDoc.select("#indexselect option")
         val totalPages = options.size.coerceAtLeast(1)
 
@@ -143,7 +144,7 @@ abstract class NovelLive : ReadNovelFull() {
                 val doc = if (page == 1) {
                     detailDoc
                 } else {
-                    client.newCall(GET("$baseUrl$novelPath/$page", headers)).execute().asJsoup()
+                    client.get("$baseUrl$novelPath/$page", headers).asJsoup()
                 }
                 val chapters = doc.select("ul.ul-list5 li a").mapNotNull { a ->
                     val href = a.attr("abs:href").ifBlank { return@mapNotNull null }

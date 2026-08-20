@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.source.model.UpdateStrategy
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import okhttp3.HttpUrl
@@ -75,7 +76,8 @@ abstract class RewayatFans :
     }
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val response = client.newCall(buildPopularMangaRequest(page)).execute()
+        val request = buildPopularMangaRequest(page)
+        val response = client.get(request.url, request.headers)
         val document = response.asJsoup()
         val novels = parseNovelList(document)
         val hasNextPage = document.selectFirst(".page-links a.post-page-numbers") != null
@@ -92,7 +94,8 @@ abstract class RewayatFans :
     }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val response = client.newCall(buildLatestUpdatesRequest(page)).execute()
+        val request = buildLatestUpdatesRequest(page)
+        val response = client.get(request.url, request.headers)
         val document = response.asJsoup()
         val novels = parseNovelList(document)
         val hasNextPage = document.selectFirst(".page-links a.post-page-numbers") != null
@@ -102,7 +105,8 @@ abstract class RewayatFans :
     private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request = GET("$baseUrl/?s=$query", headers)
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val response = client.newCall(buildSearchMangaRequest(page, query, filters)).execute()
+        val request = buildSearchMangaRequest(page, query, filters)
+        val response = client.get(request.url, request.headers)
         val document = response.asJsoup()
         val novels = document.select("article.entry, article").mapNotNull { item ->
             val titleLink = item.selectFirst("h2.entry-title a[href]")
@@ -135,7 +139,8 @@ abstract class RewayatFans :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val request = buildMangaDetailsRequest(manga)
+        val response = client.get(request.url, request.headers)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.asJsoup()).apply { this.url = manga.url }
     }
@@ -146,7 +151,8 @@ abstract class RewayatFans :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val request = buildMangaDetailsRequest(manga)
+        val response = client.get(request.url, request.headers)
         val document = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(document) else manga
@@ -202,7 +208,7 @@ abstract class RewayatFans :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        val response = client.get(baseUrl + page.url, headers)
         val document = response.asJsoup()
         val content = document.selectFirst(".entry-content") ?: return ""
         content.select(

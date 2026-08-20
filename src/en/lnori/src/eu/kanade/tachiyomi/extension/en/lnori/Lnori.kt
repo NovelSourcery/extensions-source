@@ -4,7 +4,6 @@ import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
@@ -16,6 +15,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.serialization.Serializable
@@ -31,7 +31,6 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl
-import okhttp3.Request
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
@@ -89,7 +88,7 @@ abstract class Lnori :
 
     // ======================== Load All Data ========================
 
-    private fun loadAllNovels(): List<NovelData> {
+    private suspend fun loadAllNovels(): List<NovelData> {
         val currentTime = System.currentTimeMillis()
         if (cachedNovels != null && currentTime - cacheTimestamp < cacheLifetime) {
             updateFilterCache(cachedNovels!!)
@@ -107,7 +106,10 @@ abstract class Lnori :
 
         val novels = try {
             // Lnori exposes the entire series catalog at /library — fetch that page
-            val response = client.newCall(GET("$baseUrl/library", headers)).execute()
+            val response = client.get("$baseUrl/library", headers)
+            // NOTE: the raw html string is also needed below (parseFromJsonScript regex-matches
+            // over it), so the body can only be read once here - response.asJsoup() would
+            // consume it a second time and throw, so parse the already-read string instead.
             val html = response.body.string()
             val document = Jsoup.parse(html, response.request.url.toString())
 
@@ -466,10 +468,7 @@ abstract class Lnori :
 
     // ======================== Details ========================
 
-    private fun buildMangaDetailsRequest(manga: SManga): Request {
-        val url = baseUrl + mangaPathTemplate.resolve(manga.url)
-        return GET(url, headers)
-    }
+    private fun buildMangaDetailsUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -478,7 +477,7 @@ abstract class Lnori :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter/volume list both live on the same novel page - fetch it once.
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val response = client.get(buildMangaDetailsUrl(manga), headers)
         val requestUrl = response.request.url
         val document = response.asJsoup()
 
@@ -492,7 +491,7 @@ abstract class Lnori :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
-        val response = client.newCall(buildMangaDetailsRequest(manga)).execute()
+        val response = client.get(buildMangaDetailsUrl(manga), headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.asJsoup()).apply { this.url = manga.url }
     }
@@ -801,17 +800,16 @@ abstract class Lnori :
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
         val url = if (chapter.url.startsWith("http")) chapter.url else baseUrl + chapter.url
-        val response = client.newCall(GET(url, headers)).execute()
+        val response = client.get(url, headers)
         return listOf(Page(0, response.request.url.toString()))
     }
 
     // ======================== Novel Content ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val request = GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
-        val response = client.newCall(request).execute()
-        val html = response.body.string()
-        val document = Jsoup.parse(html)
+        val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
+        val response = client.get(url, headers)
+        val document = response.asJsoup()
 
         // Extract the main content container and return its HTML directly
         val mainContent = document.selectFirst("main#main-content, main, article.content-body, .reader-content, .content")
