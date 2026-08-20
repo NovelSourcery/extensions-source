@@ -1,5 +1,8 @@
 package eu.kanade.tachiyomi.novelextension.en.lightnoveltranslation
 
+import androidx.preference.PreferenceScreen
+import androidx.preference.SwitchPreferenceCompat
+import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -14,6 +17,7 @@ import keiyoushi.network.post
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.formattedText
+import keiyoushi.utils.getPreferencesLazy
 import okhttp3.FormBody
 import okhttp3.HttpUrl
 import okhttp3.Response
@@ -21,7 +25,10 @@ import okhttp3.Response
 @Source
 abstract class LightNovelTranslation :
     KeiSource(),
-    NovelSource {
+    NovelSource,
+    ConfigurableSource {
+
+    private val preferences by getPreferencesLazy()
 
     override val supportsLatest = true
 
@@ -112,24 +119,52 @@ abstract class LightNovelTranslation :
         }
     }
 
-    private fun parseChapterList(doc: org.jsoup.nodes.Document): List<SChapter> = doc.select("li.chapter-item, ul.chapter-list li, li[class*=chapter-item]").mapNotNull { element ->
-        try {
-            val link = element.selectFirst("a") ?: return@mapNotNull null
-            val chapterUrl = link.attr("href")
-            if (chapterUrl.isBlank()) return@mapNotNull null
-
-            val locked = !element.hasClass("unlock") &&
-                (element.hasClass("lock") || element.selectFirst(".lock, .premium, i.fa-lock") != null)
-            val title = link.text()
-
-            SChapter.create().apply {
-                url = chapterUrl.removePrefix(baseUrl)
-                name = if (locked) "🔒 $title" else title
-            }
-        } catch (e: Exception) {
-            null
+    // Chapters are grouped into per-volume <div class="accordition_item"> blocks, each with its
+    // own "Volume N" heading and a chapter list whose displayed index ("1:", "2:", ...) resets at
+    // every volume - so it can't be used as a global chapter_number. Without chapter_number set
+    // at all (as before), chapters from different volumes sorted inconsistently. Walk the volume
+    // blocks in document order instead, assigning a running counter across all of them and
+    // prefixing the volume name when there's more than one.
+    private fun parseChapterList(doc: org.jsoup.nodes.Document): List<SChapter> {
+        val showLocked = preferences.getBoolean(PREF_SHOW_LOCKED, false)
+        val volumeBlocks = doc.select(".accordition_item")
+        val chapterListElements = if (volumeBlocks.isNotEmpty()) {
+            volumeBlocks.map { it.selectFirst(".accordition_item_title")?.text()?.trim() to it }
+        } else {
+            listOf(null to doc)
         }
-    }.distinctBy { it.url }.reversed()
+        val multiVolume = chapterListElements.size > 1
+
+        var counter = 0f
+        return chapterListElements
+            .flatMap { (volumeName, container) ->
+                container.select("li.chapter-item, ul.chapter-list li, li[class*=chapter-item]").mapNotNull { element ->
+                    try {
+                        val link = element.selectFirst("a") ?: return@mapNotNull null
+                        val chapterUrl = link.attr("href")
+                        if (chapterUrl.isBlank()) return@mapNotNull null
+
+                        val locked = !element.hasClass("unlock") &&
+                            (element.hasClass("lock") || element.selectFirst(".lock, .premium, i.fa-lock") != null)
+                        if (locked && !showLocked) return@mapNotNull null
+
+                        counter++
+                        val title = link.text()
+                        val name = if (multiVolume && !volumeName.isNullOrBlank()) "$volumeName: $title" else title
+
+                        SChapter.create().apply {
+                            url = chapterUrl.removePrefix(baseUrl)
+                            this.name = if (locked) "🔒 $name" else name
+                            chapter_number = counter
+                        }
+                    } catch (e: Exception) {
+                        null
+                    }
+                }
+            }
+            .distinctBy { it.url }
+            .reversed()
+    }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
@@ -153,5 +188,18 @@ abstract class LightNovelTranslation :
         content.select("div.ads_content").remove()
 
         return content.html()
+    }
+
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        SwitchPreferenceCompat(screen.context).apply {
+            key = PREF_SHOW_LOCKED
+            title = "Show locked chapters"
+            summary = "Include premium/locked chapters in the chapter list."
+            setDefaultValue(false)
+        }.also(screen::addPreference)
+    }
+
+    companion object {
+        private const val PREF_SHOW_LOCKED = "pref_show_locked_chapters"
     }
 }
