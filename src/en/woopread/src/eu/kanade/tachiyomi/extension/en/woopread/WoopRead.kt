@@ -13,6 +13,7 @@ import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.extractNextJs
 import keiyoushi.utils.parseAs
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -138,8 +139,11 @@ abstract class WoopRead :
 
     private suspend fun fetchNovelChapterList(manga: SManga): List<SChapter> {
         val seriesSlug = manga.slug()
-        val response = client.get("$baseUrl/api/novels/$seriesSlug/chapters", headers)
-        val chapters = response.parseAs<List<ChapterDto>>()
+        // The old /api/novels/<slug>/chapters REST endpoint now returns an empty array (verified
+        // live) - the real chapter list is embedded in the novel page's own RSC flight data.
+        val doc = client.get("$baseUrl/series/$seriesSlug", headers).asJsoup()
+        val chapters = doc.extractNextJs<ChapterListDto> { it is kotlinx.serialization.json.JsonObject && "chapters" in it }
+            ?.chapters ?: throw Exception("Could not find chapter list in page data")
         return chapters.sortedByDescending { it.number }.map { dto ->
             SChapter.create().apply {
                 name = dto.title
