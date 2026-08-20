@@ -4,6 +4,7 @@ import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 import eu.kanade.tachiyomi.source.model.Page
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
+import keiyoushi.utils.SlugPath
 
 /**
  * Kol Novel uses CSS style-based obfuscation to hide spam paragraphs.
@@ -12,6 +13,13 @@ import keiyoushi.network.get
 @Source
 abstract class KolNovel : LightNovelWPNovel() {
     override val reverseChapters = true
+
+    // Novel pages live directly under the site root ("/<slug>/"), not under the base class's
+    // default "/series/<slug>" assumption (that path is only the browse/listing archive here) -
+    // verified live. A bare "/" template still resolves pre-existing full-path stored entries
+    // unchanged (SlugPath's own backward-compat rule), so this also fixes any manga.url that was
+    // previously stored as a mismatched "/series/..." path.
+    override val mangaPathTemplate = SlugPath("/")
 
     override suspend fun fetchPageText(page: Page): String {
         val response = client.get(baseUrl + page.url, headers)
