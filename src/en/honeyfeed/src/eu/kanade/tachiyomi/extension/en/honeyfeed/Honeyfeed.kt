@@ -45,6 +45,11 @@ abstract class Honeyfeed :
      * "/" is a pre-existing full-path entry and is resolved unchanged. */
     private val mangaPath = SlugPath("/novels/")
 
+    // Chapter urls are "/chapters/<id>", independent of the novel's own slug.
+    private val chapterPath = SlugPath("/chapters/")
+
+    private fun resolveChapterPath(raw: String): String = if (raw.startsWith("http")) raw else chapterPath.resolve(raw)
+
     // ======================== Cloudflare challenge bypass ========================
     // Confirmed live (HAR capture): this site occasionally answers with a real interactive
     // Cloudflare Turnstile challenge (403, __cf_chl_tk token, JS-computed proof-of-work POST'd
@@ -216,13 +221,18 @@ abstract class Honeyfeed :
                 val date = el.selectFirst("div.f12")?.text() ?: ""
                 val chTitle = el.selectFirst("div.text-bold")?.text() ?: ""
                 name = "[$date] $chTitle"
-                url = el.attr("href")
+                url = chapterPath.slug(el.attr("href"))
                 chapter_number = (index + 1).toFloat()
             }
         }.reversed()
     }
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
+    override fun getChapterUrl(chapter: SChapter): String {
+        val path = resolveChapterPath(chapter.url)
+        return if (path.startsWith("http")) path else baseUrl + path
+    }
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
@@ -236,7 +246,8 @@ abstract class Honeyfeed :
     // region Pages
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = getBypassingChallenge(if (chapter.url.startsWith("http")) chapter.url else baseUrl + chapter.url)
+        val path = resolveChapterPath(chapter.url)
+        val response = getBypassingChallenge(if (path.startsWith("http")) path else baseUrl + path)
         return listOf(Page(0, response.request.url.toString()))
     }
 
