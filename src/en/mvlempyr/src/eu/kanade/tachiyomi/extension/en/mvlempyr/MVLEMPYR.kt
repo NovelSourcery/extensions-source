@@ -57,6 +57,9 @@ abstract class MVLEMPYR :
      */
     private val mangaPathTemplate: SlugPath = SlugPath("/novel/")
 
+    // Chapter urls are "/chapter/<novelCode>-<chapterNumber>", independent of the novel's own slug.
+    private val chapterPathTemplate: SlugPath = SlugPath("/chapter/")
+
     @Volatile
     private var cachedNovels: List<CachedNovel>? = null
 
@@ -345,7 +348,7 @@ abstract class MVLEMPYR :
 
                 chapters.add(
                     SChapter.create().apply {
-                        url = "/chapter/$novelCodeStr-$chapterNumberStr"
+                        url = "$novelCodeStr-$chapterNumberStr"
                         name = chapterName
                         date_upload = parseDate(chap.date)
                         chapter_number = chapterNumberStr.toFloatOrNull() ?: 0f
@@ -363,6 +366,8 @@ abstract class MVLEMPYR :
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
+    override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapterPathTemplate.resolve(chapter.url)
+
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = mangaPathTemplate.slug(url.encodedPath)
         val tempManga = SManga.create().apply { this.url = slug }
@@ -371,7 +376,7 @@ abstract class MVLEMPYR :
         return parseMangaDetails(response.asJsoup()).apply { this.url = slug }
     }
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapterPathTemplate.resolve(chapter.url)))
 
     override suspend fun fetchPageText(page: Page): String {
         // Chapter text is served from the main site (the WP host is Cloudflare-blocked). The text
