@@ -11,6 +11,7 @@ import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.JsonElement
+import okhttp3.FormBody
 import okhttp3.Request
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -79,10 +80,13 @@ abstract class LibRead : ReadNovelFull() {
 
     override fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (query.isNotBlank()) {
-            // Text search
+            // Text search moved server-side to POST with a "searchkey" form field; the old
+            // GET ?keyword= is silently ignored now (confirmed live - it renders an empty query).
+            // Results aren't paginated (capped at 50), so page is irrelevant here.
             return Request.Builder()
-                .url("$baseUrl/search?keyword=${java.net.URLEncoder.encode(query, "UTF-8")}&page=$page")
+                .url("$baseUrl/search")
                 .headers(headers)
+                .post(FormBody.Builder().add("searchkey", query).build())
                 .build()
         }
 
