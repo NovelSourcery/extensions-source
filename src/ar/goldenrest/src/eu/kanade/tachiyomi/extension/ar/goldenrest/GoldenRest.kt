@@ -236,7 +236,7 @@ abstract class GoldenRest :
         url = mangaPathTemplate.slug("/mangas/$id/${this@toSManga.title.toSlug()}")
         title = arabic_title?.takeIf { it.isNotBlank() } ?: this@toSManga.title
         thumbnail_url = if (cover.isNotBlank()) {
-            "$coverUrl/manga/cover/$id/medium_$cover"
+            "$coverUrl/uploads/manga/cover/$id/$cover"
         } else {
             ""
         }
