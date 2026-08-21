@@ -133,8 +133,10 @@ abstract class Qimao :
 
     override suspend fun fetchPageText(page: Page): String {
         val doc = client.get(baseUrl + page.url, headers).asJsoup()
+        // A locked chapter still renders `div.chapter-detail-article`, but empty (no `div.article`
+        // child - just an empty canvas placeholder) - confirmed live. Only the inner div means the
+        // text actually rendered, so don't fall back to the (possibly empty) outer container.
         val content = doc.selectFirst("div.chapter-detail-article div.article")
-            ?: doc.selectFirst("div.chapter-detail-article")
             ?: throw Exception("This chapter is locked. Unlock it on the website, or disable \"Show locked chapters\".")
         return content.html()
     }
