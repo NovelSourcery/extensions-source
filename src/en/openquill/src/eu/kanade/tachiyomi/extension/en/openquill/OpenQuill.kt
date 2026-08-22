@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.formattedText
 import keiyoushi.utils.parseAs
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -178,10 +179,7 @@ abstract class OpenQuill :
                 title = storyTitle
                 author = storyAuthor
                 thumbnail_url = coverImageUrl
-                description = storyDescription?.let { html ->
-                    Jsoup.parseBodyFragment(html).select("p").joinToString("\n\n") { it.text() }
-                        .ifEmpty { Jsoup.parse(html).text() }
-                }
+                description = storyDescription?.let { html -> Jsoup.parseBodyFragment(html).body().formattedText() }
                 genre = storyGenres.map { it.genre.name }.distinct().joinToString()
                 status = when (storyStatus) {
                     "COMPLETED" -> SManga.COMPLETED
