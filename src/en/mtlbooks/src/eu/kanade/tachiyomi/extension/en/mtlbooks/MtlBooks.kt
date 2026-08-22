@@ -308,30 +308,11 @@ abstract class MtlBooks :
     }
     // ======================== Pages ========================
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        // "/novel/<slug>/<chapterSlug>" (current) or "/novel/<slug>/chapter/<chapterSlug>" (legacy)
-        val parts = chapter.url.trim('/').split("/")
-        val novelSlug = parts.getOrNull(1) ?: ""
-        val chapterSlug = parts.lastOrNull() ?: ""
-
-        val body = json.encodeToString(
-            ChapterReadRequest.serializer(),
-            ChapterReadRequest(novelSlug, chapterSlug),
-        ).toRequestBody("application/json".toMediaType())
-
-        val response = client.post("$apiUrl/chapters/read", headers, body)
-        val chapterResponse = json.decodeFromString<ChapterReadResponse>(response.body.string())
-        val resolvedNovelSlug = chapterResponse.result.novelSlug
-        val resolvedChapterSlug = chapterResponse.result.chapter.chapterSlug
-
-        return listOf(Page(0, "mtlbooks://$resolvedNovelSlug/$resolvedChapterSlug"))
-    }
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        // chapter.url shape: /novel/{novelSlug}/{chapterSlug}, or legacy
-        // /novel/{novelSlug}/chapter/{chapterSlug}. Take the last segment for the chapter slug so
-        // the legacy "chapter" path piece never gets sent as the slug itself.
+        // page.url shape: /novel/{novelSlug}/{chapterSlug}, or legacy /novel/{novelSlug}/chapter/{chapterSlug}
         val parts = page.url.trim('/').split("/")
         val novelSlug = parts.getOrNull(1) ?: ""
         val chapterSlug = parts.lastOrNull() ?: ""
