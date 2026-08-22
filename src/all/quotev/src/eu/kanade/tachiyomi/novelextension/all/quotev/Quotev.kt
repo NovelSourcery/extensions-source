@@ -46,13 +46,16 @@ abstract class Quotev :
 
     // ======================== Popular / Search ========================
 
-    override suspend fun getPopularManga(page: Int): MangasPage = browse(page, section = "", genre = "", media = "", sort = "users", longOnly = false)
+    override suspend fun getPopularManga(page: Int): MangasPage = browse(page, section = "", genre = "", media = "", sort = "users", longOnly = false, lid = "")
 
     override suspend fun getLatestUpdates(page: Int): MangasPage = throw UnsupportedOperationException()
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val lid = filters.filterIsInstance<LanguageFilter>().firstOrNull()?.toUriPart().orEmpty()
+
         if (query.isNotBlank()) {
             val url = "$baseUrl/search/$query".toHttpUrl().newBuilder()
+                .apply { if (lid.isNotBlank()) addQueryParameter("lid", lid) }
                 .apply { if (page > 1) addQueryParameter("page", page.toString()) }
                 .build()
             return parseStoryList(client.get(url, headers).asJsoup())
@@ -63,7 +66,7 @@ abstract class Quotev :
         val media = filters.filterIsInstance<MediaFilter>().firstOrNull()?.toUriPart().orEmpty()
         val sort = filters.filterIsInstance<SortFilter>().firstOrNull()?.toUriPart().orEmpty()
         val longOnly = filters.filterIsInstance<LengthFilter>().firstOrNull()?.state == true
-        return browse(page, section, genre, media, sort, longOnly)
+        return browse(page, section, genre, media, sort, longOnly, lid)
     }
 
     /**
@@ -71,8 +74,14 @@ abstract class Quotev :
      * Fanfiction-only facet - both are silently dropped otherwise instead of producing a malformed
      * path (this is what caused `/stories/c/Fiction/c/Harem`, a section hardcoded onto a category
      * filter value that wasn't actually a subcategory of it, to 404 into an empty result set).
+     *
+     * The site also has a richer bitmask-category filter dialog (`/search?cat=<n>&...`) that can
+     * combine multiple categories and exposes a couple genres (Vampires, Wolves) not in the plain
+     * nav; single-category selections there just 301-redirect back to these same pretty paths, and
+     * combining categories wasn't confirmed to work, so it isn't exposed here. `lid` (language) is
+     * pulled from that same dialog though - confirmed live to work appended onto any of these URLs.
      */
-    private suspend fun browse(page: Int, section: String, genre: String, media: String, sort: String, longOnly: Boolean): MangasPage {
+    private suspend fun browse(page: Int, section: String, genre: String, media: String, sort: String, longOnly: Boolean, lid: String): MangasPage {
         var path = if (section.isBlank()) "/stories" else "/stories/c/$section"
         if (section.isNotBlank() && genre.isNotBlank()) path += "/c/$genre"
         if (section == "Fanfiction" && media.isNotBlank()) path += "/m/$media"
@@ -80,6 +89,7 @@ abstract class Quotev :
         val url = (baseUrl + path).toHttpUrl().newBuilder()
             .apply { if (sort.isNotBlank()) addQueryParameter("v", sort) }
             .apply { if (longOnly) addQueryParameter("minLen", "50") }
+            .apply { if (lid.isNotBlank()) addQueryParameter("lid", lid) }
             .apply { if (page > 1) addQueryParameter("page", page.toString()) }
             .build()
         return parseStoryList(client.get(url, headers).asJsoup())
@@ -196,6 +206,7 @@ abstract class Quotev :
         MediaFilter(),
         SortFilter(),
         LengthFilter(),
+        LanguageFilter(),
     )
 
     private open class UriPartFilter(displayName: String, private val vals: Array<Pair<String, String>>, state: Int = 0) : Filter.Select<String>(displayName, vals.map { it.first }.toTypedArray(), state) {
@@ -234,6 +245,8 @@ abstract class Quotev :
                 "Short Stories" to "Short-Stories",
                 "Supernatural" to "Supernatural",
                 "Thriller" to "Thriller",
+                "Vampires" to "Vampires",
+                "Wolves" to "Wolves",
                 "Other" to "Other",
             ),
         )
@@ -275,6 +288,59 @@ abstract class Quotev :
         )
 
     private class LengthFilter : Filter.CheckBox("Long stories only (50+ pages)")
+
+    /** `lid` values pulled from the site's own filter dialog config (`BrowseFilter({"lang":[...]})`). */
+    private class LanguageFilter :
+        UriPartFilter(
+            "Language",
+            arrayOf(
+                "Any" to "",
+                "English" to "0",
+                "Español" to "61",
+                "Português" to "21",
+                "Deutsch" to "9",
+                "Français" to "11",
+                "Italiano" to "14",
+                "Русский" to "23",
+                "中文" to "31",
+                "日本語" to "18",
+                "한국어" to "12",
+                "العربية" to "36",
+                "فارسی" to "55",
+                "Català" to "5",
+                "Čeština" to "6",
+                "Dansk" to "8",
+                "Eesti" to "44",
+                "Hrvatski" to "13",
+                "Indonesia" to "3",
+                "Latviešu" to "51",
+                "Lietuvių" to "15",
+                "Magyar" to "16",
+                "Malagasy" to "67",
+                "Melayu" to "4",
+                "Nederlands" to "17",
+                "Norsk" to "19",
+                "Polski" to "20",
+                "Română" to "22",
+                "Shqip" to "52",
+                "Slovenčina" to "24",
+                "Slovenščina" to "25",
+                "Srpski" to "34",
+                "Suomi" to "26",
+                "Svenska" to "27",
+                "Tagalog" to "10",
+                "Türkçe" to "30",
+                "Tiếng Việt" to "29",
+                "繁體中文" to "74",
+                "עברית" to "35",
+                "ภาษาไทย" to "28",
+                "हिन्दी" to "37",
+                "বাংলা" to "38",
+                "Български" to "33",
+                "ქართული" to "59",
+                "Other" to "1",
+            ),
+        )
 
     companion object {
         private const val LINE_BREAK_MARKER = "␈"
