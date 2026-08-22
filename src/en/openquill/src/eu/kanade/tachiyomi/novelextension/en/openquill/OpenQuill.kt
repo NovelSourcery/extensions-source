@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.openquill
+package eu.kanade.tachiyomi.novelextension.en.openquill
 
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
