@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.nobadnovel
+package eu.kanade.tachiyomi.novelextension.en.nobadnovel
 
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
