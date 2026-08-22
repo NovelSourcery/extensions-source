@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.cyrisia
+package eu.kanade.tachiyomi.novelextension.en.cyrisia
 
 import androidx.preference.EditTextPreference
 import androidx.preference.PreferenceScreen
@@ -185,7 +185,7 @@ abstract class Cyrisia :
     }
 
     private suspend fun authorizeDownload(chapterUrl: String) {
-        val segments = chapterUrl.toHttpUrl().pathSegments
+        val segments = (baseUrl + chapterUrl).toHttpUrl().pathSegments
         val seriesName = segments.getOrNull(1) ?: return
         val volumeFilename = segments.getOrNull(2) ?: return
 
