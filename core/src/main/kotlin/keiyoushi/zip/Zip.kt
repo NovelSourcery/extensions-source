@@ -15,6 +15,7 @@ import okio.InflaterSource
 import okio.Source
 import okio.buffer
 import java.io.EOFException
+import java.io.IOException
 import java.util.zip.Inflater
 
 private const val EOCD_SIG = 0x06054b50L
@@ -304,20 +305,18 @@ fun Request.Builder.range(range: LongRange): Request.Builder = header("Range", "
  * Fetches and parses a remote ZIP's central directory over HTTP range requests.
  *
  * A single `bytes=-N` suffix request yields both the total size from Content-Range and the trailing
- * bytes, so the directory is read in one request unless it lies outside that tail. Some servers
- * ignore the `Range` header and return the whole file with `200` instead of `206` - in that case
- * the response body already is the entire archive, so it is used directly as the tail.
+ * bytes, so the directory is read in one request unless it lies outside that tail.
  *
  * @param url the archive URL
  * @param headers headers to send with every request
  * @return the parsed [ZipDirectory], with absolute offsets
+ * @throws IOException if the total size cannot be read from the Content-Range
  * @throws IllegalStateException if the archive has no valid EOCD record
  */
 fun OkHttpClient.zipDirectory(url: String, headers: Headers): ZipDirectory {
     val response = newCall(GET(url, headers).newBuilder().header("Range", "bytes=-$MAX_EOCD_SEARCH").build()).execute()
-    val tail = response.body.bytes()
-    val total = response.header("Content-Range")?.substringAfterLast("/")?.toLongOrNull() ?: tail.size.toLong()
-    return readZipDirectory(tail, total) { rangeSource(url, headers, it) }
+    val total = response.header("Content-Range")?.substringAfterLast("/")?.toLongOrNull() ?: throw IOException("Missing or invalid Content-Range")
+    return readZipDirectory(response.body.bytes(), total) { rangeSource(url, headers, it) }
 }
 
 /**
@@ -327,9 +326,8 @@ fun OkHttpClient.zipDirectory(url: String, headers: Headers): ZipDirectory {
 suspend fun OkHttpClient.zipDirectoryAsync(url: String, headers: Headers): ZipDirectory {
     val rangeHeaders = headers.newBuilder().set("Range", "bytes=-$MAX_EOCD_SEARCH").build()
     val response = this.get(url, rangeHeaders)
-    val tail = response.body.bytes()
-    val total = response.header("Content-Range")?.substringAfterLast("/")?.toLongOrNull() ?: tail.size.toLong()
-    return readZipDirectory(tail, total) { rangeSource(url, headers, it) }
+    val total = response.header("Content-Range")?.substringAfterLast("/")?.toLongOrNull() ?: throw IOException("Missing or invalid Content-Range")
+    return readZipDirectory(response.body.bytes(), total) { rangeSource(url, headers, it) }
 }
 
 /**
