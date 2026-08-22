@@ -16,4 +16,5 @@ keiyoushi {
 
 dependencies {
     implementation(project(":lib:chapterutils"))
+    implementation(project(":lib:cookieinterceptor"))
 }

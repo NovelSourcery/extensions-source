@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.lib.chapterutils.checkCloudflare
+import keiyoushi.lib.cookieinterceptor.CookieInterceptor
 import keiyoushi.network.get
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
@@ -19,7 +20,6 @@ import keiyoushi.utils.formattedText
 import keiyoushi.utils.parseAs
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
-import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -61,7 +61,18 @@ abstract class SyosetuBase(
     override val recommendedDelayMillis = 1000L
     override val recommendedPermits = 2
 
-    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = rateLimit(minimumDelayMillis, recommendedPermits)
+    // A manually-added "Cookie" request header gets silently clobbered by OkHttp's own
+    // CookieJar-backed BridgeInterceptor as soon as the jar holds any cookie for that host
+    // (which it will, from ordinary browsing/WebView use) - it replaces the whole header
+    // rather than merging into it. Seeding the age-gate cookie into the shared CookieManager
+    // itself (what CookieInterceptor does) is what actually survives that.
+    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder {
+        var builder = rateLimit(minimumDelayMillis, recommendedPermits)
+        if (isAdult) {
+            builder = builder.addInterceptor(CookieInterceptor("syosetu.com", "over18" to "yes"))
+        }
+        return builder
+    }
 
     private val dateFormat = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm", Locale.ROOT)
     private val mangaPath = SlugPath("/")
@@ -77,13 +88,6 @@ abstract class SyosetuBase(
 
     override fun getMangaUrl(manga: SManga): String = contentBaseUrl + mangaPath.resolve(manga.url)
     override fun getChapterUrl(chapter: SChapter): String = contentBaseUrl + mangaPath.resolve(chapter.url)
-
-    // novel18/mid/mnlt gate their listings behind an age-confirmation cookie
-    private fun requestHeaders(): Headers = if (isAdult) {
-        headers.newBuilder().add("Cookie", "over18=yes").build()
-    } else {
-        headers
-    }
 
     // ---------- Popular / Latest ----------
     // NOC/MNLT/MID do have their own ranking pages (/rank/list/type/{period}_{modifier}/), just
@@ -171,12 +175,19 @@ abstract class SyosetuBase(
 
     // Wordless search listing sorted by order (new/hyoka/...) - used as "latest"/"popular" for
     // NOC/MID/MNLT, which have no chronological concept on their ranking pages.
+    // NOC/MID/MNLT's search.php treats a query with no word AND no search-field checkbox as
+    // empty and serves the search form back instead of a listing - title/ex/keyword/wname mirror
+    // the form's own default checked state to force it to actually run the (wordless) search.
     private fun buildOrderedListUrl(page: Int, order: String): String {
         val searchPath = when (siteType) {
             SiteType.NCODE, SiteType.NOVEL18 -> "search.php"
             SiteType.NOC, SiteType.MNLT, SiteType.MID -> "search/search/search.php"
         }
-        return "$browseBaseUrl/$searchPath?type=&order=$order&p=$page"
+        val fields = when (siteType) {
+            SiteType.NOC, SiteType.MNLT, SiteType.MID -> "&title=1&ex=1&keyword=1&wname=1"
+            else -> ""
+        }
+        return "$browseBaseUrl/$searchPath?type=&order=$order&p=$page$fields"
     }
 
     protected open fun buildFilteredSearchUrl(page: Int, filters: FilterList): String {
@@ -196,7 +207,7 @@ abstract class SyosetuBase(
 
     // ---------- Fetch & parse ----------
     private suspend fun fetchNovelList(url: String): MangasPage {
-        val response = client.get(url, requestHeaders())
+        val response = client.get(url, headers)
         val doc = response.asJsoup()
         checkCloudflare(doc)
         return parseNovelList(doc)
@@ -205,7 +216,15 @@ abstract class SyosetuBase(
     protected open fun parseNovelList(doc: Document): MangasPage {
         val elements = when (siteType) {
             SiteType.NCODE, SiteType.NOVEL18 -> doc.select(".c-card, .searchkekka_box, .p-ranklist-item")
-            SiteType.NOC, SiteType.MNLT, SiteType.MID -> doc.select(".searchkekka_box, .rank_h, .ranking_top5box ul li, div.in_box div.searchkekka_box")
+            // NOC/MNLT/MID serve an entirely different template to mobile User-Agents (which is
+            // what this source's headers advertise), and MID's own mobile template differs again
+            // from NOC/MNLT's: rank/list becomes "ul.ranking" (NOC/MNLT) or ".rankList" (MID),
+            // search/order-list becomes "ul.novellist li.title" (NOC/MNLT) or "article.search_novel" (MID).
+            SiteType.NOC, SiteType.MNLT, SiteType.MID ->
+                doc.select(
+                    ".searchkekka_box, .rank_h, .ranking_top5box ul li, div.in_box div.searchkekka_box, " +
+                        "ul.ranking, ul.novellist li.title, .rankList, .search_novel",
+                )
         }.ifEmpty { doc.select("div:has(a.tl)") }
 
         val novels = elements.mapNotNull { element ->
@@ -219,7 +238,9 @@ abstract class SyosetuBase(
             val href = link.attr("abs:href")
             if (title.isBlank() || href.isBlank()) return@mapNotNull null
 
-            val coverImg = element.selectFirst("img")
+            // The mobile ranking template's only <img> is the "1位/2位/..." rank-badge icon, not
+            // a cover - never treat it as one.
+            val coverImg = element.selectFirst("img:not([src*=rank])")
             val coverUrl = coverImg?.attr("abs:data-src")?.takeIf { it.isNotBlank() }
                 ?: coverImg?.attr("abs:src")?.takeIf { it.isNotBlank() }
 
@@ -236,7 +257,8 @@ abstract class SyosetuBase(
             // "a.c-pager__item--next"/"a[rel=next]" (that pattern belongs to the chapter-list
             // pager on ncode.syosetu.com detail pages, a different page entirely).
             SiteType.NCODE, SiteType.NOVEL18 -> doc.selectFirst("a.nextlink, a.c-pager__item[title*=次]") != null
-            SiteType.NOC, SiteType.MNLT, SiteType.MID -> doc.selectFirst("a.next, .pager a[href*='p=']") != null
+            // MID's own mobile pager has no distinct "next" class either, just title="次のページ".
+            SiteType.NOC, SiteType.MNLT, SiteType.MID -> doc.selectFirst("a.nextlink, a[title*=次]") != null
         }
 
         return MangasPage(novels, hasNextPage)
@@ -245,7 +267,7 @@ abstract class SyosetuBase(
     // ---------- Novel details ----------
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
-        val response = client.get(contentBaseUrl + path, requestHeaders(), ensureSuccess = false)
+        val response = client.get(contentBaseUrl + path, headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         checkCloudflare(doc)
@@ -285,7 +307,7 @@ abstract class SyosetuBase(
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val response = client.get(contentBaseUrl + mangaPath.resolve(manga.url), requestHeaders())
+        val response = client.get(contentBaseUrl + mangaPath.resolve(manga.url), headers)
         val doc = response.asJsoup()
         checkCloudflare(doc)
 
@@ -324,7 +346,7 @@ abstract class SyosetuBase(
             val pageDoc = if (page == 1) {
                 doc
             } else {
-                val response = client.get("$contentBaseUrl$basePath?p=$page", requestHeaders())
+                val response = client.get("$contentBaseUrl$basePath?p=$page", headers)
                 response.asJsoup()
             }
             checkCloudflare(pageDoc)
@@ -364,7 +386,7 @@ abstract class SyosetuBase(
 
     // ---------- Chapter content ----------
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(contentBaseUrl + mangaPath.resolve(page.url), requestHeaders())
+        val response = client.get(contentBaseUrl + mangaPath.resolve(page.url), headers)
         val doc = response.asJsoup()
         checkCloudflare(doc)
 
