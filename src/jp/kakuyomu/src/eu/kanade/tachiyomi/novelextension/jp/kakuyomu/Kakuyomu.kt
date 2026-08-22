@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.ja.kakuyomu
+package eu.kanade.tachiyomi.novelextension.jp.kakuyomu
 
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
@@ -102,20 +102,26 @@ abstract class Kakuyomu :
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private fun parseChapterList(apollo: JsonObject, work: WorkDto, workId: String): List<SChapter> = work.tableOfContentsV2
-        .mapNotNull { apollo.deref(it)?.parseAs<TocChapterDto>() }
-        .flatMap { it.episodeUnions }
-        .mapIndexedNotNull { index, episodeRef ->
-            val episodeId = (episodeRef as? JsonObject)?.get("__ref")?.string?.substringAfter(":") ?: return@mapIndexedNotNull null
-            val episode = apollo.deref(episodeRef)?.parseAs<EpisodeDto>() ?: return@mapIndexedNotNull null
+    private fun parseChapterList(apollo: JsonObject, work: WorkDto, workId: String): List<SChapter> {
+        val episodeRefs = work.tableOfContentsV2
+            .mapNotNull { apollo.deref(it)?.parseAs<TocChapterDto>() }
+            .flatMap { it.episodeUnions }
+
+        // Number sequentially over resolved episodes only - indexing the pre-filter list would
+        // leave a gap (and a wrong fallback title number) at every unresolvable episode ref.
+        var number = 0
+        return episodeRefs.mapNotNull { episodeRef ->
+            val episodeId = (episodeRef as? JsonObject)?.get("__ref")?.string?.substringAfter(":") ?: return@mapNotNull null
+            val episode = apollo.deref(episodeRef)?.parseAs<EpisodeDto>() ?: return@mapNotNull null
+            number++
             SChapter.create().apply {
                 url = "/works/$workId/episodes/$episodeId"
-                name = episode.title ?: "Episode ${index + 1}"
-                chapter_number = (index + 1).toFloat()
+                name = episode.title ?: "Episode $number"
+                chapter_number = number.toFloat()
                 date_upload = episode.publishedAt?.let { Instant.parseOrNull(it)?.toEpochMilliseconds() } ?: 0L
             }
-        }
-        .reversed()
+        }.reversed()
+    }
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val workId = url.pathSegments.getOrNull(1) ?: return null
