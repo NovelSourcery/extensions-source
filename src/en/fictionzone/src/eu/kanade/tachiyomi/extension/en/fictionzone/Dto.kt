@@ -94,7 +94,8 @@ class ContributorDto(@SerialName("display_name") val displayName: String? = null
 
 fun JsonElement.nameOrSelf(): String? = runCatching {
     (this as? kotlinx.serialization.json.JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull
-}.getOrNull() ?: jsonPrimitive.contentOrNull
+        ?: jsonPrimitive.contentOrNull
+}.getOrNull()
 
 @Serializable
 class ChapterListData(
