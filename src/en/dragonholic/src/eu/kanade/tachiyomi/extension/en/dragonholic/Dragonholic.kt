@@ -279,8 +279,7 @@ abstract class Dragonholic :
     }
 
     private suspend fun fetchChapterList(manga: SManga, doc: Document, existingChapters: List<SChapter>): List<SChapter> {
-        val seriesId = Regex(""""seriesId":(\d+)""").find(doc.outerHtml())?.groupValues?.get(1)
-            ?: return existingChapters
+        val seriesId = findSeriesId(doc) ?: return existingChapters
         val novelSlug = mangaPath.resolve(manga.url).removePrefix("/series/").trim('/')
 
         val result = runCatching {
@@ -303,6 +302,14 @@ abstract class Dragonholic :
                 date_upload = item.createdAt?.let(::parseDate) ?: 0L
             }
         }
+    }
+
+    private fun findSeriesId(doc: Document): String? {
+        val html = doc.outerHtml()
+        return Regex(""""?seriesId"?\s*:\s*(\d+)""").find(html)?.groupValues?.get(1)
+            ?: Regex("""postid-(\d+)""").find(html)?.groupValues?.get(1)
+            ?: doc.selectFirst("link[rel=alternate][type=application/json]")?.attr("href")
+                ?.let { Regex("""/series/(\d+)""").find(it)?.groupValues?.get(1) }
     }
 
     private fun parseDate(date: String): Long = runCatching {
