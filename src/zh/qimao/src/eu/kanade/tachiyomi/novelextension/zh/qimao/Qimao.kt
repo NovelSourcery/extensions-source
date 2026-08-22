@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.zh.qimao
+package eu.kanade.tachiyomi.novelextension.zh.qimao
 
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
