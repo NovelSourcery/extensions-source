@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.botitranslation
+package eu.kanade.tachiyomi.novelextension.en.botitranslation
 
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
@@ -93,13 +93,21 @@ abstract class BotiTranslation :
 
         val updatedChapters = if (fetchChapters) {
             val showLocked = preferences.getBoolean(PREF_SHOW_LOCKED, false)
-            val url = "$API_URL/chapters/page".toHttpUrl().newBuilder()
-                .addQueryParameter("bookId", id)
-                .addQueryParameter("pageNumber", "1")
-                .addQueryParameter("pageSize", CHAPTER_LIMIT.toString())
-                .addQueryParameter("sortDirection", "ASC")
-                .build()
-            client.get(url, headers).parseAs<PageResponse<ChapterDto>>().data.list
+            val allChapters = mutableListOf<ChapterDto>()
+            var page = 1
+            while (true) {
+                val url = "$API_URL/chapters/page".toHttpUrl().newBuilder()
+                    .addQueryParameter("bookId", id)
+                    .addQueryParameter("pageNumber", page.toString())
+                    .addQueryParameter("pageSize", CHAPTER_PAGE_SIZE.toString())
+                    .addQueryParameter("sortDirection", "ASC")
+                    .build()
+                val data = client.get(url, headers).parseAs<PageResponse<ChapterDto>>().data
+                allChapters += data.list
+                if (page * CHAPTER_PAGE_SIZE >= data.totalCount || data.list.isEmpty()) break
+                page++
+            }
+            allChapters
                 .mapNotNull { it.toSChapter(showLocked) }
                 .reversed()
         } else {
@@ -238,7 +246,7 @@ abstract class BotiTranslation :
     companion object {
         private const val API_URL = "https://api.mystorywave.com/story-wave-backend/api/v1/content"
         private const val PAGE_SIZE = 20
-        private const val CHAPTER_LIMIT = 1000
+        private const val CHAPTER_PAGE_SIZE = 1000
         private const val PREF_SHOW_LOCKED = "pref_show_locked_chapters"
     }
 }
