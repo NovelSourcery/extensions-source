@@ -112,7 +112,7 @@ abstract class NovelsPl :
         val tooltip = Jsoup.parseBodyFragment(attr("title"))
         return SManga.create().apply {
             title = text()
-            url = attr("href").toHttpUrl().encodedPath.removePrefix("/novel/")
+            url = attr("abs:href").toHttpUrl().encodedPath.removePrefix("/novel/")
             thumbnail_url = tooltip.selectFirst("img")?.attr("src")?.let { resolveDataPath(it) }
         }
     }
@@ -137,15 +137,15 @@ abstract class NovelsPl :
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? = runCatching {
         val response = getBypassingChallenge(url.toString())
-        return parseMangaDetails(response.asJsoup()).apply {
+        parseMangaDetails(response.asJsoup()).apply {
             this.url = url.encodedPath.removePrefix("/novel/")
         }
-    }
+    }.getOrNull()
 
     private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
-        title = doc.selectFirst(".panel-title")!!.text().removeSuffix("(Web Novel)").removeSuffix("(Light Novel)").trim()
+        title = doc.selectFirst(".panel-title")?.text().orEmpty().removeSuffix("(Web Novel)").removeSuffix("(Light Novel)").trim()
         thumbnail_url = doc.selectFirst(".imageCover img")?.let { resolveDataPath(it.attr("src")) }
         author = doc.selectFirst("a[href^=/author/]")?.text()
         description = doc.selectFirst("p[itemprop=description]")?.text()
@@ -180,7 +180,7 @@ abstract class NovelsPl :
                 val order = row.id().removePrefix("c_").toFloatOrNull()
                 SChapter.create().apply {
                     name = link.text()
-                    url = link.attr("href").toHttpUrl().encodedPath
+                    url = link.attr("abs:href").toHttpUrl().encodedPath
                     chapter_number = order ?: -1f
                     date_upload = row.select("td").lastOrNull()?.text()?.let { parseDate(it) } ?: 0L
                 }
