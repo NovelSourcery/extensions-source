@@ -54,7 +54,7 @@ abstract class Quotev :
         val category = filters.filterIsInstance<CategoryFilter>().firstOrNull()?.state?.trim().orEmpty()
         if (query.isNotBlank()) {
             val url = "$baseUrl/search/$query".toHttpUrl().newBuilder()
-                .apply { if (page > 1) addQueryParameter("next", (page - 1).toString()) }
+                .apply { if (page > 1) addQueryParameter("page", page.toString()) }
                 .build()
             return parseStoryList(client.get(url, headers).asJsoup())
         }
@@ -62,8 +62,8 @@ abstract class Quotev :
     }
 
     private suspend fun browse(page: Int, category: String): MangasPage {
-        val url = "$baseUrl/stories/c/Fiction/$category".toHttpUrl().newBuilder()
-            .apply { if (page > 1) addQueryParameter("next", (page - 1).toString()) }
+        val url = "$baseUrl/stories/c/Fiction/c/$category".toHttpUrl().newBuilder()
+            .apply { if (page > 1) addQueryParameter("page", page.toString()) }
             .build()
         return parseStoryList(client.get(url, headers).asJsoup())
     }
@@ -80,7 +80,8 @@ abstract class Quotev :
                 description = card.selectFirst("div.descr")?.text()
             }
         }
-        return MangasPage(mangas, cards.size >= PAGE_SIZE)
+        val hasNextPage = doc.select("a").any { it.text().contains("Next page", ignoreCase = true) }
+        return MangasPage(mangas, hasNextPage)
     }
 
     // ======================== Details + Chapters ========================
@@ -125,20 +126,19 @@ abstract class Quotev :
         return Jsoup.parseBodyFragment(marked).text().replace(LINE_BREAK_MARKER, "\n").trim()
     }
 
+    /** The chapter picker is a `<select name=rid>` with one `<option value=page>` per named
+     * chapter; the last chapter's end page isn't known up front, so it's left open-ended and
+     * [fetchPageText] instead walks pages until the site stops offering a "next page" link. */
     private fun parseChapterList(doc: Document, storyPath: String): List<SChapter> {
-        val totalPages = doc.selectFirst("#rselect")?.previousElementSibling()?.text()
-            ?.let { PAGES_REGEX.find(it)?.groupValues?.get(1)?.toIntOrNull() }
-            ?: 1
-
-        val entries = doc.select("#rselectList a[href]").mapNotNull { link ->
-            val startPage = link.attr("abs:href").toHttpUrl().pathSegments.lastOrNull()?.toIntOrNull() ?: return@mapNotNull null
-            startPage to link.text()
+        val entries = doc.select("select[name=rid] option[value]").mapNotNull { option ->
+            val startPage = option.attr("value").toIntOrNull() ?: return@mapNotNull null
+            startPage to option.text()
         }.ifEmpty { listOf(1 to (doc.selectFirst("#quizSubtitle")?.text() ?: "Chapter 1")) }
 
         val lastUpdated = doc.selectFirst("time[ts]")?.attr("ts")?.toLongOrNull()?.times(1000L) ?: 0L
 
         return entries.mapIndexed { index, (startPage, name) ->
-            val endPage = entries.getOrNull(index + 1)?.first?.minus(1) ?: totalPages
+            val endPage = entries.getOrNull(index + 1)?.first?.minus(1) ?: OPEN_ENDED
             SChapter.create().apply {
                 this.name = name
                 url = "/story/$storyPath/$startPage#$endPage"
@@ -160,9 +160,12 @@ abstract class Quotev :
         val endPage = page.url.substringAfter("#").toInt()
 
         return buildString {
-            for (pageNum in startPage..endPage) {
+            var pageNum = startPage
+            while (endPage == OPEN_ENDED || pageNum <= endPage) {
                 val doc = client.get("$baseUrl$storyPath/$pageNum", headers).asJsoup()
                 append(doc.selectFirst("#rescontent")?.html().orEmpty())
+                if (doc.selectFirst("#quizPageNext") == null) break
+                pageNum++
             }
         }
     }
@@ -177,9 +180,8 @@ abstract class Quotev :
     private class CategoryFilter : Filter.Text("Category", DEFAULT_CATEGORY)
 
     companion object {
-        private const val PAGE_SIZE = 8
         private const val DEFAULT_CATEGORY = "Harem"
         private const val LINE_BREAK_MARKER = "␈"
-        private val PAGES_REGEX = Regex("""(\d+)\s*pages""")
+        private const val OPEN_ENDED = -1
     }
 }
