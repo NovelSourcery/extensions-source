@@ -1,7 +1,7 @@
 import io.github.keiyoushi.gradle.api.ContentWarning
 
 plugins {
-    alias(kei.plugins.extension)
+    alias(ns.plugins.extension)
 }
 
 keiyoushi {
@@ -17,6 +17,7 @@ keiyoushi {
     }
 
     deeplink {
+        host("indratranslations.com")
         path("/..*")
     }
 }

@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.indratranslations
+package eu.kanade.tachiyomi.novelextension.en.indratranslations
 
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
@@ -110,7 +110,7 @@ abstract class Indratranslations :
     }
 
     private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
-        title = doc.selectFirst("h1.story-main-title")!!.text()
+        title = doc.selectFirst("h1.story-main-title")?.text().orEmpty()
         thumbnail_url = doc.selectFirst("meta[property=og:image]")?.attr("content")
         author = doc.selectFirst("div.story-meta-list a[href*=/tac-gia/]")?.text()
 
@@ -310,7 +310,7 @@ abstract class Indratranslations :
         private const val CHAPTERS_VAR = "TD_Story_Chapters"
 
         private val onclickUrlRegex = Regex("""location\.href='([^']+)'""")
-        private val chapterArrayRegex = Regex("""TD_Story_Chapters\s*=\s*(\[.*?\]);""")
+        private val chapterArrayRegex = Regex("""TD_Story_Chapters\s*=\s*(\[.*?\]);""", RegexOption.DOT_MATCHES_ALL)
 
         /** Zero-width/invisible marks the site injects between words as a copy-tracking watermark. */
         private val zeroWidthRegex = Regex("[\u200B\u200C\u200D\u2060\uFEFF]")
