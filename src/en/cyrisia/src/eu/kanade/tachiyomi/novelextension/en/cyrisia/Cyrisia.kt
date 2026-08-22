@@ -53,12 +53,16 @@ abstract class Cyrisia :
     private val preferences by getPreferencesLazy()
 
     override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder {
-        val cookie = preferences.getString(PREF_SESSION_COOKIE, null)?.split("=", limit = 2)
-        if (cookie?.size == 2) {
-            addInterceptor(CookieInterceptor(baseUrl.toHttpUrl().host, cookie[0].trim() to cookie[1].trim()))
-        }
+        sessionCookie()?.let { addInterceptor(CookieInterceptor(baseUrl.toHttpUrl().host, it)) }
         return this
     }
+
+    // Null when no session cookie is configured - callers use this to skip auth-only requests
+    // (e.g. authorizeDownload) that would otherwise just log a pointless 401.
+    private fun sessionCookie(): Pair<String, String>? = preferences.getString(PREF_SESSION_COOKIE, null)
+        ?.split("=", limit = 2)
+        ?.takeIf { it.size == 2 }
+        ?.let { it[0].trim() to it[1].trim() }
 
     // ======================== Popular / Search ========================
 
@@ -161,7 +165,7 @@ abstract class Cyrisia :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        authorizeDownload(page.url)
+        if (sessionCookie() != null) authorizeDownload(page.url)
 
         // The EPUB is streamed via HTTP Range requests (directory + only the entries actually
         // needed) instead of downloading the whole archive into memory - a volume's images/fonts/
