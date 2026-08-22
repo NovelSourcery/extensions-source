@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.novelspl
+package eu.kanade.tachiyomi.novelextension.en.novelspl
 
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.FilterList
