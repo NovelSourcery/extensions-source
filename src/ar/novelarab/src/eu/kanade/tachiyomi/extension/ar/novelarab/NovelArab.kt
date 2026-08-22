@@ -1,23 +1,22 @@
 package eu.kanade.tachiyomi.novelextension.ar.novelarab
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Page
+import keiyoushi.annotation.Source
+import keiyoushi.network.get
 
-class NovelArab :
-    MadaraNovel(
-        baseUrl = "https://novelarab.com",
-        name = "Novel Arab",
-        lang = "ar",
-    ) {
+@Source
+abstract class NovelArab : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
     override val reverseChapterListDefault = true
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        // page.url is already an absolute URL (see MadaraNovel.getPageList) - baseUrl must not be
+        // prepended again here, or the request resolves against a bogus "site+https" host.
+        val response = client.get(page.url, headers)
         val doc = response.asJsoup()
 
-        checkCaptcha(doc, baseUrl + page.url)
+        checkCaptcha(doc, page.url)
 
         doc.select(
             "div.ads, div.unlock-buttons, sub, script, ins, .adsbygoogle, .code-block, noscript, " +

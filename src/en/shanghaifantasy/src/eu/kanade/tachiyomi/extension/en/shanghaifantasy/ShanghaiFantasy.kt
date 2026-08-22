@@ -8,40 +8,52 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 
-class ShanghaiFantasy :
-    HttpSource(),
+@Source
+abstract class ShanghaiFantasy :
+    KeiSource(),
     NovelSource {
 
-    override val name = "Shanghai Fantasy"
-    override val baseUrl = "https://shanghaifantasy.com"
-    override val lang = "en"
     override val supportsLatest = false
-
-    override val client = network.cloudflareClient
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    /** [SManga.url] is stored as the bare slug under "/novel/"; a stored value starting with
+     * "/" is a pre-existing full-path entry and is resolved unchanged. */
+    private val mangaPath = SlugPath("/novel/")
+
     // region Popular (listing)
 
-    override fun popularMangaRequest(page: Int): Request = GET(
+    protected open fun buildPopularMangaRequest(page: Int): Request = GET(
         "$baseUrl/wp-json/fiction/v1/novels/?novelstatus=&term=&page=$page&orderby=&order=",
         headers,
     )
 
-    override fun popularMangaParse(response: Response): MangasPage {
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val request = buildPopularMangaRequest(page)
+        val response = client.get(request.url, request.headers)
+        return parseMangaListResponse(response)
+    }
+
+    private fun parseMangaListResponse(response: Response): MangasPage {
         val novels = json.decodeFromString<List<ShanghaiNovel>>(response.body.string())
         val mangas = novels.map { novel ->
             SManga.create().apply {
                 title = novel.title
-                url = novel.permalink.removePrefix(baseUrl)
+                url = mangaPath.slug(novel.permalink.removePrefix(baseUrl))
                 thumbnail_url = novel.novelImage
             }
         }
@@ -50,16 +62,9 @@ class ShanghaiFantasy :
 
     // endregion
 
-    // region Latest (not supported)
-
-    override fun latestUpdatesRequest(page: Int) = popularMangaRequest(page)
-    override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
-
-    // endregion
-
     // region Search (via listing filters)
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    protected open fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         var genreParam = ""
         var statusParam = ""
 
@@ -77,15 +82,37 @@ class ShanghaiFantasy :
         )
     }
 
-    override fun searchMangaParse(response: Response) = popularMangaParse(response)
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val request = buildSearchMangaRequest(page, query, filters)
+        val response = client.get(request.url, request.headers)
+        return parseMangaListResponse(response)
+    }
+
+    override suspend fun getLatestUpdates(page: Int): MangasPage = getPopularManga(page)
 
     // endregion
 
-    // region Details
+    // region Details + Chapters
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPath.resolve(manga.url), headers)
+
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val request = buildMangaDetailsRequest(manga)
+        val response = client.get(request.url, request.headers)
         val doc = response.asJsoup()
 
+        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
+        val updatedChapters = if (fetchChapters) fetchChapterList(doc) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    private fun parseMangaDetails(doc: Document): SManga {
         val summaryEl = doc.selectFirst("div.rounded-xl:nth-child(1)")
         summaryEl?.select("p")?.filter { it.text().isBlank() }?.forEach { it.remove() }
         val rawDesc = summaryEl?.select("p")?.joinToString("\n\n") { it.text() } ?: ""
@@ -109,23 +136,15 @@ class ShanghaiFantasy :
 
     // region Chapters
 
-    override fun chapterListRequest(manga: SManga): Request {
-        // We need the novel ID from the page to fetch chapters via API
-        return GET("$baseUrl${manga.url}", headers)
-    }
-
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val doc = response.asJsoup()
+    private suspend fun fetchChapterList(doc: Document): List<SChapter> {
         val novelId = doc.selectFirst("#chapterList")?.attr("data-cat") ?: return emptyList()
 
         val chaptersUrl = "$baseUrl/wp-json/fiction/v1/chapters?category=$novelId&order=asc&page=1&per_page=9999"
-        val chapResponse = client.newCall(GET(chaptersUrl, headers)).execute()
+        val chapResponse = client.get(chaptersUrl, headers)
         val chapters = json.decodeFromString<List<ShanghaiChapter>>(chapResponse.body.string())
 
-        var hasLockedChapters = false
         return chapters.mapIndexedNotNull { index, ch ->
             if (ch.locked) {
-                hasLockedChapters = true
                 return@mapIndexedNotNull null
             }
             SChapter.create().apply {
@@ -138,14 +157,30 @@ class ShanghaiFantasy :
 
     // endregion
 
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val response = client.get(url, headers, ensureSuccess = false)
+        if (!response.isSuccessful) return null
+        val doc = response.asJsoup()
+        return parseMangaDetails(doc).apply { this.url = mangaPath.slug(url.encodedPath) }
+    }
+
     // region Pages
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.get(baseUrl + chapter.url, headers)
+        return listOf(Page(0, response.request.url.toString()))
+    }
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.newCall(GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)).execute().asJsoup()
+        val doc = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers).asJsoup()
         val title = doc.selectFirst("div.my-5")?.text() ?: ""
-        val content = doc.selectFirst("div.flex:nth-child(4)") ?: return ""
+        // "div.flex:nth-child(4)" doesn't match anything on the live page - the real container
+        // is "div.contenta" (verified live), which also carries inline AdSense blocks injected
+        // between paragraphs (".ai-viewports"/"[data-insertion-position]" wrapper divs).
+        val content = doc.selectFirst("div.contenta") ?: return ""
+        content.select(".ai-viewports, [data-insertion-position], script, ins.adsbygoogle").remove()
         content.children().first()?.before("<h1>$title</h1>")
         content.select("button").remove()
         content.select("p").filter { it.text().isBlank() }.forEach { it.remove() }
@@ -154,17 +189,9 @@ class ShanghaiFantasy :
 
     // endregion
 
-    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
-
-    // region Helpers
-
-    private fun Response.asJsoup(): Document = Jsoup.parse(body.string(), request.url.toString())
-
-    // endregion
-
     // region Filters
 
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         GenreFilter(),
         StatusFilter(),
     )
@@ -207,14 +234,14 @@ class ShanghaiFantasy :
     // region Data classes
 
     @Serializable
-    data class ShanghaiNovel(
+    class ShanghaiNovel(
         val title: String = "",
         val permalink: String = "",
         val novelImage: String = "",
     )
 
     @Serializable
-    data class ShanghaiChapter(
+    class ShanghaiChapter(
         val title: String = "",
         val permalink: String = "",
         val locked: Boolean = false,

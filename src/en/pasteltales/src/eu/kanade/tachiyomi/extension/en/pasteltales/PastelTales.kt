@@ -1,12 +1,9 @@
-﻿package eu.kanade.tachiyomi.novelextension.en.pasteltales
+package eu.kanade.tachiyomi.novelextension.en.pasteltales
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
+import keiyoushi.annotation.Source
 
-class PastelTales :
-    MadaraNovel(
-        baseUrl = "https://pasteltales.com",
-        name = "PastelTales",
-        lang = "en",
-    ) {
+@Source
+abstract class PastelTales : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
 }

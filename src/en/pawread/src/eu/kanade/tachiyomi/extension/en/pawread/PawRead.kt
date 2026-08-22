@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.novelextension.en.pawread
+package eu.kanade.tachiyomi.novelextension.en.pawread
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
@@ -8,29 +8,44 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
+import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
-import java.text.SimpleDateFormat
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-class PawRead :
-    HttpSource(),
+@Source
+abstract class PawRead :
+    KeiSource(),
     NovelSource {
 
-    override val name = "PawRead"
-    override val baseUrl = "https://m.pawread.com"
-    override val lang = "en"
     override val supportsLatest = true
-    override val isNovelSource = true
-    override val client = network.cloudflareClient
+
+    /**
+     * The site's novel detail URL shape, as `/novel/<slug>`. [SManga.url] is stored as the bare
+     * slug (see [SlugPath]); a stored value starting with "/" is a pre-existing full-path entry
+     * from before this source adopted slug storage, and is resolved unchanged regardless of
+     * this template.
+     */
+    protected open val mangaPathTemplate: SlugPath = SlugPath("/novel/")
+
     // ======================== Popular ========================
 
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/list/?sort=click&page=$page", headers)
+    protected open fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/list/?sort=click&page=$page", headers)
 
-    override fun popularMangaParse(response: Response): MangasPage {
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val popularRequest = buildPopularMangaRequest(page)
+        val response = client.get(popularRequest.url, popularRequest.headers)
         val doc = response.asJsoup()
         val mangas = parseNovels(doc)
         // Always assume next page exists if we got results
@@ -38,12 +53,18 @@ class PawRead :
     }
     // ======================== Latest ========================
 
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/list/?sort=update&page=$page", headers)
+    protected open fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/list/?sort=update&page=$page", headers)
 
-    override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val latestRequest = buildLatestUpdatesRequest(page)
+        val response = client.get(latestRequest.url, latestRequest.headers)
+        val doc = response.asJsoup()
+        val mangas = parseNovels(doc)
+        return MangasPage(mangas, mangas.isNotEmpty())
+    }
     // ======================== Search ========================
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    protected open fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (query.isNotBlank()) {
             return GET("$baseUrl/search/?keywords=$query&page=$page", headers)
         }
@@ -88,13 +109,19 @@ class PawRead :
         return GET(url, headers)
     }
 
-    override fun searchMangaParse(response: Response) = popularMangaParse(response)
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val searchRequest = buildSearchMangaRequest(page, query, filters)
+        val response = client.get(searchRequest.url, searchRequest.headers)
+        val doc = response.asJsoup()
+        val mangas = parseNovels(doc)
+        return MangasPage(mangas, mangas.isNotEmpty())
+    }
     // ======================== Parse Novels ========================
 
     private fun parseNovels(doc: Document): List<SManga> {
         return doc.select(".list-comic a.txtA, .list-comic a.title, .itemBox a.txtA, .itemBox a.title").mapNotNull { element ->
             try {
-                val title = element.text().trim()
+                val title = element.text()
                 if (title.isBlank()) return@mapNotNull null
 
                 val url = element.attr("href")
@@ -105,7 +132,7 @@ class PawRead :
 
                 SManga.create().apply {
                     this.title = title
-                    this.url = "/$path/"
+                    this.url = mangaPathTemplate.slug("/$path")
                     thumbnail_url = cover
                 }
             } catch (e: Exception) {
@@ -115,42 +142,55 @@ class PawRead :
     }
     // ======================== Details ========================
 
-    override fun mangaDetailsRequest(manga: SManga): Request {
-        val url = baseUrl + manga.url.let { if (it.endsWith("/")) it else "$it/" }
-        return GET(url, headers)
+    protected open fun buildMangaDetailsRequest(manga: SManga): Request {
+        val resolved = mangaPathTemplate.resolve(manga.url).let { if (it.endsWith("/")) it else "$it/" }
+        return GET(baseUrl + resolved, headers)
     }
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        // Details and the chapter list both live on the same novel page - fetch it once.
+        val mangaDetailsRequest = buildMangaDetailsRequest(manga)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers)
         val doc = response.asJsoup()
 
-        return SManga.create().apply {
-            // Cover and name from #Cover div
-            val coverDiv = doc.selectFirst("#Cover")
-            val img = coverDiv?.selectFirst("img")
-            thumbnail_url = img?.attr("src")
+        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(doc, response) else chapters
 
-            // Title: try img title, then h1, then <title> tag minus " - PawRead"
-            title = img?.attr("title")?.trim()?.ifBlank { null }
-                ?: doc.selectFirst("h1")?.text()?.trim()?.ifBlank { null }
-                ?: doc.selectFirst("title")?.text()
-                    ?.replace(Regex("\\s*-\\s*PawRead.*$", RegexOption.IGNORE_CASE), "")
-                    ?.trim()
-                ?: ""
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
 
-            val infoItems = doc.select("p.txtItme")
-            if (infoItems.size >= 1) {
-                status = parseStatus(infoItems[0].text())
-            }
-            if (infoItems.size >= 2) {
-                author = infoItems[1].text().trim()
-            }
+    private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
+        // Cover and name from #Cover div
+        val coverDiv = doc.selectFirst("#Cover")
+        val img = coverDiv?.selectFirst("img")
+        thumbnail_url = img?.attr("src")
 
-            // Genres from btn-default links
-            genre = doc.select("a.btn-default").joinToString(", ") { it.text().trim() }
+        // Title: try img title, then h1, then <title> tag minus " - PawRead"
+        title = img?.attr("title")?.trim()?.ifBlank { null }
+            ?: doc.selectFirst("h1")?.text()?.ifBlank { null }
+            ?: doc.selectFirst("title")?.text()
+                ?.replace(Regex("\\s*-\\s*PawRead.*$", RegexOption.IGNORE_CASE), "")
+                ?.trim()
+            ?: ""
 
-            // Summary from #full-des
-            description = doc.selectFirst("#full-des")?.text()?.trim()
+        val infoItems = doc.select("p.txtItme")
+        if (infoItems.size >= 1) {
+            status = parseStatus(infoItems[0].text())
         }
+        if (infoItems.size >= 2) {
+            author = infoItems[1].text()
+        }
+
+        // Genres from btn-default links
+        genre = doc.select("a.btn-default").joinToString { it.text() }
+
+        // Summary from #full-des
+        description = doc.selectFirst("#full-des")?.text()
     }
 
     private fun parseStatus(text: String): Int = when {
@@ -166,10 +206,7 @@ class PawRead :
     }
     // ======================== Chapters ========================
 
-    override fun chapterListRequest(manga: SManga): Request = mangaDetailsRequest(manga)
-
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val doc = response.asJsoup()
+    private fun parseChapterList(doc: Document, response: Response): List<SChapter> {
         val novelPath = response.request.url.encodedPath.let {
             if (it.endsWith("/")) it.dropLast(1) else it
         }
@@ -182,17 +219,15 @@ class PawRead :
                 val chapterPath = "$novelPath/$chapterId.html"
 
                 val spans = element.select("span")
-                val chapterName = spans.firstOrNull()?.text()?.trim() ?: "Chapter $chapterId"
+                val chapterName = spans.firstOrNull()?.text() ?: "Chapter $chapterId"
 
                 // Date from second span (format: YYYY.MM.DD)
-                val dateStr = spans.getOrNull(1)?.text()?.trim() ?: ""
-                val dateUpload = try {
-                    if (dateStr.contains(".")) {
-                        DATE_FORMAT.parse(dateStr)?.time ?: 0L
-                    } else {
-                        0L
-                    }
-                } catch (e: Exception) {
+                val dateStr = spans.getOrNull(1)?.text() ?: ""
+                val dateUpload = if (dateStr.contains(".")) {
+                    runCatching {
+                        LocalDate.parse(dateStr, DATE_FORMAT).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                    }.getOrDefault(0L)
+                } else {
                     0L
                 }
 
@@ -208,15 +243,26 @@ class PawRead :
             }
         }.reversed()
     }
+
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url).let { if (it.endsWith("/")) it else "$it/" }
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
+        val mangaDetailsRequest = buildMangaDetailsRequest(manga)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, ensureSuccess = false)
+        if (!response.isSuccessful) return null
+        val doc = response.asJsoup()
+        return parseMangaDetails(doc).apply { this.url = manga.url }
+    }
+
     // ======================== Pages ========================
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
-    override fun imageUrlParse(response: Response): String = ""
     // ======================== Novel Content ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        val response = client.get(baseUrl + page.url, headers)
         val doc = response.asJsoup()
 
         val content = doc.selectFirst("div.main") ?: return ""
@@ -233,7 +279,7 @@ class PawRead :
     }
     // ======================== Filters ========================
 
-    override fun getFilterList() = FilterList(
+    override fun getFilterList(data: JsonElement?) = FilterList(
         Filter.Header("Filters are ignored when using text search"),
         GenreFilter(),
         StatusFilter(),
@@ -292,10 +338,8 @@ class PawRead :
         fun toUriPart() = genres[state].second
     }
 
-    private fun Response.asJsoup(): Document = Jsoup.parse(body.string())
-
     companion object {
-        private val DATE_FORMAT = SimpleDateFormat("yyyy.MM.dd", Locale.US)
+        private val DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy.MM.dd", Locale.US)
 
         private val genres = listOf(
             Pair("All", ""),

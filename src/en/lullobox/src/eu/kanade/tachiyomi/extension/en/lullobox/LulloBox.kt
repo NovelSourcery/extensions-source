@@ -1,13 +1,10 @@
 ﻿package eu.kanade.tachiyomi.novelextension.en.lullobox
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
+import keiyoushi.annotation.Source
 
-class LulloBox :
-    MadaraNovel(
-        baseUrl = "https://lullobox.com",
-        name = "LulloBox",
-        lang = "en",
-    ) {
+@Source
+abstract class LulloBox : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
     override val reverseChapterListDefault = true
 }

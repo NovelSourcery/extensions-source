@@ -1,12 +1,10 @@
 package eu.kanade.tachiyomi.novelextension.en.sufficientvelocity
 
 import eu.kanade.tachiyomi.multisrc.xenforo.XenForo
+import keiyoushi.annotation.Source
 
-class SufficientVelocity :
-    XenForo(
-        name = "Sufficient Velocity",
-        baseUrl = "https://forums.sufficientvelocity.com",
-    ) {
+@Source
+abstract class SufficientVelocity : XenForo() {
     override val reverseChapters = true
 
     override val forums = listOf(

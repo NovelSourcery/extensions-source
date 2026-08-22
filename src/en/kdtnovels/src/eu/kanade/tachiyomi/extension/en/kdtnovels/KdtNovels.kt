@@ -4,24 +4,22 @@ import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
+import keiyoushi.annotation.Source
+import kotlinx.serialization.json.JsonElement
 import okhttp3.Request
 
-class KdtNovels :
-    LightNovelWPNovel(
-        baseUrl = "https://kdtnovels.net",
-        name = "KDT Novels",
-        lang = "en",
-    ) {
+@Source
+abstract class KdtNovels : LightNovelWPNovel() {
     // ======================== Filters ========================
 
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         StatusFilter(),
         SortFilter(),
         GenreFilter(),
         TypeFilter(),
     )
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         var url = "$baseUrl/$seriesPath?page=$page"
 
         if (query.isNotBlank()) {

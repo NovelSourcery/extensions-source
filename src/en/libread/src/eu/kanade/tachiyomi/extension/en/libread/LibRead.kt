@@ -1,24 +1,23 @@
-﻿package eu.kanade.tachiyomi.novelextension.en.libread
+package eu.kanade.tachiyomi.novelextension.en.libread
 
 import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
-import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.utils.SlugPath
+import kotlinx.serialization.json.JsonElement
+import okhttp3.FormBody
 import okhttp3.Request
-import okhttp3.Response
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
-class LibRead :
-    ReadNovelFull(
-        name = "LibRead",
-        baseUrl = "https://libread.com",
-        lang = "en",
-    ) {
+@Source
+abstract class LibRead : ReadNovelFull() {
     override val latestPage = "sort/latest-release"
     override val popularPage = "sort/most-popular"
     override val pageAsPath = true
@@ -30,9 +29,10 @@ class LibRead :
     // come from #indexselect ("C.1 - C.40" ranges).
     override val noAjax = true
     override val chaptersPaginated = true
+    override val mangaPathTemplate = SlugPath("/libread/")
 
     override fun chapterListPageRequest(manga: SManga, page: Int): Request {
-        val base = baseUrl + manga.url.trimEnd('/')
+        val base = baseUrl + mangaPathTemplate.resolve(manga.url).trimEnd('/')
         val url = if (page <= 1) base else "$base?$pageParam=$page"
         return GET(url, headers)
     }
@@ -42,7 +42,7 @@ class LibRead :
     // Chapter urls follow /libread/<slug>/chapter-0<N> (literal leading zero), so the fast list
     // can be synthesized.
     override fun chapterUrlFromNumber(manga: SManga, number: Int): String? {
-        val path = manga.url.trimEnd('/')
+        val path = mangaPathTemplate.resolve(manga.url).trimEnd('/')
         if (path.isBlank()) return null
         return "$path/chapter-0$number"
     }
@@ -50,13 +50,16 @@ class LibRead :
     override fun popularMangaSelector() = "div.ul-list1 div.li, ul.ul-list2 li"
 
     override fun popularMangaFromElement(element: Element): SManga = SManga.create().apply {
-        // title is a lateinit var; an element whose link selector doesn't match (ad slot, stray
-        // li, layout drift) must still leave title assigned or any later read of it crashes.
+        // title/url are lateinit vars; an element whose link selector doesn't match (ad slot,
+        // stray li, layout drift - seen on the search/genre listing pages) must still leave both
+        // assigned or any later read (e.g. dedup by manga.url) crashes with
+        // UninitializedPropertyAccessException.
         title = ""
+        url = ""
         val link = element.selectFirst("h3.tit a, a.tit, a.con")
         if (link != null) {
-            title = link.attr("title").ifEmpty { link.text().trim() }
-            setUrlWithoutDomain(link.attr("abs:href"))
+            title = link.attr("title").ifEmpty { link.text() }
+            setSlugUrl(link.attr("abs:href"))
         }
         thumbnail_url = element.selectFirst("img")?.let { img ->
             val src = img.attr("data-src").ifEmpty { img.attr("src") }
@@ -66,39 +69,7 @@ class LibRead :
 
     override fun popularMangaNextPageSelector() = "li.next:not(.disabled), ul.pagination li.active + li a, div.pages a[href], div.pages ul li a[href]"
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        val document = response.asJsoup()
-        val mangas = document.select(popularMangaSelector()).map { popularMangaFromElement(it) }
-
-        // Try common next-page indicators first
-        var hasNextPage = document.selectFirst("li.next:not(.disabled), ul.pagination li.active + li a") != null
-
-        if (!hasNextPage) {
-            // Fallback: inspect div.pages anchors — look for numeric links greater than current page
-            val path = response.request.url.encodedPath.trimEnd('/')
-            val currentPage = path.substringAfterLast('/').toIntOrNull() ?: 1
-
-            val pageAnchors = document.select("div.pages a[href]").filter { a ->
-                val href = a.attr("href")
-                href.isNotBlank() && !href.startsWith("javascript", true)
-            }
-
-            hasNextPage = pageAnchors.any { a ->
-                val text = a.text().trim()
-                val num = text.toIntOrNull()
-                if (num != null) {
-                    num > currentPage
-                } else {
-                    // treat arrows (>, >>) or next labels as next page
-                    text.contains(">") || a.attr("rel") == "next"
-                }
-            }
-        }
-
-        return MangasPage(mangas, hasNextPage)
-    }
-
-    override fun latestUpdatesRequest(page: Int): Request = okhttp3.Request.Builder()
+    override fun buildLatestUpdatesRequest(page: Int): Request = okhttp3.Request.Builder()
         .url("$baseUrl/$latestPage?page=$page")
         .headers(headers)
         .build()
@@ -107,14 +78,15 @@ class LibRead :
 
     override fun latestUpdatesFromElement(element: Element) = popularMangaFromElement(element)
 
-    override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
-
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (query.isNotBlank()) {
-            // Text search
+            // Text search moved server-side to POST with a "searchkey" form field; the old
+            // GET ?keyword= is silently ignored now (confirmed live - it renders an empty query).
+            // Results aren't paginated (capped at 50), so page is irrelevant here.
             return Request.Builder()
-                .url("$baseUrl/search?keyword=${java.net.URLEncoder.encode(query, "UTF-8")}&page=$page")
+                .url("$baseUrl/search")
                 .headers(headers)
+                .post(FormBody.Builder().add("searchkey", query).build())
                 .build()
         }
 
@@ -154,12 +126,10 @@ class LibRead :
         }
 
         // Default: popular
-        return popularMangaRequest(page)
+        return buildPopularMangaRequest(page)
     }
 
-    override fun searchMangaParse(response: Response) = popularMangaParse(response)
-
-    override fun getFilterList() = FilterList(
+    override fun getFilterList(data: JsonElement?) = FilterList(
         Filter.Header("Note: Genre/Type filter only works with empty search"),
         TypeFilter(),
         GenreFilter(),
@@ -223,7 +193,7 @@ class LibRead :
 
         // LibRead specific customization if needed (fallback to base class parsing)
         if (manga.title.isNullOrBlank()) {
-            manga.title = document.selectFirst("div.m-imgtxt h1.tit, div.m-book1 h1.tit")?.text()?.trim() ?: ""
+            manga.title = document.selectFirst("div.m-imgtxt h1.tit, div.m-book1 h1.tit")?.text() ?: ""
         }
         if (manga.thumbnail_url.isNullOrBlank()) {
             document.selectFirst("div.m-imgtxt img, div.m-book1 img")?.let { img ->
@@ -232,7 +202,7 @@ class LibRead :
             }
         }
         if (manga.description.isNullOrBlank()) {
-            manga.description = document.selectFirst("div.m-desc div.txt div.inner, div.desc-text")?.text()?.trim()
+            manga.description = document.selectFirst("div.m-desc div.txt div.inner, div.desc-text")?.text()
         }
 
         return manga
@@ -240,7 +210,8 @@ class LibRead :
 
     // Content parsing
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(okhttp3.Request.Builder().url(if (page.url.startsWith("http")) page.url else baseUrl + page.url).headers(headers).build()).execute()
+        val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
+        val response = client.get(url, headers)
         val document = response.asJsoup()
 
         val content = document.selectFirst("div.txt div#article, div#chapter-content, div.chapter-content, div#chr-content")
