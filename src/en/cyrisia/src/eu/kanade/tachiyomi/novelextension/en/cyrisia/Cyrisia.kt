@@ -2,6 +2,7 @@ package eu.kanade.tachiyomi.novelextension.en.cyrisia
 
 import androidx.preference.EditTextPreference
 import androidx.preference.PreferenceScreen
+import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -19,16 +20,20 @@ import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.setAltTitles
 import keiyoushi.utils.toJsonRequestBody
-import keiyoushi.zip.readZipEntry
+import keiyoushi.zip.Entry
+import keiyoushi.zip.dataRange
+import keiyoushi.zip.range
 import keiyoushi.zip.zipDirectoryAsync
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
+import okio.Buffer
 import okio.buffer
 import org.jsoup.Jsoup
 import org.jsoup.parser.Parser
+import keiyoushi.zip.readEntry as parseZipEntry
 
 /**
  * Cyrisia is a personal/community EPUB library: series are static uploaded volumes rather than
@@ -193,9 +198,27 @@ abstract class Cyrisia :
         // css are never fetched at all.
         val zipUrl = baseUrl + page.url
         val directory = client.zipDirectoryAsync(zipUrl, zipHeaders)
+
+        // cyrisia.com's file server ignores the Range header on some responses and returns the
+        // whole EPUB with 200 instead of 206 (confirmed live) - a naive reader then misreads the
+        // response as if it started at the requested offset, corrupting every entry after the
+        // first. Once that happens the "ranged" response already holds the entire file, so cache
+        // it and slice later entries out of it instead of re-requesting (and re-downloading the
+        // whole file) per entry.
+        var wholeFile: ByteArray? = null
+
         fun readEntry(name: String): ByteArray? {
             val entry = directory.entries.firstOrNull { it.name == name } ?: return null
-            return client.readZipEntry(zipUrl, entry, zipHeaders).buffer().readByteArray()
+
+            wholeFile?.let { return sliceZipEntry(it, entry) }
+
+            val response = client.newCall(GET(zipUrl, zipHeaders).newBuilder().range(entry.dataRange).build()).execute()
+            val body = response.body.bytes()
+            if (response.code != 206) {
+                wholeFile = body
+                return sliceZipEntry(body, entry)
+            }
+            return parseZipEntry(Buffer().write(body), entry.compressedSize, entry.method).buffer().readByteArray()
         }
 
         val containerXml = readEntry("META-INF/container.xml") ?: throw Exception("Not a valid EPUB: missing container.xml")
@@ -219,6 +242,13 @@ abstract class Cyrisia :
             body.select("img, svg, script, style").remove()
             body.html()
         }
+    }
+
+    // Slices one entry's local header + data out of an already-fully-downloaded archive.
+    private fun sliceZipEntry(body: ByteArray, entry: Entry): ByteArray {
+        val from = entry.localHeaderOffset.toInt()
+        val len = minOf(entry.dataRange.last - entry.dataRange.first + 1, (body.size - from).toLong()).toInt()
+        return parseZipEntry(Buffer().write(body, from, len), entry.compressedSize, entry.method).buffer().readByteArray()
     }
 
     // Best-effort: marks the volume read in the logged-in user's history. Requires a real session
