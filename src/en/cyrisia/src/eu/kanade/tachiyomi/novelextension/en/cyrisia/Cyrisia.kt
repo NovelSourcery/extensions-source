@@ -1,5 +1,6 @@
 package eu.kanade.tachiyomi.novelextension.en.cyrisia
 
+import android.util.Base64
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -176,8 +177,7 @@ abstract class Cyrisia :
         val zipHeaders = headers.newBuilder().set("Referer", readerReferer).build()
 
         // The EPUB is streamed via HTTP Range requests (directory + only the entries actually
-        // needed) instead of downloading the whole archive into memory - a volume's images/fonts/
-        // css are never fetched at all.
+        // needed) instead of downloading the whole archive into memory.
         val zipUrl = baseUrl + page.url
         val directory = fetchZipDirectory(zipUrl, zipHeaders)
 
@@ -217,15 +217,98 @@ abstract class Cyrisia :
             .mapNotNull { hrefById[it.attr("idref")] }
             .filterNot { href -> SKIP_SPINE_ITEM_REGEX.containsMatchIn(href) }
 
+        // Stylesheets/scripts referenced from each chapter's <head> - deduped by resolved path,
+        // since every chapter in a volume typically links the same shared files.
+        val cssJsPaths = LinkedHashSet<String>()
+
+        // Caps how much image data gets base64-inlined into the returned HTML: a per-image limit
+        // (skip a single oversized illustration/scan) and a running total for the whole volume
+        // (stop inlining once a volume's images alone would bloat the page past a sane size),
+        // so a volume can't blow up memory just by having many/large images.
+        var inlinedImageBytes = 0L
+        fun inlineImage(baseDir: String, relative: String): String? {
+            if (relative.isEmpty() || relative.startsWith("data:")) return null
+            val path = resolveZipPath(baseDir, relative)
+            val entry = directory.entries.firstOrNull { it.name == path } ?: return null
+            if (entry.compressedSize > MAX_INLINE_IMAGE_BYTES || inlinedImageBytes + entry.compressedSize > MAX_TOTAL_INLINE_IMAGE_BYTES) return null
+            val bytes = readEntry(path) ?: return null
+            inlinedImageBytes += bytes.size
+            return "data:${mimeTypeFor(path)};base64,${Base64.encodeToString(bytes, Base64.NO_WRAP)}"
+        }
+
         val text = spineHrefs.joinToString("<hr>") { href ->
-            val entryPath = if (opfDir.isEmpty()) href else "$opfDir/$href"
+            val entryPath = resolveZipPath(opfDir, href)
             val bytes = readEntry(entryPath) ?: return@joinToString ""
-            val body = Jsoup.parse(String(bytes)).body()
-            body.select("img, svg, script, style").remove()
+            val entryDir = entryPath.substringBeforeLast("/", "")
+            val doc = Jsoup.parse(String(bytes))
+
+            doc.head().select("link, script").forEach { el ->
+                val relHref = when {
+                    el.tagName() == "link" && el.attr("rel").equals("stylesheet", ignoreCase = true) -> el.attr("href")
+                    el.tagName() == "script" -> el.attr("src")
+                    else -> ""
+                }
+                if (relHref.isNotEmpty()) cssJsPaths += resolveZipPath(entryDir, relHref)
+            }
+
+            val body = doc.body()
+            body.select("img[src]").forEach { img ->
+                val inlined = inlineImage(entryDir, img.attr("src"))
+                if (inlined != null) img.attr("src", inlined) else img.remove()
+            }
+            body.select("image").forEach { image ->
+                val attrName = if (image.hasAttr("xlink:href")) {
+                    "xlink:href"
+                } else if (image.hasAttr("href")) {
+                    "href"
+                } else {
+                    return@forEach
+                }
+                val inlined = inlineImage(entryDir, image.attr(attrName))
+                if (inlined != null) image.attr(attrName, inlined) else image.remove()
+            }
             body.html()
         }
-        lastPage = page.url to text
-        return text
+
+        val cssJs = buildString {
+            for (path in cssJsPaths) {
+                val bytes = readEntry(path) ?: continue
+                if (path.endsWith(".css", ignoreCase = true)) {
+                    append("<style>").append(String(bytes)).append("</style>")
+                } else {
+                    append("<script>").append(String(bytes)).append("</script>")
+                }
+            }
+        }
+
+        val fullText = cssJs + text
+        lastPage = page.url to fullText
+        return fullText
+    }
+
+    // Resolves a relative EPUB-internal path (which may use "../") against a directory, without
+    // ever escaping above the archive root.
+    private fun resolveZipPath(baseDir: String, relative: String): String {
+        if (relative.startsWith("/")) return resolveZipPath("", relative.removePrefix("/"))
+        val parts = ArrayDeque<String>()
+        for (segment in (if (baseDir.isEmpty()) relative else "$baseDir/$relative").split("/")) {
+            when (segment) {
+                "", "." -> {}
+                ".." -> parts.removeLastOrNull()
+                else -> parts.addLast(segment)
+            }
+        }
+        return parts.joinToString("/")
+    }
+
+    private fun mimeTypeFor(path: String): String = when (path.substringAfterLast(".", "").lowercase()) {
+        "png" -> "image/png"
+        "jpg", "jpeg" -> "image/jpeg"
+        "gif" -> "image/gif"
+        "webp" -> "image/webp"
+        "svg" -> "image/svg+xml"
+        "bmp" -> "image/bmp"
+        else -> "application/octet-stream"
     }
 
     // Same 200-instead-of-206 quirk as readEntry, but for the initial directory (EOCD/central
@@ -272,6 +355,8 @@ abstract class Cyrisia :
 
     companion object {
         private const val PAGE_SIZE = 24
+        private const val MAX_INLINE_IMAGE_BYTES = 5L * 1024 * 1024
+        private const val MAX_TOTAL_INLINE_IMAGE_BYTES = 60L * 1024 * 1024
 
         private val SKIP_SPINE_ITEM_REGEX = Regex("cover|nav\\.x?html", RegexOption.IGNORE_CASE)
     }
