@@ -21,11 +21,14 @@ import keiyoushi.utils.parseAs
 import keiyoushi.utils.setAltTitles
 import keiyoushi.utils.toJsonRequestBody
 import keiyoushi.zip.Entry
+import keiyoushi.zip.MAX_EOCD_SEARCH
+import keiyoushi.zip.ZipDirectory
 import keiyoushi.zip.dataRange
 import keiyoushi.zip.range
-import keiyoushi.zip.zipDirectoryAsync
+import keiyoushi.zip.readZipDirectory
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -197,7 +200,7 @@ abstract class Cyrisia :
         // needed) instead of downloading the whole archive into memory - a volume's images/fonts/
         // css are never fetched at all.
         val zipUrl = baseUrl + page.url
-        val directory = client.zipDirectoryAsync(zipUrl, zipHeaders)
+        val directory = fetchZipDirectory(zipUrl, zipHeaders)
 
         // cyrisia.com's file server ignores the Range header on some responses and returns the
         // whole EPUB with 200 instead of 206 (confirmed live) - a naive reader then misreads the
@@ -241,6 +244,19 @@ abstract class Cyrisia :
             val body = Jsoup.parse(String(bytes)).body()
             body.select("img, svg, script, style").remove()
             body.html()
+        }
+    }
+
+    // Same 200-instead-of-206 quirk as readEntry, but for the initial directory (EOCD/central
+    // directory) request: cyrisia.com's file server sometimes ignores the suffix Range request and
+    // returns the whole file with no Content-Range header, so fall back to the body's own length.
+    private suspend fun fetchZipDirectory(url: String, zipHeaders: Headers): ZipDirectory {
+        val rangeHeaders = zipHeaders.newBuilder().set("Range", "bytes=-$MAX_EOCD_SEARCH").build()
+        val response = client.get(url, rangeHeaders)
+        val tail = response.body.bytes()
+        val total = response.header("Content-Range")?.substringAfterLast("/")?.toLongOrNull() ?: tail.size.toLong()
+        return readZipDirectory(tail, total) { range ->
+            client.newCall(GET(url, zipHeaders).newBuilder().range(range).build()).execute().body.source()
         }
     }
 
