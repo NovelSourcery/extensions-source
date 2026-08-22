@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.extension.en.greenz
+package eu.kanade.tachiyomi.novelextension.en.greenz
 
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
@@ -84,9 +84,16 @@ abstract class Greenz :
 
         val updatedChapters = if (fetchChapters) {
             val showLocked = preferences.getBoolean(PREF_SHOW_LOCKED, false)
-            client.get("$API_URL/chapters?novelId=$id&limit=$CHAPTER_LIMIT", headers)
-                .parseAs<PageResponse<ChapterDto>>().data.items
-                .mapNotNull { it.toSChapter(slug, showLocked) }
+            val allChapters = mutableListOf<ChapterDto>()
+            var page = 1
+            while (true) {
+                val data = client.get("$API_URL/chapters?novelId=$id&limit=$CHAPTER_PAGE_SIZE&page=$page", headers)
+                    .parseAs<PageResponse<ChapterDto>>().data
+                allChapters += data.items
+                if (!data.meta.hasNextPage || data.items.isEmpty()) break
+                page++
+            }
+            allChapters.mapNotNull { it.toSChapter(slug, showLocked) }
         } else {
             chapters
         }
@@ -118,7 +125,18 @@ abstract class Greenz :
         // paragraphs, keeping blank <p> as <br> to preserve the original line spacing.
         return Jsoup.parseBodyFragment(html).select("p").joinToString("") { p ->
             val text = p.text()
-            if (text.isEmpty()) "<br>" else "<p>$text</p>"
+            if (text.isEmpty()) "<br>" else "<p>${escapeHtml(text)}</p>"
+        }
+    }
+
+    private fun escapeHtml(text: String): String = buildString(text.length + 16) {
+        text.forEach { ch ->
+            when (ch) {
+                '&' -> append("&amp;")
+                '<' -> append("&lt;")
+                '>' -> append("&gt;")
+                else -> append(ch)
+            }
         }
     }
 
@@ -238,7 +256,7 @@ abstract class Greenz :
         private const val API_HOST = "https://admin.greenz.com"
         private const val API_URL = "$API_HOST/api"
         private const val PAGE_SIZE = 20
-        private const val CHAPTER_LIMIT = 1000
+        private const val CHAPTER_PAGE_SIZE = 100
         private const val PREF_SHOW_LOCKED = "pref_show_locked_chapters"
     }
 }
