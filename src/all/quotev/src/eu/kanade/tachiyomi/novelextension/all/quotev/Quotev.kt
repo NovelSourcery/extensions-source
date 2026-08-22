@@ -46,27 +46,37 @@ abstract class Quotev :
 
     // ======================== Popular / Search ========================
 
-    override suspend fun getPopularManga(page: Int): MangasPage = browse(page, section = "", genre = "", media = "", sort = "users", longOnly = false, lid = "")
+    override suspend fun getPopularManga(page: Int): MangasPage = browse(page, BrowseOptions(sort = "users"))
 
     override suspend fun getLatestUpdates(page: Int): MangasPage = throw UnsupportedOperationException()
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val lid = filters.filterIsInstance<LanguageFilter>().firstOrNull()?.toUriPart().orEmpty()
+        val opts = BrowseOptions(
+            section = filters.filterIsInstance<SectionFilter>().firstOrNull()?.toUriPart().orEmpty(),
+            genre = filters.filterIsInstance<GenreFilter>().firstOrNull()?.toUriPart().orEmpty(),
+            media = filters.filterIsInstance<MediaFilter>().firstOrNull()?.toUriPart().orEmpty(),
+            sort = filters.filterIsInstance<SortFilter>().firstOrNull()?.toUriPart().orEmpty(),
+            minLen = filters.filterIsInstance<MinLengthFilter>().firstOrNull()?.toUriPart().orEmpty(),
+            lid = filters.filterIsInstance<LanguageFilter>().firstOrNull()?.toUriPart().orEmpty(),
+            excludeGenreId = filters.filterIsInstance<ExcludeGenreFilter>().firstOrNull()?.toUriPart().orEmpty(),
+            crossover = filters.filterIsInstance<CrossoverFilter>().firstOrNull()?.toUriPart().orEmpty(),
+            realPeople = filters.filterIsInstance<RealPeopleFilter>().firstOrNull()?.toUriPart().orEmpty(),
+            completeOnly = filters.filterIsInstance<CompleteFilter>().firstOrNull()?.state == true,
+            featured = filters.filterIsInstance<FeaturedFilter>().firstOrNull()?.state == true,
+            filterProfanity = filters.filterIsInstance<ProfanityFilter>().firstOrNull()?.state != false,
+            filterViolence = filters.filterIsInstance<ViolenceFilter>().firstOrNull()?.state != false,
+            mature = filters.filterIsInstance<MatureFilter>().firstOrNull()?.state == true,
+            excludeText = filters.filterIsInstance<ExcludeTextFilter>().firstOrNull()?.state.orEmpty(),
+        )
 
         if (query.isNotBlank()) {
             val url = "$baseUrl/search/$query".toHttpUrl().newBuilder()
-                .apply { if (lid.isNotBlank()) addQueryParameter("lid", lid) }
+                .applyBrowseOptions(opts)
                 .apply { if (page > 1) addQueryParameter("page", page.toString()) }
                 .build()
             return parseStoryList(client.get(url, headers).asJsoup())
         }
-
-        val section = filters.filterIsInstance<SectionFilter>().firstOrNull()?.toUriPart().orEmpty()
-        val genre = filters.filterIsInstance<GenreFilter>().firstOrNull()?.toUriPart().orEmpty()
-        val media = filters.filterIsInstance<MediaFilter>().firstOrNull()?.toUriPart().orEmpty()
-        val sort = filters.filterIsInstance<SortFilter>().firstOrNull()?.toUriPart().orEmpty()
-        val longOnly = filters.filterIsInstance<LengthFilter>().firstOrNull()?.state == true
-        return browse(page, section, genre, media, sort, longOnly, lid)
+        return browse(page, opts)
     }
 
     /**
@@ -75,25 +85,60 @@ abstract class Quotev :
      * path (this is what caused `/stories/c/Fiction/c/Harem`, a section hardcoded onto a category
      * filter value that wasn't actually a subcategory of it, to 404 into an empty result set).
      *
-     * The site also has a richer bitmask-category filter dialog (`/search?cat=<n>&...`) that can
-     * combine multiple categories and exposes a couple genres (Vampires, Wolves) not in the plain
-     * nav; single-category selections there just 301-redirect back to these same pretty paths, and
-     * combining categories wasn't confirmed to work, so it isn't exposed here. `lid` (language) is
-     * pulled from that same dialog though - confirmed live to work appended onto any of these URLs.
+     * Everything else here (exclude genre, crossover, real people, complete, featured, profanity/
+     * violence/mature toggles, exclude text, min length, language) comes straight from the site's
+     * own filter-dialog JS (`BrowseFilter`/its `G()` request builder) rather than guesswork, and
+     * `complete`/`pf` were spot-checked live to actually change results when appended as extra query
+     * params onto these pretty paths. `mature` mirrors the dialog's `mf` flag, which the site itself
+     * only honors for a logged-in session (anonymous clicks show a login prompt) - this extension
+     * has no login flow, so it may be a no-op here. The bitmask *include* category (`cat`) still
+     * isn't exposed since combining values wasn't confirmed to work; `xcat` (exclude) is a single
+     * value, not a combination, so it's used as-is for the Exclude Genre filter below.
      */
-    private suspend fun browse(page: Int, section: String, genre: String, media: String, sort: String, longOnly: Boolean, lid: String): MangasPage {
-        var path = if (section.isBlank()) "/stories" else "/stories/c/$section"
-        if (section.isNotBlank() && genre.isNotBlank()) path += "/c/$genre"
-        if (section == "Fanfiction" && media.isNotBlank()) path += "/m/$media"
+    private suspend fun browse(page: Int, opts: BrowseOptions): MangasPage {
+        var path = if (opts.section.isBlank()) "/stories" else "/stories/c/${opts.section}"
+        if (opts.section.isNotBlank() && opts.genre.isNotBlank()) path += "/c/${opts.genre}"
+        if (opts.section == "Fanfiction" && opts.media.isNotBlank()) path += "/m/${opts.media}"
 
         val url = (baseUrl + path).toHttpUrl().newBuilder()
-            .apply { if (sort.isNotBlank()) addQueryParameter("v", sort) }
-            .apply { if (longOnly) addQueryParameter("minLen", "50") }
-            .apply { if (lid.isNotBlank()) addQueryParameter("lid", lid) }
+            .applyBrowseOptions(opts)
             .apply { if (page > 1) addQueryParameter("page", page.toString()) }
             .build()
         return parseStoryList(client.get(url, headers).asJsoup())
     }
+
+    private fun HttpUrl.Builder.applyBrowseOptions(opts: BrowseOptions): HttpUrl.Builder = apply {
+        if (opts.sort.isNotBlank()) addQueryParameter("v", opts.sort)
+        if (opts.minLen.isNotBlank()) addQueryParameter("minLen", opts.minLen)
+        if (opts.lid.isNotBlank()) addQueryParameter("lid", opts.lid)
+        if (opts.excludeGenreId.isNotBlank()) addQueryParameter("xcat", opts.excludeGenreId)
+        if (opts.section == "Fanfiction" && opts.crossover.isNotBlank()) addQueryParameter("crossover", opts.crossover)
+        if (opts.section == "Fanfiction" && opts.realPeople.isNotBlank()) addQueryParameter("rp", opts.realPeople)
+        if (opts.completeOnly) addQueryParameter("complete", "1")
+        if (opts.featured) addQueryParameter("featured", "1")
+        if (!opts.filterProfanity) addQueryParameter("pf", "0")
+        if (!opts.filterViolence) addQueryParameter("vf", "0")
+        if (opts.mature) addQueryParameter("mf", "1")
+        if (opts.excludeText.isNotBlank()) addQueryParameter("xs", opts.excludeText)
+    }
+
+    private data class BrowseOptions(
+        val section: String = "",
+        val genre: String = "",
+        val media: String = "",
+        val sort: String = "",
+        val minLen: String = "",
+        val lid: String = "",
+        val excludeGenreId: String = "",
+        val crossover: String = "",
+        val realPeople: String = "",
+        val completeOnly: Boolean = false,
+        val featured: Boolean = false,
+        val filterProfanity: Boolean = true,
+        val filterViolence: Boolean = true,
+        val mature: Boolean = false,
+        val excludeText: String = "",
+    )
 
     private fun parseStoryList(doc: Document): MangasPage {
         val cards = doc.select("div.quiz[data-quizid]")
@@ -202,11 +247,21 @@ abstract class Quotev :
     override fun getFilterList(data: JsonElement?) = FilterList(
         SectionFilter(),
         GenreFilter(),
-        Filter.Header("Media only applies to the Fanfiction section"),
+        ExcludeGenreFilter(),
+        Filter.Header("Media, Crossover and Real People only apply to the Fanfiction section"),
         MediaFilter(),
+        CrossoverFilter(),
+        RealPeopleFilter(),
         SortFilter(),
-        LengthFilter(),
+        MinLengthFilter(),
         LanguageFilter(),
+        CompleteFilter(),
+        FeaturedFilter(),
+        Filter.Header("Mature requires being logged in on the site; may have no effect here"),
+        ProfanityFilter(),
+        ViolenceFilter(),
+        MatureFilter(),
+        ExcludeTextFilter(),
     )
 
     private open class UriPartFilter(displayName: String, private val vals: Array<Pair<String, String>>, state: Int = 0) : Filter.Select<String>(displayName, vals.map { it.first }.toTypedArray(), state) {
@@ -287,7 +342,71 @@ abstract class Quotev :
             3,
         )
 
-    private class LengthFilter : Filter.CheckBox("Long stories only (50+ pages)")
+    private class MinLengthFilter :
+        UriPartFilter(
+            "Min length",
+            arrayOf(
+                "Any" to "",
+                "10+ pages" to "10",
+                "25+ pages" to "25",
+                "50+ pages" to "50",
+                "75+ pages" to "75",
+                "100+ pages" to "100",
+                "200+ pages" to "200",
+            ),
+        )
+
+    /** Bitmask ids pulled from the same `storyCat` list as [GenreFilter]; used as a single `xcat`
+     * value (exclude), never combined - the dialog's category selects are single-choice each. */
+    private class ExcludeGenreFilter :
+        UriPartFilter(
+            "Exclude genre",
+            arrayOf(
+                "None" to "",
+                "Action" to "2",
+                "Adventure" to "4",
+                "Anime/Manga" to "67108864",
+                "Biography" to "2147483648",
+                "Fantasy" to "16",
+                "Historical" to "2097152",
+                "Horror" to "32",
+                "Humor" to "1048576",
+                "Mystery" to "128",
+                "Poetry" to "524288",
+                "Realistic" to "256",
+                "Romance" to "64",
+                "Science Fiction" to "4194304",
+                "Short Stories" to "33554432",
+                "Supernatural" to "4096",
+                "Thriller" to "512",
+                "Vampires" to "8388608",
+                "Wolves" to "16777216",
+            ),
+        )
+
+    private class CrossoverFilter :
+        UriPartFilter(
+            "Crossover (Fanfiction)",
+            arrayOf("Any" to "", "Yes" to "1", "No" to "2"),
+        )
+
+    private class RealPeopleFilter :
+        UriPartFilter(
+            "Real people (Fanfiction)",
+            arrayOf("Any" to "", "Yes" to "1", "No" to "2"),
+        )
+
+    private class CompleteFilter : Filter.CheckBox("Completed only")
+
+    private class FeaturedFilter : Filter.CheckBox("Featured first")
+
+    private class ProfanityFilter : Filter.CheckBox("Filter profanity", true)
+
+    private class ViolenceFilter : Filter.CheckBox("Filter violence", true)
+
+    private class MatureFilter : Filter.CheckBox("Show mature content")
+
+    private class ExcludeTextFilter : Filter.Text("Exclude (words to avoid)")
 
     /** `lid` values pulled from the site's own filter dialog config (`BrowseFilter({"lang":[...]})`). */
     private class LanguageFilter :
