@@ -20,7 +20,3 @@ keiyoushi {
         path("/series/..*")
     }
 }
-
-dependencies {
-    implementation(project(":lib:cookieinterceptor"))
-}

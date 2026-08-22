@@ -1,9 +1,6 @@
 package eu.kanade.tachiyomi.novelextension.en.cyrisia
 
-import androidx.preference.EditTextPreference
-import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
-import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -12,14 +9,10 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
-import keiyoushi.lib.cookieinterceptor.CookieInterceptor
 import keiyoushi.network.get
-import keiyoushi.network.post
 import keiyoushi.source.KeiSource
-import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.setAltTitles
-import keiyoushi.utils.toJsonRequestBody
 import keiyoushi.zip.Entry
 import keiyoushi.zip.MAX_EOCD_SEARCH
 import keiyoushi.zip.ZipDirectory
@@ -31,7 +24,6 @@ import kotlinx.serialization.Serializable
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.OkHttpClient
 import okio.Buffer
 import okio.buffer
 import org.jsoup.Jsoup
@@ -45,31 +37,14 @@ import keiyoushi.zip.readEntry as parseZipEntry
  *
  * The EPUB file itself needs no login - confirmed live, an anonymous request succeeds as long as
  * `Referer` starts with `$baseUrl/read/` (the site's own reader page for that volume); a bare or
- * missing `Referer` gets a 403. `POST /api/account/read`, which marks a volume as read in the
- * user's history, does require a real logged-in session and 401s otherwise; it's best-effort and
- * never blocks reading. The session cookie preference only affects that history sync.
+ * missing `Referer` gets a 403.
  */
 @Source
 abstract class Cyrisia :
     KeiSource(),
-    NovelSource,
-    ConfigurableSource {
+    NovelSource {
 
     override val supportsLatest = false
-
-    private val preferences by getPreferencesLazy()
-
-    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder {
-        sessionCookie()?.let { addInterceptor(CookieInterceptor(baseUrl.toHttpUrl().host, it)) }
-        return this
-    }
-
-    // Null when no session cookie is configured - callers use this to skip auth-only requests
-    // (e.g. authorizeDownload) that would otherwise just log a pointless 401.
-    private fun sessionCookie(): Pair<String, String>? = preferences.getString(PREF_SESSION_COOKIE, null)
-        ?.split("=", limit = 2)
-        ?.takeIf { it.size == 2 }
-        ?.let { it[0].trim() to it[1].trim() }
 
     // ======================== Popular / Search ========================
 
@@ -178,14 +153,18 @@ abstract class Cyrisia :
 
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
+    // Cyrisia has no chapters of its own - one SChapter is a whole EPUB volume, so re-opening it
+    // (e.g. going back and reopening the same volume) would otherwise redo the full directory +
+    // per-entry range-fetch dance for a result that hasn't changed. Cache only the most recently
+    // read volume - small and bounded, unlike caching every volume ever opened.
+    private var lastPage: Pair<String, String>? = null
+
     override suspend fun fetchPageText(page: Page): String {
+        lastPage?.let { (url, text) -> if (url == page.url) return text }
+
         val segments = (baseUrl + page.url).toHttpUrl().pathSegments
         val seriesName = segments.getOrNull(1)
         val volumeFilename = segments.getOrNull(2)
-
-        if (sessionCookie() != null && seriesName != null && volumeFilename != null) {
-            markRead(seriesName, volumeFilename)
-        }
 
         // The file endpoint 403s without a Referer pointing at the site's own reader page for
         // this volume - see the class doc. It needs no other auth.
@@ -238,13 +217,15 @@ abstract class Cyrisia :
             .mapNotNull { hrefById[it.attr("idref")] }
             .filterNot { href -> SKIP_SPINE_ITEM_REGEX.containsMatchIn(href) }
 
-        return spineHrefs.joinToString("<hr>") { href ->
+        val text = spineHrefs.joinToString("<hr>") { href ->
             val entryPath = if (opfDir.isEmpty()) href else "$opfDir/$href"
             val bytes = readEntry(entryPath) ?: return@joinToString ""
             val body = Jsoup.parse(String(bytes)).body()
             body.select("img, svg, script, style").remove()
             body.html()
         }
+        lastPage = page.url to text
+        return text
     }
 
     // Same 200-instead-of-206 quirk as readEntry, but for the initial directory (EOCD/central
@@ -265,29 +246,6 @@ abstract class Cyrisia :
         val from = entry.localHeaderOffset.toInt()
         val len = minOf(entry.dataRange.last - entry.dataRange.first + 1, (body.size - from).toLong()).toInt()
         return parseZipEntry(Buffer().write(body, from, len), entry.compressedSize, entry.method).buffer().readByteArray()
-    }
-
-    // Best-effort: marks the volume read in the logged-in user's history. Requires a real session
-    // (401s otherwise, hence the sessionCookie() guard at the call site) and never blocks reading.
-    private suspend fun markRead(seriesName: String, volumeFilename: String) {
-        val csrf = runCatching { client.get("$baseUrl/api/account/csrf", headers).parseAs<CsrfDto>().csrf }.getOrNull() ?: return
-        val body = ReadRequest(seriesName, volumeFilename).toJsonRequestBody()
-        val authHeaders = headers.newBuilder().add("x-csrf-token", csrf).build()
-        runCatching { client.post("$baseUrl/api/account/read", authHeaders, body) }
-    }
-
-    // ======================== Preferences ========================
-
-    override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        EditTextPreference(screen.context).apply {
-            key = PREF_SESSION_COOKIE
-            title = "Session cookie"
-            summary = "Optional - not needed to read chapters. Syncs your read history on cyrisia.com. " +
-                "Log into cyrisia.com in a browser, open DevTools > Application/Storage > Cookies, " +
-                "copy the session cookie's name and value (not cyrisia_csrf), and enter them here " +
-                "as name=value."
-            dialogTitle = title
-        }.also(screen::addPreference)
     }
 
     // ======================== DTOs ========================
@@ -312,18 +270,8 @@ abstract class Cyrisia :
         @SerialName("publication_status") val publicationStatus: String? = null,
     )
 
-    @Serializable
-    private class CsrfDto(val csrf: String)
-
-    @Serializable
-    private class ReadRequest(
-        @SerialName("series_name") val seriesName: String,
-        @SerialName("volume_filename") val volumeFilename: String,
-    )
-
     companion object {
         private const val PAGE_SIZE = 24
-        private const val PREF_SESSION_COOKIE = "pref_session_cookie"
 
         private val SKIP_SPINE_ITEM_REGEX = Regex("cover|nav\\.x?html", RegexOption.IGNORE_CASE)
     }
