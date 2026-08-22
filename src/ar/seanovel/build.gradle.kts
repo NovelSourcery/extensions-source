@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "SeaNovel"
-    versionCode = 4
+    versionCode = 5
     contentWarning = ContentWarning.SAFE
 
     source {
