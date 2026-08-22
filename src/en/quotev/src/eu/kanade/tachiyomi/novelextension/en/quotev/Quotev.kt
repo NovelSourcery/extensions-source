@@ -46,23 +46,40 @@ abstract class Quotev :
 
     // ======================== Popular / Search ========================
 
-    override suspend fun getPopularManga(page: Int): MangasPage = browse(page, DEFAULT_CATEGORY)
+    override suspend fun getPopularManga(page: Int): MangasPage = browse(page, section = "", genre = "", media = "", sort = "users", longOnly = false)
 
     override suspend fun getLatestUpdates(page: Int): MangasPage = throw UnsupportedOperationException()
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val category = filters.filterIsInstance<CategoryFilter>().firstOrNull()?.state?.trim().orEmpty()
         if (query.isNotBlank()) {
             val url = "$baseUrl/search/$query".toHttpUrl().newBuilder()
                 .apply { if (page > 1) addQueryParameter("page", page.toString()) }
                 .build()
             return parseStoryList(client.get(url, headers).asJsoup())
         }
-        return browse(page, category.ifBlank { DEFAULT_CATEGORY })
+
+        val section = filters.filterIsInstance<SectionFilter>().firstOrNull()?.toUriPart().orEmpty()
+        val genre = filters.filterIsInstance<GenreFilter>().firstOrNull()?.toUriPart().orEmpty()
+        val media = filters.filterIsInstance<MediaFilter>().firstOrNull()?.toUriPart().orEmpty()
+        val sort = filters.filterIsInstance<SortFilter>().firstOrNull()?.toUriPart().orEmpty()
+        val longOnly = filters.filterIsInstance<LengthFilter>().firstOrNull()?.state == true
+        return browse(page, section, genre, media, sort, longOnly)
     }
 
-    private suspend fun browse(page: Int, category: String): MangasPage {
-        val url = "$baseUrl/stories/c/Fiction/c/$category".toHttpUrl().newBuilder()
+    /**
+     * Genre (`/c/<genre>`) only makes sense nested under a section, and media (`/m/<media>`) is a
+     * Fanfiction-only facet - both are silently dropped otherwise instead of producing a malformed
+     * path (this is what caused `/stories/c/Fiction/c/Harem`, a section hardcoded onto a category
+     * filter value that wasn't actually a subcategory of it, to 404 into an empty result set).
+     */
+    private suspend fun browse(page: Int, section: String, genre: String, media: String, sort: String, longOnly: Boolean): MangasPage {
+        var path = if (section.isBlank()) "/stories" else "/stories/c/$section"
+        if (section.isNotBlank() && genre.isNotBlank()) path += "/c/$genre"
+        if (section == "Fanfiction" && media.isNotBlank()) path += "/m/$media"
+
+        val url = (baseUrl + path).toHttpUrl().newBuilder()
+            .apply { if (sort.isNotBlank()) addQueryParameter("v", sort) }
+            .apply { if (longOnly) addQueryParameter("minLen", "50") }
             .apply { if (page > 1) addQueryParameter("page", page.toString()) }
             .build()
         return parseStoryList(client.get(url, headers).asJsoup())
@@ -173,14 +190,93 @@ abstract class Quotev :
     // ======================== Filters ========================
 
     override fun getFilterList(data: JsonElement?) = FilterList(
-        Filter.Header("Fiction category, e.g. Harem, Alpha, Dark, Cultivation"),
-        CategoryFilter(),
+        SectionFilter(),
+        GenreFilter(),
+        Filter.Header("Media only applies to the Fanfiction section"),
+        MediaFilter(),
+        SortFilter(),
+        LengthFilter(),
     )
 
-    private class CategoryFilter : Filter.Text("Category", DEFAULT_CATEGORY)
+    private open class UriPartFilter(displayName: String, private val vals: Array<Pair<String, String>>, state: Int = 0) : Filter.Select<String>(displayName, vals.map { it.first }.toTypedArray(), state) {
+        fun toUriPart() = vals[state].second
+    }
+
+    private class SectionFilter :
+        UriPartFilter(
+            "Section",
+            arrayOf(
+                "All" to "",
+                "Fiction" to "Fiction",
+                "Fanfiction" to "Fanfiction",
+                "Nonfiction" to "Nonfiction",
+            ),
+        )
+
+    private class GenreFilter :
+        UriPartFilter(
+            "Genre",
+            arrayOf(
+                "All" to "",
+                "Action" to "Action",
+                "Adventure" to "Adventure",
+                "Anime/Manga" to "Anime--Manga",
+                "Biography" to "Biography",
+                "Fantasy" to "Fantasy",
+                "Historical" to "Historical",
+                "Horror" to "Horror",
+                "Humor" to "Humor",
+                "Mystery" to "Mystery",
+                "Poetry" to "Poetry",
+                "Realistic" to "Realistic",
+                "Romance" to "Romance",
+                "Science Fiction" to "Science-Fiction",
+                "Short Stories" to "Short-Stories",
+                "Supernatural" to "Supernatural",
+                "Thriller" to "Thriller",
+                "Other" to "Other",
+            ),
+        )
+
+    private class MediaFilter :
+        UriPartFilter(
+            "Media (Fanfiction)",
+            arrayOf(
+                "All" to "",
+                "Anime" to "Anime",
+                "Manga" to "Manga",
+                "TV Shows" to "TV",
+                "Cartoons" to "Cartoon",
+                "Comics" to "Comic",
+                "Books" to "Book",
+                "Movies" to "Movie",
+                "Music" to "Music",
+                "Theater" to "Theater",
+                "Real People" to "People",
+                "Games" to "Game",
+                "Web" to "Web",
+                "Other" to "Other",
+                "Author/Creator" to "Creator",
+                "Fandoms" to "Fandoms",
+            ),
+        )
+
+    private class SortFilter :
+        UriPartFilter(
+            "Sort",
+            arrayOf(
+                "Default" to "",
+                "New" to "created",
+                "Newly published" to "new",
+                "Popular" to "users",
+                "All time" to "top",
+            ),
+            3,
+        )
+
+    private class LengthFilter : Filter.CheckBox("Long stories only (50+ pages)")
 
     companion object {
-        private const val DEFAULT_CATEGORY = "Harem"
         private const val LINE_BREAK_MARKER = "␈"
         private const val OPEN_ENDED = -1
     }
