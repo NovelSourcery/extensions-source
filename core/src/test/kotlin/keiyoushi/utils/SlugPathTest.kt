@@ -26,4 +26,11 @@ class SlugPathTest {
         // even a legacy value that no longer matches this source's current prefix must survive
         assertEquals("/old-prefix/legacy-slug", path.resolve("/old-prefix/legacy-slug"))
     }
+
+    @Test
+    fun `legacy absolute url values resolve unchanged`() {
+        val path = SlugPath("/novel/")
+        assertEquals("https://example.com/novel/legacy-slug", path.resolve("https://example.com/novel/legacy-slug"))
+        assertEquals("http://example.com/novel/legacy-slug", path.resolve("http://example.com/novel/legacy-slug"))
+    }
 }
