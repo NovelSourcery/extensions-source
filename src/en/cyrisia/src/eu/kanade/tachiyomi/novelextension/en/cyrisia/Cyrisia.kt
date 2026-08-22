@@ -35,12 +35,11 @@ import org.jsoup.parser.Parser
  * per-chapter web content, so each EPUB is treated as one [SChapter] whose "page text" is the
  * concatenation of the volume's own internal chapter documents.
  *
- * Downloading a volume requires a real logged-in session - the download endpoint returns
- * `{"ok":false,"error":"auth_required"}` for anonymous requests even with a valid CSRF token,
- * confirmed live. There is no login flow here; the user must paste their own session cookie
- * (`name=value`, copied from browser DevTools after logging in) into the source preferences.
- * Without it, browsing/search/details still work (those endpoints are public), but opening any
- * chapter will fail.
+ * The EPUB file itself needs no login - confirmed live, an anonymous request succeeds as long as
+ * `Referer` starts with `$baseUrl/read/` (the site's own reader page for that volume); a bare or
+ * missing `Referer` gets a 403. `POST /api/account/read`, which marks a volume as read in the
+ * user's history, does require a real logged-in session and 401s otherwise; it's best-effort and
+ * never blocks reading. The session cookie preference only affects that history sync.
  */
 @Source
 abstract class Cyrisia :
@@ -165,16 +164,31 @@ abstract class Cyrisia :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        if (sessionCookie() != null) authorizeDownload(page.url)
+        val segments = (baseUrl + page.url).toHttpUrl().pathSegments
+        val seriesName = segments.getOrNull(1)
+        val volumeFilename = segments.getOrNull(2)
+
+        if (sessionCookie() != null && seriesName != null && volumeFilename != null) {
+            markRead(seriesName, volumeFilename)
+        }
+
+        // The file endpoint 403s without a Referer pointing at the site's own reader page for
+        // this volume - see the class doc. It needs no other auth.
+        val readerReferer = if (seriesName != null && volumeFilename != null) {
+            "$baseUrl/read".toHttpUrl().newBuilder().addPathSegment(seriesName).addPathSegment(volumeFilename).build().toString()
+        } else {
+            "$baseUrl/read/"
+        }
+        val zipHeaders = headers.newBuilder().set("Referer", readerReferer).build()
 
         // The EPUB is streamed via HTTP Range requests (directory + only the entries actually
         // needed) instead of downloading the whole archive into memory - a volume's images/fonts/
         // css are never fetched at all.
         val zipUrl = baseUrl + page.url
-        val directory = client.zipDirectoryAsync(zipUrl, headers)
+        val directory = client.zipDirectoryAsync(zipUrl, zipHeaders)
         fun readEntry(name: String): ByteArray? {
             val entry = directory.entries.firstOrNull { it.name == name } ?: return null
-            return client.readZipEntry(zipUrl, entry, headers).buffer().readByteArray()
+            return client.readZipEntry(zipUrl, entry, zipHeaders).buffer().readByteArray()
         }
 
         val containerXml = readEntry("META-INF/container.xml") ?: throw Exception("Not a valid EPUB: missing container.xml")
@@ -200,11 +214,9 @@ abstract class Cyrisia :
         }
     }
 
-    private suspend fun authorizeDownload(chapterUrl: String) {
-        val segments = (baseUrl + chapterUrl).toHttpUrl().pathSegments
-        val seriesName = segments.getOrNull(1) ?: return
-        val volumeFilename = segments.getOrNull(2) ?: return
-
+    // Best-effort: marks the volume read in the logged-in user's history. Requires a real session
+    // (401s otherwise, hence the sessionCookie() guard at the call site) and never blocks reading.
+    private suspend fun markRead(seriesName: String, volumeFilename: String) {
         val csrf = runCatching { client.get("$baseUrl/api/account/csrf", headers).parseAs<CsrfDto>().csrf }.getOrNull() ?: return
         val body = ReadRequest(seriesName, volumeFilename).toJsonRequestBody()
         val authHeaders = headers.newBuilder().add("x-csrf-token", csrf).build()
@@ -217,9 +229,10 @@ abstract class Cyrisia :
         EditTextPreference(screen.context).apply {
             key = PREF_SESSION_COOKIE
             title = "Session cookie"
-            summary = "Required to open chapters. Log into cyrisia.com in a browser, open DevTools > " +
-                "Application/Storage > Cookies, copy the session cookie's name and value (not " +
-                "cyrisia_csrf), and enter them here as name=value."
+            summary = "Optional - not needed to read chapters. Syncs your read history on cyrisia.com. " +
+                "Log into cyrisia.com in a browser, open DevTools > Application/Storage > Cookies, " +
+                "copy the session cookie's name and value (not cyrisia_csrf), and enter them here " +
+                "as name=value."
             dialogTitle = title
         }.also(screen::addPreference)
     }
