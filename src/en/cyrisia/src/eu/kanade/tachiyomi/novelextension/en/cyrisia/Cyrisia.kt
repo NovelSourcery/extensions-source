@@ -85,11 +85,18 @@ abstract class Cyrisia :
             SManga.create().apply {
                 url = entry.name
                 title = entry.name
-                thumbnail_url = entry.cover?.let { baseUrl + it }
+                thumbnail_url = entry.cover?.let { baseUrl + it.escapeCoverUrl() }
             }
         }
         return MangasPage(mangas, from + PAGE_SIZE < list.size)
     }
+
+    // The bookshelf API's `cover` field is a query string it built itself, but escaping is
+    // inconsistent per entry - confirmed live, some titles with "+" or raw spaces in their name
+    // come back completely unescaped (e.g. "...Second + Children...Kobo].epub" with a literal
+    // space and "+"), which OkHttp/Coil then reject outright. Percent-encode just those two
+    // unsafe characters; existing %XX sequences are left alone.
+    private fun String.escapeCoverUrl(): String = replace(" ", "%20").replace("+", "%2B")
 
     // ======================== Details + Chapters ========================
 
