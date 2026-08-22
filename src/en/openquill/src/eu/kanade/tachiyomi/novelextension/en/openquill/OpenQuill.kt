@@ -136,6 +136,9 @@ abstract class OpenQuill :
     private class GenreWrapper(val genre: NameDto)
 
     @Serializable
+    private class TagWrapper(val tag: NameDto)
+
+    @Serializable
     private class AuthorDto(val username: String? = null)
 
     @Serializable
@@ -154,6 +157,12 @@ abstract class OpenQuill :
         }
     }
 
+    /**
+     * rating/ratingCount/followerCount/readerCount field names are a best-effort guess mirrored
+     * from the site's rendered story page (rating, votes, follows, readers) - the API itself
+     * returns 403 outside a browser session so the real field names could not be confirmed here.
+     * They default harmlessly to null/0 if the guess is wrong.
+     */
     @Serializable
     private class StoryDto(
         val title: String,
@@ -163,8 +172,13 @@ abstract class OpenQuill :
         val status: String? = null,
         val author: AuthorDto? = null,
         val genres: List<GenreWrapper> = emptyList(),
+        val tags: List<TagWrapper> = emptyList(),
         val chapters: List<ChapterDto> = emptyList(),
         val realViewCount: Int = 0,
+        val averageRating: Double? = null,
+        val ratingCount: Int? = null,
+        val followerCount: Int? = null,
+        val readerCount: Int? = null,
         val lastChapterPublishedAt: String? = null,
     ) {
         fun toSManga(): SManga {
@@ -172,15 +186,29 @@ abstract class OpenQuill :
             val storyAuthor = author?.username
             val storyStatus = status
             val storyDescription = description
-            val storyGenres = genres
+            val storyGenres = genres.map { it.genre.name } + tags.map { it.tag.name }
 
             return SManga.create().apply {
                 url = slug
                 title = storyTitle
                 author = storyAuthor
                 thumbnail_url = coverImageUrl
-                description = storyDescription?.let { html -> Jsoup.parseBodyFragment(html).body().formattedText() }
-                genre = storyGenres.map { it.genre.name }.distinct().joinToString()
+                genre = storyGenres.distinct().joinToString()
+                description = buildString {
+                    averageRating?.takeIf { it > 0 }?.let {
+                        append("Rating: $it")
+                        ratingCount?.let { c -> append(" ($c ratings)") }
+                        append("\n")
+                    }
+                    if (realViewCount > 0) append("Views: $realViewCount\n")
+                    followerCount?.takeIf { it > 0 }?.let { append("Follows: $it\n") }
+                    readerCount?.takeIf { it > 0 }?.let { append("Readers: $it\n") }
+                    val desc = storyDescription?.let { html -> Jsoup.parseBodyFragment(html).body().formattedText() }?.trim()
+                    if (!desc.isNullOrBlank()) {
+                        if (isNotEmpty()) append("\n")
+                        append(desc)
+                    }
+                }.trim().ifBlank { null }
                 status = when (storyStatus) {
                     "COMPLETED" -> SManga.COMPLETED
                     "ONGOING" -> SManga.ONGOING
