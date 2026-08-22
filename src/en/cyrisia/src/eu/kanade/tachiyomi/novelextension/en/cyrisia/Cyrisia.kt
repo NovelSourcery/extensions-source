@@ -82,7 +82,7 @@ abstract class Cyrisia :
             SManga.create().apply {
                 url = entry.name
                 title = entry.name
-                thumbnail_url = baseUrl + entry.cover
+                thumbnail_url = entry.cover?.let { baseUrl + it }
             }
         }
         return MangasPage(mangas, from + PAGE_SIZE < list.size)
@@ -226,7 +226,7 @@ abstract class Cyrisia :
     private class BookshelfEntry(
         val name: String,
         val epubs: List<String> = emptyList(),
-        val cover: String = "",
+        val cover: String? = null,
     )
 
     @Serializable
