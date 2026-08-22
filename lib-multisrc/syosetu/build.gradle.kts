@@ -3,8 +3,15 @@ plugins {
 }
 
 keiyoushi {
-    baseVersionCode = 2
+    baseVersionCode = 3
     libVersion = "1.6"
+
+    // Every site type stores manga.url as a root-level slug (mangaPath = SlugPath("/")), and
+    // getMangaByUrl is already implemented generically off that - only the manifest declaration
+    // was missing, so pasted URLs never reached it. No host(): resolved per-extension from baseUrl.
+    deeplink {
+        path("/..*")
+    }
 }
 
 dependencies {
