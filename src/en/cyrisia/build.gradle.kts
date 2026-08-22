@@ -17,7 +17,7 @@ keiyoushi {
 
     deeplink {
         host("cyrisia.com")
-        path("/..*")
+        path("/series/..*")
     }
 }
 

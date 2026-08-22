@@ -19,14 +19,16 @@ import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.setAltTitles
 import keiyoushi.utils.toJsonRequestBody
+import keiyoushi.zip.readZipEntry
+import keiyoushi.zip.zipDirectoryAsync
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
+import okio.buffer
 import org.jsoup.Jsoup
 import org.jsoup.parser.Parser
-import java.io.ByteArrayInputStream
-import java.util.zip.ZipInputStream
 
 /**
  * Cyrisia is a personal/community EPUB library: series are static uploaded volumes rather than
@@ -90,6 +92,21 @@ abstract class Cyrisia :
 
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/series".toHttpUrl().newBuilder().addPathSegment(manga.url).build().toString()
 
+    // e.g. https://cyrisia.com/series/ReZero%20-%20Starting%20Life%20in%20Another%20World -
+    // pathSegments are already percent-decoded, matching the raw series name used as manga.url
+    // elsewhere (see getMangaUrl, which re-encodes it).
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        if (url.pathSegments.getOrNull(0) != "series") return null
+        val seriesName = url.pathSegments.getOrNull(1) ?: return null
+        return fetchManga(seriesName)
+    }
+
+    private suspend fun fetchManga(seriesName: String): SManga {
+        val metadataUrl = "$baseUrl/api/metadata".toHttpUrl().newBuilder().addQueryParameter("series", seriesName).build()
+        val meta = runCatching { client.get(metadataUrl, headers).parseAs<MetadataDto>() }.getOrNull()
+        return buildSManga(seriesName, meta)
+    }
+
     override suspend fun fetchMangaUpdate(
         manga: SManga,
         chapters: List<SChapter>,
@@ -98,13 +115,7 @@ abstract class Cyrisia :
     ): SMangaUpdate {
         val seriesName = manga.url
 
-        val updatedManga = if (fetchDetails) {
-            val metadataUrl = "$baseUrl/api/metadata".toHttpUrl().newBuilder().addQueryParameter("series", seriesName).build()
-            val meta = runCatching { client.get(metadataUrl, headers).parseAs<MetadataDto>() }.getOrNull()
-            buildSManga(seriesName, meta)
-        } else {
-            manga
-        }
+        val updatedManga = if (fetchDetails) fetchManga(seriesName) else manga
 
         val updatedChapters = if (fetchChapters) {
             val entry = fetchBookshelf().firstOrNull { it.name == seriesName }
@@ -152,22 +163,23 @@ abstract class Cyrisia :
     override suspend fun fetchPageText(page: Page): String {
         authorizeDownload(page.url)
 
-        val epubBytes = client.get(baseUrl + page.url, headers).body.bytes()
-        val entries = mutableMapOf<String, ByteArray>()
-        ZipInputStream(ByteArrayInputStream(epubBytes)).use { zis ->
-            generateSequence { zis.nextEntry }.forEach { entry ->
-                if (!entry.isDirectory) entries[entry.name] = zis.readBytes()
-                zis.closeEntry()
-            }
+        // The EPUB is streamed via HTTP Range requests (directory + only the entries actually
+        // needed) instead of downloading the whole archive into memory - a volume's images/fonts/
+        // css are never fetched at all.
+        val zipUrl = baseUrl + page.url
+        val directory = client.zipDirectoryAsync(zipUrl, headers)
+        fun readEntry(name: String): ByteArray? {
+            val entry = directory.entries.firstOrNull { it.name == name } ?: return null
+            return client.readZipEntry(zipUrl, entry, headers).buffer().readByteArray()
         }
 
-        val containerXml = entries["META-INF/container.xml"] ?: throw Exception("Not a valid EPUB: missing container.xml")
+        val containerXml = readEntry("META-INF/container.xml") ?: throw Exception("Not a valid EPUB: missing container.xml")
         val opfPath = Jsoup.parse(String(containerXml), "", Parser.xmlParser())
             .selectFirst("rootfile")?.attr("full-path")
             ?: throw Exception("Not a valid EPUB: missing OPF rootfile")
         val opfDir = opfPath.substringBeforeLast("/", "")
 
-        val opfDoc = entries[opfPath]?.let { Jsoup.parse(String(it), "", Parser.xmlParser()) }
+        val opfDoc = readEntry(opfPath)?.let { Jsoup.parse(String(it), "", Parser.xmlParser()) }
             ?: throw Exception("Not a valid EPUB: missing OPF package document")
 
         val hrefById = opfDoc.select("manifest > item").associate { it.attr("id") to it.attr("href") }
@@ -177,7 +189,7 @@ abstract class Cyrisia :
 
         return spineHrefs.joinToString("<hr>") { href ->
             val entryPath = if (opfDir.isEmpty()) href else "$opfDir/$href"
-            val bytes = entries[entryPath] ?: return@joinToString ""
+            val bytes = readEntry(entryPath) ?: return@joinToString ""
             val body = Jsoup.parse(String(bytes)).body()
             body.select("img, svg, script, style").remove()
             body.html()
