@@ -144,15 +144,53 @@ abstract class NovelsPl :
         }
     }.getOrNull()
 
+    /**
+     * The site's `p[itemprop=description]` is left empty by its template; the real blurb is the
+     * plain-text sibling `<p>` right after it (HTML5 auto-closes that `<p>` before the following
+     * `<div>`, so its own text stays clean). Rating/votes/views/date-created/update-frequency
+     * selectors below are best-effort schema.org/markup guesses from a single saved sample page -
+     * this site sits behind Anubis so it could not be re-verified live here.
+     */
     private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
         title = doc.selectFirst(".panel-title")?.text().orEmpty().removeSuffix("(Web Novel)").removeSuffix("(Light Novel)").trim()
         thumbnail_url = doc.selectFirst(".imageCover img")?.let { resolveDataPath(it.attr("src")) }
         author = doc.selectFirst("a[href^=/author/]")?.text()
-        description = doc.selectFirst("p[itemprop=description]")?.text()
         genre = doc.select("div[itemprop=genre] a.label").eachText().distinct().joinToString()
 
-        val altNames = doc.select(".coll a[href*=/novel/]").eachText().filter { it.isNotBlank() && it != title }
-        if (altNames.isNotEmpty()) {
+        val descriptionEl = doc.selectFirst("p[itemprop=description]")
+        val blurb = descriptionEl?.text()?.takeIf { it.isNotBlank() }
+            ?: descriptionEl?.nextElementSibling()?.takeIf { it.tagName() == "p" }?.text()
+
+        val ratingValue = doc.selectFirst("[itemprop=ratingValue]")?.text()
+        val ratingCount = doc.selectFirst("[itemprop=ratingCount], [itemprop=reviewCount]")?.text()
+        val pullRightParts = doc.selectFirst(".panel-body .pull-right")?.text()?.split("•")?.map { it.trim() }
+        val updateFrequency = pullRightParts?.getOrNull(0)
+        val views = pullRightParts?.getOrNull(1)
+        val dateCreated = pullRightParts?.getOrNull(2)
+
+        description = buildString {
+            blurb?.let {
+                appendLine(it)
+                appendLine()
+            }
+            ratingValue?.let {
+                append("Rating: $it")
+                ratingCount?.let { count -> append(" ($count votes)") }
+                appendLine()
+            }
+            views?.let { appendLine("Views: $it") }
+            dateCreated?.let { appendLine("Date Created: $it") }
+            updateFrequency?.let { appendLine("Update frequency: $it") }
+        }.trim().ifBlank { null }
+
+        val altNames = doc.select("div, p, li")
+            .firstOrNull { it.text().startsWith("Associated Names", ignoreCase = true) }
+            ?.text()
+            ?.substringAfter(":")
+            ?.split(",")
+            ?.map { it.trim().trimEnd('.').trim() }
+            ?.filter { it.isNotBlank() && it != title }
+        if (!altNames.isNullOrEmpty()) {
             setAltTitles(altNames)
         }
     }
