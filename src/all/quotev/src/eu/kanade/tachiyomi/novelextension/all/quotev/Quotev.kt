@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.novelextension.en.quotev
+package eu.kanade.tachiyomi.novelextension.all.quotev
 
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter

@@ -12,7 +12,7 @@ keiyoushi {
 
     source {
         baseUrl = "https://www.quotev.com"
-        lang = "en"
+        lang = "all"
     }
 
     deeplink {
