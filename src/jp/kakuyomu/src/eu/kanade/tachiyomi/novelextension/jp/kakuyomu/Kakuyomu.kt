@@ -12,21 +12,17 @@ import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
-import keiyoushi.utils.WebViewTimeoutException
 import keiyoushi.utils.boolean
 import keiyoushi.utils.extractNextJs
 import keiyoushi.utils.get
 import keiyoushi.utils.parseAs
-import keiyoushi.utils.runWebView
 import keiyoushi.utils.string
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -34,13 +30,9 @@ import kotlin.time.Instant
  * `__NEXT_DATA__` on every server-rendered page - browse/search/details are scraped from that
  * normalized `{__ref: "Type:id"}` graph via [extractApolloState]/[deref] instead of HTML selectors.
  *
- * The episode reading page itself (`/works/{workId}/episodes/{episodeId}/read`) does NOT return
- * this SSR payload for a plain HTTP request - it 404s regardless of cookies/UA, evidently only
- * rendering for a real browser session that fetches the body client-side. [fetchPageText] falls
- * back to [runWebView] for that one request. NOTE: the `.widget-episodeBody` selector below is
- * Kakuyomu's long-standing, publicly documented reader markup, but this could not be verified
- * live against the real page in this environment (only the 404 from a plain request could be
- * confirmed) - verify on-device before relying on it.
+ * The episode page (`/works/{workId}/episodes/{episodeId}`, no `/read` suffix - that path 404s)
+ * renders the body server-side under `.widget-episodeBody`, so [fetchPageText] scrapes it directly
+ * with a plain request instead of a WebView.
  */
 @Source
 abstract class Kakuyomu :
@@ -65,7 +57,7 @@ abstract class Kakuyomu :
         val url = "$baseUrl/search".toHttpUrl().newBuilder()
             .addQueryParameter("q", query)
             .addQueryParameter("order", order)
-            .addQueryParameter("offset", ((page - 1) * PAGE_SIZE).toString())
+            .addQueryParameter("page", page.toString())
             .apply { if (genre.isNotEmpty()) addQueryParameter("genres[]", genre) }
             .build()
 
@@ -136,30 +128,10 @@ abstract class Kakuyomu :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val url = baseUrl + page.url + "/read"
-        val html = try {
-            runWebView<String>(timeout = 30.seconds) {
-                var resolved = false
-                onPageFinished {
-                    poll(1.seconds) {
-                        if (resolved) return@poll
-                        evaluateJs("document.querySelector('.widget-episodeBody')?.innerHTML || ''") { result ->
-                            val content = result.parseAs<String>()
-                            if (content.isNotBlank()) {
-                                resolved = true
-                                resolve(content)
-                            }
-                        }
-                    }
-                }
-                loadUrl(url)
-            }
-        } catch (e: WebViewTimeoutException) {
-            throw Exception("Kakuyomu: could not load the episode body via WebView. Please open the chapter in WebView once, then retry.", e)
-        }
+        val doc = client.get(baseUrl + page.url, headers).asJsoup()
+        val body = doc.selectFirst(".widget-episodeBody") ?: throw Exception("Kakuyomu: episode body not found")
 
         // Furigana readings (<rt>/<rp>) are redundant with the base kanji text they annotate.
-        val body = Jsoup.parseBodyFragment(html)
         body.select("rt, rp").remove()
         return body.html()
     }
@@ -226,10 +198,6 @@ abstract class Kakuyomu :
 
     @Serializable
     private class EpisodeDto(val title: String? = null, val publishedAt: String? = null)
-
-    companion object {
-        private const val PAGE_SIZE = 20
-    }
 }
 
 /** Extracts the raw `__APOLLO_STATE__` normalized cache from a server-rendered page. */
