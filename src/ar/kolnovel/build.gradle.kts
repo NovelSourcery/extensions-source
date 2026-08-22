@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "Kol Novel"
-    versionCode = 2
+    versionCode = 3
     contentWarning = ContentWarning.SAFE
     theme = "lightnovelwpnovel"
 
@@ -17,6 +17,6 @@ keiyoushi {
 
     deeplink {
         host("kolnovel.com")
-        path("/series/..*")
+        path("/..*")
     }
 }
