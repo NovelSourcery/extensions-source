@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "Golden Rest"
-    versionCode = 5
+    versionCode = 6
     contentWarning = ContentWarning.SAFE
 
     source {

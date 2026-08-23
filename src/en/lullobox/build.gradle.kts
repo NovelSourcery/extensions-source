@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "LulloBox"
-    versionCode = 1
+    versionCode = 2
     contentWarning = ContentWarning.SAFE
     theme = "madaranovel"
 

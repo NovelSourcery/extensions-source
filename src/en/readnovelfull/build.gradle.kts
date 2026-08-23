@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "ReadNovelFull"
-    versionCode = 1
+    versionCode = 2
     contentWarning = ContentWarning.SAFE
     theme = "readnovelfull"
 

@@ -8,7 +8,7 @@ keiyoushi {
     contentWarning = ContentWarning.NSFW
 
     name = "ノクターン (R18)"
-    versionCode = 1
+    versionCode = 2
     theme = "syosetu"
 
     source {

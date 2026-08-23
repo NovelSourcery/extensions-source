@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "KatReadingCafe"
-    versionCode = 0
+    versionCode = 1
     contentWarning = ContentWarning.SAFE
     theme = "lightnovelwpnovel"
 

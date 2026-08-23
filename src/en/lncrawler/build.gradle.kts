@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "LnCrawler"
-    versionCode = 4
+    versionCode = 5
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "Rewayah Fans"
-    versionCode = 4
+    versionCode = 5
     contentWarning = ContentWarning.SAFE
 
     source {
