@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "BoxNovel"
-    versionCode = 2
+    versionCode = 3
     contentWarning = ContentWarning.SAFE
     theme = "madaranovel"
 

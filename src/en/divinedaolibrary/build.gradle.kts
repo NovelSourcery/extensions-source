@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "Divine Dao Library"
-    versionCode = 0
+    versionCode = 1
     contentWarning = ContentWarning.SAFE
     theme = "fictioneer"
 

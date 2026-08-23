@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "Novelight"
-    versionCode = 4
+    versionCode = 5
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 
