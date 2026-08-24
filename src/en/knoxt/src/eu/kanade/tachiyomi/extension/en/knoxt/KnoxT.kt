@@ -1,9 +1,12 @@
-package eu.kanade.tachiyomi.novelextension.en.knoxt
+﻿package eu.kanade.tachiyomi.novelextension.en.knoxt
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
-import keiyoushi.annotation.Source
 
-@Source
-abstract class KnoxT : LightNovelWPNovel() {
+class KnoxT :
+    LightNovelWPNovel(
+        baseUrl = "https://knoxt.space",
+        name = "KnoxT",
+        lang = "en",
+    ) {
     override val reverseChapters = false
 }

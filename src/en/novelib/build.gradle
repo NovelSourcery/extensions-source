@@ -1,0 +1,12 @@
+ext {
+    libVersion = '1.4'
+    extName = 'NovelLib'
+    extClass = '.NovelLib'
+    themePkg = 'fictioneer'
+    baseUrl = 'https://novelib.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

@@ -12,36 +12,33 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import eu.kanade.tachiyomi.util.asJsoup
-import keiyoushi.annotation.Source
-import keiyoushi.network.get
-import keiyoushi.source.KeiSource
-import keiyoushi.utils.SlugPath
+import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.utils.formattedText
 import keiyoushi.utils.stripChapterNumberPrefix
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
-import java.time.LocalDate
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
+import java.text.SimpleDateFormat
 import java.util.Locale
 
-@Source
-abstract class CrimsonScrolls :
-    KeiSource(),
+class CrimsonScrolls :
+    HttpSource(),
     NovelSource,
     ConfigurableSource {
 
+    override val name = "Crimson Scrolls"
+    override val baseUrl = "https://crimsonscrolls.net"
+    override val lang = "en"
     override val supportsLatest = false
+    override val isNovelSource = true
+    override val client = network.cloudflareClient
 
     private val json: Json by injectLazy()
 
@@ -49,14 +46,7 @@ abstract class CrimsonScrolls :
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
 
-    private val dateFormat = DateTimeFormatter.ofPattern("MMMM d, yyyy", Locale.US)
-
-    /** [SManga.url] stored as bare slug under "/novel/"; a stored value starting with "/" is a
-     * pre-existing full-path entry and is resolved unchanged. */
-    private val mangaPath = SlugPath("/novel/")
-
-    /** Stores [SManga.url] as a bare slug via [mangaPath]. */
-    private fun SManga.setSlugUrl(href: String) = setSlugUrl(mangaPath, href)
+    private val dateFormat = SimpleDateFormat("MMMM d, yyyy", Locale.US)
 
     // Highest tier to include; the API returns each tier separately, so we request every tier
     // from free up to (and including) the selected one and merge the results.
@@ -66,13 +56,13 @@ abstract class CrimsonScrolls :
     // Browse
 
     private fun parseBrowse(response: Response): MangasPage {
-        val doc = response.asJsoup()
+        val doc = Jsoup.parse(response.body.string(), baseUrl)
         val mangas = doc.select("article.cs-browse-card").mapNotNull { card ->
             val link = card.selectFirst(".cs-browse-card__body h2 a, a.cs-browse-card__cover")
                 ?: return@mapNotNull null
             val href = link.attr("abs:href").ifBlank { return@mapNotNull null }
             SManga.create().apply {
-                setSlugUrl(href)
+                setUrlWithoutDomain(href)
                 title = card.selectFirst(".cs-browse-card__body h2 a")?.let { it.attr("title").ifBlank { it.text() } }
                     ?.trim().orEmpty()
                 thumbnail_url = card.selectFirst(".cs-browse-card__cover img")?.let {
@@ -85,58 +75,45 @@ abstract class CrimsonScrolls :
         return MangasPage(mangas, hasNextPage = false)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseBrowse(client.get("$baseUrl/novels/recently-updated/", headers))
+    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/novels/recently-updated/", headers)
+    override fun popularMangaParse(response: Response): MangasPage = parseBrowse(response)
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = getPopularManga(page)
+    override fun latestUpdatesRequest(page: Int): Request = popularMangaRequest(page)
+    override fun latestUpdatesParse(response: Response): MangasPage = parseBrowse(response)
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val url = "$baseUrl/novels/".toHttpUrl().newBuilder()
             .addQueryParameter("s", query)
             .build()
-        return parseBrowse(client.get(url, headers))
+        return GET(url, headers)
     }
+    override fun searchMangaParse(response: Response): MangasPage = parseBrowse(response)
 
-    // Details + Chapters
+    // Details
 
-    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPath.resolve(manga.url), headers)
-
-    override suspend fun fetchMangaUpdate(
-        manga: SManga,
-        chapters: List<SChapter>,
-        fetchDetails: Boolean,
-        fetchChapters: Boolean,
-    ): SMangaUpdate {
-        // Details and the chapter list both live on the same novel page - fetch and parse it
-        // once, since the response can only be consumed once.
-        val detailsRequest = buildMangaDetailsRequest(manga)
-        val doc = client.get(detailsRequest.url, detailsRequest.headers).asJsoup()
-
-        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
-        val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
-
-        return SMangaUpdate(updatedManga, updatedChapters)
-    }
-
-    private fun parseMangaDetails(response: Response): SManga = parseMangaDetails(response.asJsoup())
-
-    private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
-        title = doc.selectFirst("h1")?.text().orEmpty()
-        thumbnail_url = doc.selectFirst(".cs-cover img")?.let {
-            it.attr("abs:data-src").ifBlank { it.attr("abs:src") }
-        }
-        description = doc.selectFirst(".cs-about-synopsis .cs-prose, .cs-about-synopsis")?.formattedText()
-        author = doc.select(".cs-novel-details dl div, dl div")
-            .firstOrNull { it.selectFirst("dt")?.text()?.equals("Author", true) == true }
-            ?.selectFirst("dd")?.text()
-        genre = doc.select(".cs-detail-genres a").joinToString { it.text() }
-        status = when (doc.selectFirst(".cs-cover-status")?.text()?.lowercase()) {
-            "ongoing" -> SManga.ONGOING
-            "hiatus" -> SManga.ON_HIATUS
-            "dropped", "cancelled" -> SManga.CANCELLED
-            "completed" -> SManga.COMPLETED
-            else -> SManga.UNKNOWN
+    override fun mangaDetailsParse(response: Response): SManga {
+        val doc = Jsoup.parse(response.body.string(), baseUrl)
+        return SManga.create().apply {
+            title = doc.selectFirst("h1")?.text()?.trim().orEmpty()
+            thumbnail_url = doc.selectFirst(".cs-cover img")?.let {
+                it.attr("abs:data-src").ifBlank { it.attr("abs:src") }
+            }
+            description = doc.selectFirst(".cs-about-synopsis .cs-prose, .cs-about-synopsis")?.formattedText()
+            author = doc.select(".cs-novel-details dl div, dl div")
+                .firstOrNull { it.selectFirst("dt")?.text()?.equals("Author", true) == true }
+                ?.selectFirst("dd")?.text()?.trim()
+            genre = doc.select(".cs-detail-genres a").joinToString(", ") { it.text().trim() }
+            status = when (doc.selectFirst(".cs-cover-status")?.text()?.trim()?.lowercase()) {
+                "ongoing" -> SManga.ONGOING
+                "hiatus" -> SManga.ON_HIATUS
+                "dropped", "cancelled" -> SManga.CANCELLED
+                "completed" -> SManga.COMPLETED
+                else -> SManga.UNKNOWN
+            }
         }
     }
+
+    // Chapters
 
     @Serializable
     private class ChapterPage(
@@ -153,7 +130,8 @@ abstract class CrimsonScrolls :
         val date: String = "",
     )
 
-    private suspend fun parseChapterList(doc: Document): List<SChapter> {
+    override fun chapterListParse(response: Response): List<SChapter> {
+        val doc = Jsoup.parse(response.body.string(), baseUrl)
         val novelId = doc.selectFirst("[data-novel-chapters]")?.attr("data-novel-chapters")
             ?.takeIf { it.isNotBlank() } ?: return emptyList()
 
@@ -172,7 +150,7 @@ abstract class CrimsonScrolls :
                     .build()
                 val data = runCatching {
                     json.decodeFromString<ChapterPage>(
-                        client.get(apiUrl, headers).body.string(),
+                        client.newCall(GET(apiUrl, headers)).execute().body.string(),
                     )
                 }.getOrNull() ?: break
 
@@ -193,25 +171,15 @@ abstract class CrimsonScrolls :
         }.sortedByDescending { it.chapter_number }
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
-
-    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val path = url.encodedPath
-        val response = client.get(baseUrl + path, headers, ensureSuccess = false)
-        if (!response.isSuccessful) return null
-        return parseMangaDetails(response).apply { setSlugUrl(mangaPath, path) }
-    }
-
     // Pages / Content
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.get(baseUrl + chapter.url, headers)
-        return listOf(Page(0, response.request.url.encodedPath))
-    }
+    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
+
+    override fun imageUrlParse(response: Response): String = ""
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val doc = client.get(url, headers).asJsoup()
+        val doc = client.newCall(GET(url, headers)).execute().asJsoup()
         val article = doc.selectFirst("article.cs-reader") ?: doc.selectFirst("#chapter-display") ?: return ""
         // Strip reader chrome, ads, tier gate, comments and inline copy-protection watermarks,
         // leaving only the story paragraphs.
@@ -223,11 +191,11 @@ abstract class CrimsonScrolls :
         return article.formattedText()
     }
 
+    private fun Response.asJsoup(): Document = Jsoup.parse(body.string(), request.url.toString())
+
     private fun parseDate(date: String): Long {
         if (date.isBlank()) return 0L
-        return runCatching {
-            LocalDate.parse(date, dateFormat).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        }.getOrDefault(0L)
+        return runCatching { dateFormat.parse(date)?.time ?: 0L }.getOrDefault(0L)
     }
 
     // Settings

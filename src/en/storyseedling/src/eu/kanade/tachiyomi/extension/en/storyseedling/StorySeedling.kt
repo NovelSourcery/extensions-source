@@ -1,8 +1,7 @@
 package eu.kanade.tachiyomi.novelextension.en.storyseedling
 
-import androidx.preference.PreferenceScreen
-import androidx.preference.SwitchPreferenceCompat
-import eu.kanade.tachiyomi.source.ConfigurableSource
+import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -10,22 +9,14 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import eu.kanade.tachiyomi.util.asJsoup
-import keiyoushi.annotation.Source
-import keiyoushi.network.get
-import keiyoushi.network.post
-import keiyoushi.source.KeiSource
-import keiyoushi.utils.SlugPath
-import keiyoushi.utils.getPreferencesLazy
+import eu.kanade.tachiyomi.source.online.HttpSource
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.FormBody
 import okhttp3.Headers
-import okhttp3.HttpUrl
+import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
@@ -36,21 +27,19 @@ import uy.kohesive.injekt.injectLazy
  * @see https://github.com/LNReader/lnreader-plugins StorySeedling.ts
  * Uses AJAX API with FormData for chapter list (series_toc action)
  */
-@Source
-abstract class StorySeedling :
-    KeiSource(),
-    NovelSource,
-    ConfigurableSource {
+class StorySeedling :
+    HttpSource(),
+    NovelSource {
 
+    override val name = "StorySeedling"
+    override val baseUrl = "https://storyseedling.com"
+    override val lang = "en"
     override val supportsLatest = true
+
+    override val client = network.cloudflareClient
     private val json: Json by injectLazy()
-    private val preferences by getPreferencesLazy()
 
-    /** [SManga.url] is stored as the bare slug under "/series/"; a stored value starting with
-     * "/" is a pre-existing full-path entry and is resolved unchanged. */
-    private val mangaPath = SlugPath("/series/")
-
-    override fun Headers.Builder.configureHeaders(): Headers.Builder = this
+    override fun headersBuilder(): Headers.Builder = super.headersBuilder()
         .add("X-Requested-With", "XMLHttpRequest")
         .add("Referer", "$baseUrl/")
 
@@ -79,12 +68,12 @@ abstract class StorySeedling :
     @Volatile
     private var cachedPostValue: String? = null
 
-    private suspend fun getPostValue(): String {
+    private fun getPostValue(): String {
         cachedPostValue?.let { return it }
 
         // Fetch browse page to extract dynamic post value
-        val browseResponse = client.get("$baseUrl/browse", headers)
-        val doc = browseResponse.asJsoup()
+        val browseResponse = client.newCall(GET("$baseUrl/browse", headers)).execute()
+        val doc = Jsoup.parse(browseResponse.body.string())
 
         // LN Reader: Extract from div[ax-load][x-data] with format browse('xxxxx')
         val xData = doc.selectFirst("div[ax-load][x-data*=browse]")?.attr("x-data") ?: ""
@@ -96,24 +85,25 @@ abstract class StorySeedling :
 
     // ======================== Popular/Browse ========================
 
-    protected open suspend fun fetchPopularMangaResponse(page: Int): Response {
+    override fun popularMangaRequest(page: Int): Request {
         // LN Reader: Uses browse() post value from page, with fetch_browse action
         // NOTE: This is called for both "Popular" and when filters are used without search text
         // Filters should be handled here too, not just in search
         val postValue = getPostValue()
-        val body = FormBody.Builder()
-            .add("search", "")
-            .add("orderBy", "recent")
-            .add("curpage", page.toString())
-            .add("post", postValue)
-            .add("action", "fetch_browse")
-            .build()
-        return client.post("$baseUrl/ajax", headers, body)
+        return POST(
+            "$baseUrl/ajax",
+            headers,
+            FormBody.Builder()
+                .add("search", "")
+                .add("orderBy", "recent")
+                .add("curpage", page.toString())
+                .add("post", postValue)
+                .add("action", "fetch_browse")
+                .build(),
+        )
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(fetchPopularMangaResponse(page))
-
-    private fun parseMangaListResponse(response: Response): MangasPage {
+    override fun popularMangaParse(response: Response): MangasPage {
         val responseBody = response.body.string()
         if (responseBody.isBlank()) return MangasPage(emptyList(), false)
 
@@ -136,7 +126,7 @@ abstract class StorySeedling :
                     SManga.create().apply {
                         this.title = title
                         thumbnail_url = cover
-                        url = mangaPath.slug(permalink.replace(baseUrl, ""))
+                        url = permalink.replace(baseUrl, "")
                     }
                 } catch (e: Exception) {
                     null
@@ -151,11 +141,11 @@ abstract class StorySeedling :
         }
     }
 
-    protected open suspend fun fetchLatestUpdatesResponse(page: Int): Response = fetchPopularMangaResponse(page)
+    override fun latestUpdatesRequest(page: Int): Request = popularMangaRequest(page)
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(fetchLatestUpdatesResponse(page))
+    override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
 
-    protected open suspend fun fetchSearchMangaResponse(page: Int, query: String, filters: FilterList): Response {
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         var orderBy = "recent"
         var status = ""
         val includeGenres = mutableListOf<String>()
@@ -211,75 +201,64 @@ abstract class StorySeedling :
             body.add("tagsMode", tagsMode)
         }
 
-        return client.post("$baseUrl/ajax", headers, body.build())
+        return POST("$baseUrl/ajax", headers, body.build())
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseMangaListResponse(fetchSearchMangaResponse(page, query, filters))
+    override fun searchMangaParse(response: Response) = popularMangaParse(response)
 
-    // ======================== Details + Chapters ========================
+    // ======================== Details ========================
 
-    protected open fun buildMangaDetailsUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    override fun mangaDetailsParse(response: Response): SManga {
+        val doc = Jsoup.parse(response.body.string())
 
-    override suspend fun fetchMangaUpdate(
-        manga: SManga,
-        chapters: List<SChapter>,
-        fetchDetails: Boolean,
-        fetchChapters: Boolean,
-    ): SMangaUpdate {
-        // Details and the chapter list toc data both live on the same story page.
-        val doc = client.get(buildMangaDetailsUrl(manga), headers).asJsoup()
+        // Check for Turnstile
         checkTurnstile(doc)
 
-        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
-        val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
+        return SManga.create().apply {
+            title = doc.selectFirst("h1")?.text()?.trim() ?: ""
 
-        return SMangaUpdate(updatedManga, updatedChapters)
-    }
+            // LN Reader: img[x-ref="art"].w-full.rounded.shadow-md
+            val coverUrl = doc.selectFirst("img[x-ref=\"art\"].w-full.rounded.shadow-md")?.attr("src")
+            if (coverUrl != null) {
+                thumbnail_url = if (coverUrl.startsWith("http")) coverUrl else "$baseUrl$coverUrl"
+            }
 
-    private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
-        title = doc.selectFirst("h1")?.text() ?: ""
+            // Get author from "Written by" section
+            // Format: <div class="mb-1 leading-7"><span>Written by</span><a href="...">AuthorName</a></div>
+            author = doc.selectFirst("div.mb-1.leading-7:has(span:contains(Written by)) a")?.text()?.trim()
 
-        // LN Reader: img[x-ref="art"].w-full.rounded.shadow-md
-        val coverUrl = doc.selectFirst("img[x-ref=\"art\"].w-full.rounded.shadow-md")?.attr("src")
-        if (coverUrl != null) {
-            thumbnail_url = if (coverUrl.startsWith("http")) coverUrl else "$baseUrl$coverUrl"
-        }
+            // Get genres from both main genre section and additional tags
+            val mainGenres = doc.select(
+                "section[x-data=\"{ tab: location.hash.substr(1) || 'chapters' }\"].relative > div > div > div.flex.flex-wrap > a",
+            ).map { it.text().trim() }
 
-        // Get author from "Written by" section
-        // Format: <div class="mb-1 leading-7"><span>Written by</span><a href="...">AuthorName</a></div>
-        author = doc.selectFirst("div.mb-1.leading-7:has(span:contains(Written by)) a")?.text()
+            // Additional tags from order-3 section with tag links
+            // Format: <a href="https://storyseedling.com/browse/?includeTags%5B%5D=XXX" class="...">#+TagName</a>
+            val additionalTags = doc.select("div.order-3 div.flex.flex-wrap a[href*=includeTags]")
+                .map { it.text().replace("#", "").trim() }
 
-        // Get genres from both main genre section and additional tags
-        val mainGenres = doc.select(
-            "section[x-data=\"{ tab: location.hash.substr(1) || 'chapters' }\"].relative > div > div > div.flex.flex-wrap > a",
-        ).map { it.text() }
+            genre = (mainGenres + additionalTags).distinct().filter { it.isNotBlank() }.joinToString(", ")
 
-        // Additional tags from order-3 section with tag links
-        // Format: <a href="https://storyseedling.com/browse/?includeTags%5B%5D=XXX" class="...">#+TagName</a>
-        val additionalTags = doc.select("div.order-3 div.flex.flex-wrap a[href*=includeTags]")
-            .map { it.text().replace("#", "").trim() }
+            // Description from the order-3 lg:grid-in-content section
+            // Format: <div class="order-3 lg:grid-in-content"><div x-data="{ expanded: false }">...<p>...</p></div>
+            val descContainer = doc.selectFirst("div.order-3.lg\\:grid-in-content div[x-data*=expanded] div.mb-4.order-2")
+                ?: doc.selectFirst("div.order-3.lg\\:grid-in-content div[x-data] div.grid div.mb-4")
+                ?: doc.selectFirst("div.order-3 div[x-data] div.mb-4.order-2")
 
-        genre = (mainGenres + additionalTags).distinct().filter { it.isNotBlank() }.joinToString()
+            description = descContainer?.let { container ->
+                container.select("p").joinToString("\n\n") { it.text().trim() }
+            }?.ifEmpty {
+                doc.select("div.mb-4.text-base p, div.synopsis p")
+                    .joinToString("\n\n") { it.text().trim() }
+            } ?: doc.select("div.mb-4.text-base p, div.synopsis p")
+                .joinToString("\n\n") { it.text().trim() }
+                .ifEmpty { doc.selectFirst(".prose, .description")?.text()?.trim() }
 
-        // Description from the order-3 lg:grid-in-content section
-        // Format: <div class="order-3 lg:grid-in-content"><div x-data="{ expanded: false }">...<p>...</p></div>
-        val descContainer = doc.selectFirst("div.order-3.lg\\:grid-in-content div[x-data*=expanded] div.mb-4.order-2")
-            ?: doc.selectFirst("div.order-3.lg\\:grid-in-content div[x-data] div.grid div.mb-4")
-            ?: doc.selectFirst("div.order-3 div[x-data] div.mb-4.order-2")
-
-        description = descContainer?.let { container ->
-            container.select("p").joinToString("\n\n") { it.text() }
-        }?.ifEmpty {
-            doc.select("div.mb-4.text-base p, div.synopsis p")
-                .joinToString("\n\n") { it.text() }
-        } ?: doc.select("div.mb-4.text-base p, div.synopsis p")
-            .joinToString("\n\n") { it.text() }
-            .ifEmpty { doc.selectFirst(".prose, .description")?.text() }
-
-        status = when {
-            doc.text().contains("Completed", ignoreCase = true) -> SManga.COMPLETED
-            doc.text().contains("Ongoing", ignoreCase = true) -> SManga.ONGOING
-            else -> SManga.UNKNOWN
+            status = when {
+                doc.text().contains("Completed", ignoreCase = true) -> SManga.COMPLETED
+                doc.text().contains("Ongoing", ignoreCase = true) -> SManga.ONGOING
+                else -> SManga.UNKNOWN
+            }
         }
     }
 
@@ -289,7 +268,12 @@ abstract class StorySeedling :
      * LN Reader: Extracts toc data from x-data attribute
      * Format: toc('dataNovelId', 'dataNovelN') - e.g., toc('000000', 'xxxxxxxxxx')
      */
-    private suspend fun parseChapterList(doc: Document): List<SChapter> {
+    override fun chapterListParse(response: Response): List<SChapter> {
+        val doc = Jsoup.parse(response.body.string())
+
+        // Check for Turnstile
+        checkTurnstile(doc)
+
         // LN Reader: Extract toc data from x-data attribute - div[ax-load][x-data*=toc]
         // Format: toc('dataNovelId', 'dataNovelN')
         val xData = doc.selectFirst("div[ax-load][x-data*=toc]")?.attr("x-data")
@@ -306,12 +290,17 @@ abstract class StorySeedling :
             try {
                 // LN Reader: Fetch chapters via AJAX with series_toc action
                 // FormData: post=dataNovelN, id=dataNovelId, action=series_toc
-                val tocBody = FormBody.Builder()
-                    .add("post", dataNovelN)
-                    .add("id", dataNovelId)
-                    .add("action", "series_toc")
-                    .build()
-                val ajaxResponse = client.post("$baseUrl/ajax", headers, tocBody)
+                val ajaxResponse = client.newCall(
+                    POST(
+                        "$baseUrl/ajax",
+                        headers,
+                        FormBody.Builder()
+                            .add("post", dataNovelN)
+                            .add("id", dataNovelId)
+                            .add("action", "series_toc")
+                            .build(),
+                    ),
+                ).execute()
 
                 val responseBody = ajaxResponse.body.string()
                 if (responseBody.isNotBlank()) {
@@ -321,30 +310,25 @@ abstract class StorySeedling :
                     // LN Reader: Handle JSON array format [{title, url, date, slug, is_locked}, ...]
                     when {
                         chaptersData?.let { it is kotlinx.serialization.json.JsonArray } == true -> {
-                            val showLocked = preferences.getBoolean(PREF_SHOW_LOCKED, false)
-                            var counter = 0f
                             val chapters = chaptersData.jsonArray.mapNotNull { chapterJson ->
                                 try {
                                     val chapterObj = chapterJson.jsonObject
                                     val url = chapterObj["url"]?.jsonPrimitive?.content ?: return@mapNotNull null
                                     val title = chapterObj["title"]?.jsonPrimitive?.content ?: ""
+                                    val slug = chapterObj["slug"]?.jsonPrimitive?.content ?: ""
                                     val isLocked = chapterObj["is_locked"]?.jsonPrimitive?.content == "true"
-                                    if (isLocked && !showLocked) return@mapNotNull null
 
-                                    counter++
                                     SChapter.create().apply {
                                         this.url = url.replace(baseUrl, "")
                                         this.name = if (isLocked) "🔒 $title" else title
                                         date_upload = 0L
-                                        // "slug" (e.g. "v1/2") isn't numeric - number by API order instead.
-                                        chapter_number = counter
+                                        chapter_number = slug.toFloatOrNull() ?: 0f
                                     }
                                 } catch (e: Exception) {
                                     null
                                 }
                             }
-                            // API returns oldest-first; the app expects newest-first.
-                            if (chapters.isNotEmpty()) return chapters.reversed()
+                            if (chapters.isNotEmpty()) return chapters
                         }
 
                         // HTML string format (fallback)
@@ -356,7 +340,7 @@ abstract class StorySeedling :
                                 val chapters = chaptersDoc.select("a[href*='/chapter/']").mapNotNull { element ->
                                     try {
                                         val url = element.attr("href").replace(baseUrl, "")
-                                        val name = element.text()
+                                        val name = element.text().trim()
 
                                         SChapter.create().apply {
                                             this.url = url
@@ -382,7 +366,7 @@ abstract class StorySeedling :
         return doc.select("div[x-show=\"tab === 'chapters'\"] a[href*='/chapter/'], a[href*='/chapter/']").mapNotNull { element ->
             try {
                 val url = element.attr("href").replace(baseUrl, "")
-                val name = element.text()
+                val name = element.text().trim()
                 if (name.isBlank()) return@mapNotNull null
 
                 SChapter.create().apply {
@@ -396,21 +380,11 @@ abstract class StorySeedling :
         }.distinctBy { it.url }.reversed()
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
-
-    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.get(url, headers, ensureSuccess = false)
-        if (!response.isSuccessful) return null
-        val doc = response.asJsoup()
-        checkTurnstile(doc)
-        return parseMangaDetails(doc).apply { this.url = mangaPath.slug(url.encodedPath) }
-    }
-
     // ======================== Pages ========================
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.get(baseUrl + chapter.url, headers)
-        return listOf(Page(0, response.request.url.encodedPath))
+    override fun pageListParse(response: Response): List<Page> {
+        val chapterUrl = response.request.url.toString().removePrefix(baseUrl)
+        return listOf(Page(0, chapterUrl))
     }
 
     // ======================== Novel Content ========================
@@ -421,14 +395,20 @@ abstract class StorySeedling :
      * Content is loaded dynamically via loadChapter() JavaScript function
      */
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(baseUrl + page.url, headers)
-        val doc = response.asJsoup()
+        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        val doc = Jsoup.parse(response.body.string())
 
-        // Chapter pages always carry a loadChapter() Alpine component regardless of whether an
-        // actual Turnstile challenge is being shown - it only renders one behind
-        // `x-if="showCaptcha"`, a client-side flag this extension can't evaluate. Treating its
-        // mere presence as "Turnstile detected" threw on every single chapter. Only a genuine
-        // Turnstile signal (checked below) should block.
+        // Check for Turnstile - StorySeedling uses loadChapter() with Turnstile
+        // The pattern is: x-data="loadChapter('sitekey', 'chapterId')"
+        val hasLoadChapter = doc.selectFirst("div[x-data*=loadChapter]") != null
+        if (hasLoadChapter) {
+            // Check for Turnstile first
+            checkTurnstile(doc)
+            // If no Turnstile detected but loadChapter exists, content requires JavaScript
+            throw Exception("Chapter content requires WebView (Turnstile protection). Please read in WebView.")
+        }
+
+        // Check for standard Turnstile
         checkTurnstile(doc)
 
         // LN Reader: div.justify-center > div.mb-4
@@ -454,17 +434,13 @@ abstract class StorySeedling :
             }
         }
 
-        val result = cleanedDoc.html()
-        if (result.isBlank() && doc.selectFirst("div[x-data*=loadChapter]") != null) {
-            // Confirmed live: the content div (x-html="content") ships genuinely empty in the
-            // server-rendered HTML - loadChapter() fetches it client-side, behind Turnstile, and
-            // there's no way to replicate that flow here.
-            throw Exception("Chapter content requires WebView (Turnstile-gated content load). Please read in WebView.")
-        }
-        return result
+        return cleanedDoc.html()
     }
 
-    override fun getFilterList(data: JsonElement?) = FilterList(
+    // Image URL - not used for novels
+    override fun imageUrlParse(response: Response): String = ""
+
+    override fun getFilterList() = FilterList(
         SortFilter(),
         StatusFilter(),
         Filter.Header("Genres (tap to include, tap again to exclude)"),
@@ -684,17 +660,4 @@ abstract class StorySeedling :
                 Tag("World Travel", "1070"),
             ),
         )
-
-    override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        SwitchPreferenceCompat(screen.context).apply {
-            key = PREF_SHOW_LOCKED
-            title = "Show locked chapters"
-            summary = "Include premium/locked chapters in the chapter list."
-            setDefaultValue(false)
-        }.also(screen::addPreference)
-    }
-
-    companion object {
-        private const val PREF_SHOW_LOCKED = "pref_show_locked_chapters"
-    }
 }

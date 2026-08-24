@@ -1,0 +1,11 @@
+ext {
+    libVersion = '1.4'
+    extName = 'FlameComics'
+    extClass = '.FlameComics'
+    baseUrl = 'https://flamecomics.xyz'
+    extVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

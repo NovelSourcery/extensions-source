@@ -1,9 +1,12 @@
-package eu.kanade.tachiyomi.novelextension.en.foxaholic18
+﻿package eu.kanade.tachiyomi.novelextension.en.foxaholic18
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
-import keiyoushi.annotation.Source
 
-@Source
-abstract class Foxaholic18 : MadaraNovel() {
+class Foxaholic18 :
+    MadaraNovel(
+        baseUrl = "https://18.foxaholic.com",
+        name = "Foxaholic 18+",
+        lang = "en",
+    ) {
     override val useNewChapterEndpointDefault = true
 }

@@ -1,0 +1,12 @@
+ext {
+    libVersion = '1.4'
+    extName = 'Wuxiabox'
+    extClass = '.Wuxiabox'
+    themePkg = 'readwn'
+    baseUrl = 'https://wuxiabox.com'
+    overrideVersionCode = 2
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

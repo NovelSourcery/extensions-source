@@ -1,10 +1,13 @@
 package eu.kanade.tachiyomi.novelextension.en.allnovelfull
 
 import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
-import keiyoushi.annotation.Source
 
-@Source
-abstract class AllNovelFull : ReadNovelFull() {
+class AllNovelFull :
+    ReadNovelFull(
+        name = "AllNovelFull",
+        baseUrl = "https://novgo.net",
+        lang = "en",
+    ) {
     override val latestPage = "latest-release-novel"
     override val searchPage = "search"
     override val chapterListing = "ajax-chapter-option"

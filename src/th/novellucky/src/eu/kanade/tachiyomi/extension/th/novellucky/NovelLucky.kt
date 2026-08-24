@@ -1,9 +1,12 @@
 ﻿package eu.kanade.tachiyomi.novelextension.th.novellucky
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
-import keiyoushi.annotation.Source
 
-@Source
-abstract class NovelLucky : MadaraNovel() {
+class NovelLucky :
+    MadaraNovel(
+        baseUrl = "https://novel-lucky.com",
+        name = "NovelLucky",
+        lang = "th",
+    ) {
     override val useNewChapterEndpointDefault = true
 }

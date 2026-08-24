@@ -76,7 +76,7 @@ class ComicDetailInfoResponse(
 }
 
 @Serializable
-class ComicDetailInfo(
+data class ComicDetailInfo(
     @SerialName("comicId") private val id: String,
     @SerialName("comicName") private val title: String,
     @SerialName("authorName") private val author: String,

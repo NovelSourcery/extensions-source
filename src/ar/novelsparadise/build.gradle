@@ -1,0 +1,12 @@
+ext {
+    libVersion = '1.4'
+    extName = 'NovelsParadise'
+    extClass = '.NovelsParadise'
+    themePkg = 'lightnovelwpnovel'
+    baseUrl = 'https://novelsparadise.site'
+    overrideVersionCode = 2
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

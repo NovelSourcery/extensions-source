@@ -1,0 +1,12 @@
+ext {
+    libVersion = '1.4'
+    extName = 'TranslationWeaver'
+    extClass = '.TranslationWeaver'
+    themePkg = 'lightnovelwpnovel'
+    baseUrl = 'https://transweaver.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

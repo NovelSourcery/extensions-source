@@ -1,0 +1,12 @@
+ext {
+    libVersion = '1.6'
+    extName = 'FreeWebNovel'
+    extClass = '.FreeWebNovel'
+    themePkg = 'readnovelfull'
+    baseUrl = 'https://freewebnovel.com'
+    overrideVersionCode = 4
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

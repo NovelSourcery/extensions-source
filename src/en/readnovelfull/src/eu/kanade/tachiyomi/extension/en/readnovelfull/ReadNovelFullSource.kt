@@ -1,10 +1,13 @@
 package eu.kanade.tachiyomi.novelextension.en.readnovelfull
 
-import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
-import keiyoushi.annotation.Source
+import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull as ReadNovelFullBase
 
-@Source
-abstract class ReadNovelFullSource : ReadNovelFull() {
+class ReadNovelFullSource :
+    ReadNovelFullBase(
+        name = "ReadNovelFull",
+        baseUrl = "https://readnovelfull.com",
+        lang = "en",
+    ) {
     override val popularPage = "novel-list/most-popular-novel"
     override val latestPage = "novel-list/latest-release-novel"
     override val pageAsPath = false
@@ -57,11 +60,11 @@ abstract class ReadNovelFullSource : ReadNovelFull() {
     )
 
     // Return raw genre IDs (keep 'genres/<name>') so multisrc uses exact path segment
-    override fun getGenreList(): List<ReadNovelFull.Genre> {
+    override fun getGenreList(): List<eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull.Genre> {
         val opts = getGenreOptions()
         if (opts.isNotEmpty()) {
             return opts.map { (name, rawId) ->
-                ReadNovelFull.Genre(name, rawId)
+                eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull.Genre(name, rawId)
             }
         }
         return super.getGenreList()

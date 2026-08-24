@@ -1,0 +1,11 @@
+ext {
+    libVersion = '1.4'
+    extName = 'Srank Manga'
+    extClass = '.SrankManga'
+    baseUrl = 'https://srankmanga.com'
+    overrideVersionCode = 1
+    themePkg = 'madaranovel'
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

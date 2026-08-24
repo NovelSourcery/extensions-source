@@ -1,0 +1,11 @@
+ext {
+    libVersion = '1.6'
+    extName = 'NovelArrow'
+    extClass = '.NovelArrow'
+    baseUrl = 'https://novelarrow.com'
+    extVersionCode = 4
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

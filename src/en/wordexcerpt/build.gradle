@@ -1,0 +1,11 @@
+ext {
+    libVersion = '1.4'
+    extName = 'WordExcerpt'
+    extClass = '.WordExcerpt'
+    baseUrl = 'https://wordexcerpt.com'
+    extVersionCode = 2
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

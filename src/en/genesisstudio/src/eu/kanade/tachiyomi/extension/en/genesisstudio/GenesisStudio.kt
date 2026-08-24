@@ -11,21 +11,14 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import keiyoushi.annotation.Source
-import keiyoushi.network.get
-import keiyoushi.source.KeiSource
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
+import eu.kanade.tachiyomi.source.online.HttpSource
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.double
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -44,24 +37,37 @@ import uy.kohesive.injekt.api.get
  * `/novels/{slug}/chapter-{n}`) page as the single largest `self.__next_f.push([1,"..."])` RSC
  * string literal, so we just decode that instead of touching Supabase.
  *
- * manga.url packs 3 values needed by different endpoints: "{abbreviation}|{novelId}|{slug}" - not
- * a single-prefix path shape, so it's stored as-is rather than through SlugPath.
+ * manga.url packs 3 values needed by different endpoints: "{abbreviation}|{novelId}|{slug}".
  * chapter.url packs "{novelId}|{chapterId}".
  */
-@Source
-abstract class GenesisStudio :
-    KeiSource(),
+class GenesisStudio :
+    HttpSource(),
     NovelSource,
     ConfigurableSource {
 
+    override val name = "GenesisStudio"
+    override val baseUrl = "https://genesistudio.com"
     private val apiUrl = "https://api.genesistudio.com"
+    override val lang = "en"
     override val supportsLatest = false
+    override val isNovelSource = true
 
     private val json = Json { ignoreUnknownKeys = true }
 
     private val listFields = """["id","novel_title","cover","abbreviation","slug","coverFile.filename_disk"]"""
 
     // ======================== Browse / Search ========================
+
+    override fun popularMangaRequest(page: Int): Request = novelsListRequest()
+
+    // No separate "latest" feed exists (single unpaginated catalog call); supportsLatest is
+    // false so these are never actually invoked, but HttpSource requires an implementation.
+    override fun latestUpdatesRequest(page: Int): Request = novelsListRequest()
+    override fun latestUpdatesParse(response: Response): MangasPage = parseNovelsList(response, null)
+
+    // The catalog is a single unpaginated call; the query rides in the URL fragment (never sent
+    // over the wire) so searchMangaParse can filter client-side without a second request.
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = novelsListRequest().let { it.newBuilder().url(it.url.newBuilder().fragment(query).build()).build() }
 
     private fun novelsListRequest(): Request {
         val url = "$baseUrl/api/directus/novels".toHttpUrl().newBuilder()
@@ -72,24 +78,9 @@ abstract class GenesisStudio :
         return GET(url, headers)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage {
-        val request = novelsListRequest()
-        return parseNovelsList(client.get(request.url, request.headers), null)
-    }
+    override fun popularMangaParse(response: Response): MangasPage = parseNovelsList(response, null)
 
-    // No separate "latest" feed exists (single unpaginated catalog call); supportsLatest is
-    // false so this is never actually invoked, but KeiSource requires an implementation.
-    override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val request = novelsListRequest()
-        return parseNovelsList(client.get(request.url, request.headers), null)
-    }
-
-    // The catalog is a single unpaginated call; the query rides in the URL fragment (never sent
-    // over the wire) so parseNovelsList can filter client-side without a second request.
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val request = novelsListRequest().let { it.newBuilder().url(it.url.newBuilder().fragment(query).build()).build() }
-        return parseNovelsList(client.get(request.url, request.headers), request.url.fragment)
-    }
+    override fun searchMangaParse(response: Response): MangasPage = parseNovelsList(response, response.request.url.fragment)
 
     private fun parseNovelsList(response: Response, query: String?): MangasPage {
         val array = json.parseToJsonElement(response.body.string()).jsonArray
@@ -118,66 +109,16 @@ abstract class GenesisStudio :
 
     private fun normalize(value: String) = value.lowercase().filter { it.isLetterOrDigit() }
 
-    // ======================== Details + Chapters ========================
+    // ======================== Details ========================
 
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/novels/${manga.url.split('|').getOrElse(2) { manga.url }}"
 
-    // The site path only carries the slug, but manga details are fetched by abbreviation (see
-    // class kdoc), so first look the slug up in the catalog to recover the packed manga.url.
-    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val slug = url.encodedPath.substringAfter("/novels/", "").trim('/').takeIf { it.isNotBlank() } ?: return null
-        val listRequest = novelsListRequest()
-        val listResponse = client.get(listRequest.url, listRequest.headers, ensureSuccess = false)
-        if (!listResponse.isSuccessful) return null
-        val matched = parseNovelsList(listResponse, null).mangas
-            .firstOrNull { it.url.split('|').getOrNull(2) == slug } ?: return null
-        val detailsRequest = buildMangaDetailsRequest(matched)
-        val response = client.get(detailsRequest.url, detailsRequest.headers, ensureSuccess = false)
-        if (!response.isSuccessful) return null
-        return parseMangaDetails(response)
-    }
-
-    private fun buildMangaDetailsRequest(manga: SManga): Request {
+    override fun mangaDetailsRequest(manga: SManga): Request {
         val abbreviation = manga.url.substringBefore('|')
         return GET("$baseUrl/api/directus/novels/by-abbreviation/$abbreviation", headers)
     }
 
-    private fun buildChapterListRequest(manga: SManga): Request {
-        val id = manga.url.split('|').getOrElse(1) { "" }
-        return GET("$baseUrl/api/novels-chapter/$id", headers)
-    }
-
-    override suspend fun fetchMangaUpdate(
-        manga: SManga,
-        chapters: List<SChapter>,
-        fetchDetails: Boolean,
-        fetchChapters: Boolean,
-    ): SMangaUpdate = coroutineScope {
-        // Details and chapters live on different API endpoints - fire both concurrently.
-        val detailsDeferred = if (fetchDetails) {
-            async {
-                val request = buildMangaDetailsRequest(manga)
-                parseMangaDetails(client.get(request.url, request.headers))
-            }
-        } else {
-            null
-        }
-        val chaptersDeferred = if (fetchChapters) {
-            async {
-                val request = buildChapterListRequest(manga)
-                parseChapterList(client.get(request.url, request.headers))
-            }
-        } else {
-            null
-        }
-
-        SMangaUpdate(
-            manga = detailsDeferred?.await() ?: manga,
-            chapters = chaptersDeferred?.await() ?: chapters,
-        )
-    }
-
-    private fun parseMangaDetails(response: Response): SManga {
+    override fun mangaDetailsParse(response: Response): SManga {
         val data = json.parseToJsonElement(response.body.string()).jsonObject
         val abbreviation = data["abbreviation"]?.jsonPrimitive?.contentOrNull.orEmpty()
         val id = data["id"]?.jsonPrimitive?.contentOrNull.orEmpty()
@@ -190,7 +131,7 @@ abstract class GenesisStudio :
             author = data["author"]?.jsonPrimitive?.contentOrNull
             genre = data["genres"]?.jsonArray
                 ?.mapNotNull { it.jsonObject["genres_id"]?.jsonObject?.get("label")?.jsonPrimitive?.contentOrNull }
-                ?.joinToString()
+                ?.joinToString(", ")
             status = when (data["serialization"]?.jsonPrimitive?.contentOrNull?.lowercase()) {
                 "ongoing" -> SManga.ONGOING
                 "hiatus" -> SManga.ON_HIATUS
@@ -201,7 +142,14 @@ abstract class GenesisStudio :
         }
     }
 
-    private fun parseChapterList(response: Response): List<SChapter> {
+    // ======================== Chapters ========================
+
+    override fun chapterListRequest(manga: SManga): Request {
+        val id = manga.url.split('|').getOrElse(1) { "" }
+        return GET("$baseUrl/api/novels-chapter/$id", headers)
+    }
+
+    override fun chapterListParse(response: Response): List<SChapter> {
         val novelId = response.request.url.pathSegments.last()
         val chapters = json.parseToJsonElement(response.body.string())
             .jsonObject["data"]?.jsonObject?.get("chapters")?.jsonArray ?: return emptyList()
@@ -237,10 +185,14 @@ abstract class GenesisStudio :
     // the page is reliably the chapter body (verified: ~14000 chars vs ~5000 for the next-largest
     // metadata push).
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, getChapterUrl(chapter)))
+    override fun pageListRequest(chapter: SChapter): Request = throw UnsupportedOperationException("Not used")
+    override fun pageListParse(response: Response): List<Page> = throw UnsupportedOperationException("Not used")
+    override fun fetchPageList(chapter: SChapter): rx.Observable<List<Page>> = rx.Observable.just(listOf(Page(0, getChapterUrl(chapter))))
+
+    override fun imageUrlParse(response: Response): String = ""
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(page.url, headers)
+        val response = client.newCall(GET(page.url, headers)).execute()
         val html = response.body.string()
         val matches = PUSH_REGEX.findAll(html).map { it.groupValues[1] }.toList()
 
@@ -264,7 +216,7 @@ abstract class GenesisStudio :
             .joinToString("") { "<p>$it</p>" }
     }
 
-    override fun getFilterList(data: JsonElement?): FilterList = FilterList()
+    override fun getFilterList(): FilterList = FilterList()
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         SwitchPreferenceCompat(screen.context).apply {

@@ -1,7 +1,8 @@
-package eu.kanade.tachiyomi.novelextension.en.mznovels
+﻿package eu.kanade.tachiyomi.novelextension.en.mznovels
 
 import android.app.Application
 import android.content.SharedPreferences
+import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -9,18 +10,12 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import eu.kanade.tachiyomi.util.asJsoup
-import keiyoushi.annotation.Source
-import keiyoushi.lib.chapterutils.paginatedChapterList
-import keiyoushi.network.get
-import keiyoushi.source.KeiSource
-import keiyoushi.utils.SlugPath
+import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.utils.formattedText
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
-import okhttp3.HttpUrl
+import okhttp3.Request
 import okhttp3.Response
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
@@ -31,28 +26,30 @@ import uy.kohesive.injekt.injectLazy
  * @see https://github.com/LNReader/lnreader-plugins mznovels.ts
  * Features: Ranking filters, author notes settings, AJAX browse
  */
-@Source
-abstract class MzNovels :
-    KeiSource(),
+class MzNovels :
+    HttpSource(),
     NovelSource {
 
+    override val name = "MZ Novels"
+    override val baseUrl = "https://mznovels.com"
+    override val lang = "en"
+    override val supportsLatest = true
+
+    override val client = network.cloudflareClient
     private val json: Json by injectLazy()
+
+    override val isNovelSource = true
 
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
 
-    /**
-     * The site's novel detail URL shape, as `/novel/<slug>`. [SManga.url] is stored as the bare
-     * slug (see [SlugPath]); a stored value starting with "/" is a pre-existing full-path entry
-     * from before this source adopted slug storage, and is resolved unchanged regardless of
-     * this template.
-     */
-    private val mangaPathTemplate: SlugPath = SlugPath("/novel/")
+    override fun imageUrlParse(response: Response): String = ""
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
-        val doc = response.asJsoup()
+        val response = client.newCall(GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)).execute()
+        val html = response.body.string()
+        val doc = Jsoup.parse(html)
         checkCaptcha(doc)
 
         val content = doc.selectFirst("div.formatted-content") ?: return ""
@@ -90,21 +87,23 @@ abstract class MzNovels :
     }
     // ======================== Popular/Browse ========================
 
-    private fun buildPopularMangaUrl(page: Int): String = buildSearchMangaUrl(page, "", getFilterList(null))
+    override fun popularMangaRequest(page: Int): Request {
+        val filters = getFilterList()
+        return searchMangaRequest(page, "", filters)
+    }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseSearchResponse(client.get(buildPopularMangaUrl(page), headers))
+    override fun popularMangaParse(response: Response): MangasPage = searchMangaParse(response)
 
-    private fun buildLatestUpdatesUrl(page: Int): String = "$baseUrl/latest-updates/?page=$page"
+    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/latest-updates/?page=$page", headers)
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val response = client.get(buildLatestUpdatesUrl(page), headers)
+    override fun latestUpdatesParse(response: Response): MangasPage {
         return parseNovelList(response, 1) // page is already in URL
     }
     // ======================== Search ========================
 
-    private fun buildSearchMangaUrl(page: Int, query: String, filters: FilterList): String {
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (query.isNotEmpty()) {
-            return "$baseUrl/search/?q=$query&page=$page"
+            return GET("$baseUrl/search/?q=$query&page=$page", headers)
         }
 
         // Ranking filters
@@ -119,13 +118,11 @@ abstract class MzNovels :
             }
         }
 
-        return "$baseUrl/rankings/$rankType?period=$rankPeriod&page=$page"
+        return GET("$baseUrl/rankings/$rankType?period=$rankPeriod&page=$page", headers)
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseSearchResponse(client.get(buildSearchMangaUrl(page, query, filters), headers))
-
-    private fun parseSearchResponse(response: Response): MangasPage {
-        val doc = response.asJsoup()
+    override fun searchMangaParse(response: Response): MangasPage {
+        val doc = Jsoup.parse(response.body.string())
 
         // Detect page number from pagination to avoid repeated final pages
         val currentPage = doc.selectFirst("div.pagination > span.active")?.text()?.toIntOrNull() ?: 1
@@ -140,12 +137,12 @@ abstract class MzNovels :
     }
 
     private fun parseNovelList(response: Response, pageNo: Int): MangasPage {
-        val doc = response.asJsoup()
+        val doc = Jsoup.parse(response.body.string())
         checkCaptcha(doc)
 
         val novels = doc.select("ul.search-results-list > li.search-result-item:not(.ad-result-item)").mapNotNull { element ->
             val titleElement = element.selectFirst("h2.search-result-title") ?: return@mapNotNull null
-            val title = titleElement.text()
+            val title = titleElement.text().trim()
             val linkElement = element.selectFirst("a.search-result-title-link") ?: return@mapNotNull null
             val novelUrl = linkElement.attr("href")
 
@@ -155,7 +152,7 @@ abstract class MzNovels :
 
             SManga.create().apply {
                 this.title = title
-                this.url = mangaPathTemplate.slug(novelUrl.removePrefix(baseUrl))
+                this.url = novelUrl.removePrefix(baseUrl)
                 thumbnail_url = when {
                     coverUrl.isEmpty() -> ""
                     coverUrl.startsWith("http") -> coverUrl
@@ -165,42 +162,17 @@ abstract class MzNovels :
             }
         }
 
-        // The pagination bar has no "next" element at all (verified live) - it's numbered
-        // data-page links plus the current page as a bare <span class="active">. There's a next
-        // page iff some pagination link's data-page is greater than the current one.
-        val hasNextPage = doc.select(".pagination .pagination-link[data-page]").any {
-            (it.attr("data-page").toIntOrNull() ?: 0) > pageNo
-        }
+        val hasNextPage = doc.selectFirst(".pagination .next:not(.disabled)") != null
         return MangasPage(novels, hasNextPage)
     }
-    // ======================== Novel Details + Chapters ========================
+    // ======================== Novel Details ========================
 
-    private fun buildMangaDetailsUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
-
-    override suspend fun fetchMangaUpdate(
-        manga: SManga,
-        chapters: List<SChapter>,
-        fetchDetails: Boolean,
-        fetchChapters: Boolean,
-    ): SMangaUpdate {
-        val response = client.get(buildMangaDetailsUrl(manga), headers)
-        // NOTE: the response body can only be consumed once - parse it a single time and reuse
-        // the resulting Document for both branches below (the previous code called
-        // response.body.string() here and then response.asJsoup() again inside fetchAllChapters,
-        // which throws at runtime once the body stream is already closed).
-        val doc = response.asJsoup()
-
-        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
-        val updatedChapters = if (fetchChapters) fetchAllChapters(response, doc, chapters) else chapters
-
-        return SMangaUpdate(updatedManga, updatedChapters)
-    }
-
-    private fun parseMangaDetails(doc: Document): SManga {
+    override fun mangaDetailsParse(response: Response): SManga {
+        val doc = Jsoup.parse(response.body.string())
         checkCaptcha(doc)
 
         return SManga.create().apply {
-            title = doc.selectFirst("h1.novel-title")?.text() ?: "Untitled"
+            title = doc.selectFirst("h1.novel-title")?.text()?.trim() ?: "Untitled"
 
             thumbnail_url = doc.selectFirst("img#novel-cover-image")?.attr("src")?.let { src ->
                 when {
@@ -220,11 +192,11 @@ abstract class MzNovels :
             }
 
             // Author
-            var authorText = doc.selectFirst("p.novel-author > a")?.text() ?: "Unknown"
+            var authorText = doc.selectFirst("p.novel-author > a")?.text()?.trim() ?: "Unknown"
             if (category == "translated") {
                 val origAuthorElement = doc.selectFirst("p:contains(Original Author)")
                 if (origAuthorElement != null) {
-                    val origAuthor = origAuthorElement.nextElementSibling()?.text() ?: "Unknown"
+                    val origAuthor = origAuthorElement.nextElementSibling()?.text()?.trim() ?: "Unknown"
                     val translator = authorText
                     authorText = "$origAuthor (Original) / $translator (Translator)"
                 }
@@ -235,9 +207,9 @@ abstract class MzNovels :
             val tags = mutableListOf<String>()
             if (category != null) tags.add(category.replaceFirstChar { it.uppercase() })
 
-            doc.select("div.genres-container > a.genre").forEach { tags.add(it.text()) }
-            doc.select("div.tags-container > a.tag").forEach { tags.add(it.text()) }
-            genre = tags.joinToString()
+            doc.select("div.genres-container > a.genre").forEach { tags.add(it.text().trim()) }
+            doc.select("div.tags-container > a.tag").forEach { tags.add(it.text().trim()) }
+            genre = tags.joinToString(", ")
 
             // Status
             val statusIndicator = doc.selectFirst("span.status-indicator")
@@ -258,67 +230,52 @@ abstract class MzNovels :
     }
     // ======================== Chapters ========================
 
-    private suspend fun fetchAllChapters(firstResponse: Response, firstDoc: Document, existingChapters: List<SChapter>): List<SChapter> {
-        checkCaptcha(firstDoc)
+    override fun chapterListParse(response: Response): List<SChapter> {
+        val doc = Jsoup.parse(response.body.string())
+        checkCaptcha(doc)
 
-        // Chapter pages are newest-first (page 1 = latest, higher page = older) - the opposite
-        // of most paginated sites, but exactly what paginatedChapterList expects. This lets a
-        // manga with existing chapters probe straight to the right page instead of re-walking
-        // every page from 1 on every update.
-        suspend fun fetchPage(page: Int): Pair<List<SChapter>, Boolean> {
-            val doc = if (page == 1) {
-                firstDoc
-            } else {
-                // Verified live: the chapters pagination links are "?page=N" (not
-                // "?chapters_page=N"), which the site silently ignores.
-                client.get("${firstResponse.request.url}?page=$page", headers).asJsoup()
+        val chapters = mutableListOf<SChapter>()
+        var pageNo = 1
+
+        val lastPageLink = doc.selectFirst("div#chapters .pagination")
+            ?.children()
+            ?.lastOrNull { it.tagName() == "a" }
+            ?.attr("href")
+        val maxPage = lastPageLink?.split("=")?.lastOrNull()?.toIntOrNull() ?: 1
+
+        var currentDoc = doc
+        while (pageNo <= maxPage) {
+            if (pageNo > 1) {
+                val pageUrl = "${response.request.url}?chapters_page=$pageNo"
+                val pageResponse = client.newCall(GET(pageUrl, headers)).execute()
+                currentDoc = Jsoup.parse(pageResponse.body.string())
             }
 
-            val pageChapters = doc.select("ul.chapter-list > li.chapter-item").mapNotNull { element ->
-                val chapterLink = element.selectFirst("a.chapter-link") ?: return@mapNotNull null
-                SChapter.create().apply {
-                    name = chapterLink.text()
-                    url = chapterLink.attr("href").removePrefix(baseUrl)
-                    date_upload = 0L
-                }
+            currentDoc.select("ul.chapter-list > li.chapter-item").forEach { element ->
+                val chapterLink = element.selectFirst("a.chapter-link") ?: return@forEach
+                val chapterTitle = chapterLink.text().trim()
+                val chapterUrl = chapterLink.attr("href")
+
+                chapters.add(
+                    SChapter.create().apply {
+                        name = chapterTitle
+                        url = chapterUrl.removePrefix(baseUrl)
+                        date_upload = 0L
+                    },
+                )
             }
 
-            val currentPage = doc.selectFirst("div#chapters .pagination > span.active")?.text()?.toIntOrNull() ?: page
-            val hasNext = doc.select("div#chapters .pagination > a").any {
-                it.attr("href").substringAfter("page=", "").toIntOrNull()?.let { p -> p > currentPage } == true
-            }
-            return Pair(pageChapters, hasNext)
+            pageNo++
         }
 
-        val merged = paginatedChapterList(
-            existingChapters = existingChapters,
-            siteTotal = 0, // not displayed anywhere on the page
-            assumedPageSize = 18,
-            sortChapters = { it }, // already newest-first per page in fetch order
-            fetchPage = ::fetchPage,
-        )
-
-        return merged.mapIndexed { index, chapter ->
-            chapter.apply { chapter_number = (merged.size - index).toFloat() }
+        // Chapter list is newest-first on the site; keep that order and number descending.
+        return chapters.mapIndexed { index, chapter ->
+            chapter.apply { chapter_number = (chapters.size - index).toFloat() }
         }
     }
-
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
-
-    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val slug = mangaPathTemplate.slug(url.encodedPath)
-        val tempManga = SManga.create().apply { this.url = slug }
-        val response = client.get(buildMangaDetailsUrl(tempManga), headers, ensureSuccess = false)
-        if (!response.isSuccessful) return null
-        return parseMangaDetails(response.asJsoup()).apply { this.url = slug }
-    }
-
     // ======================== Chapter Content ========================
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.get(baseUrl + chapter.url, headers)
-        return listOf(Page(0, response.request.url.toString()))
-    }
+    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString(), null))
 
     // ======================== Captcha Detection ========================
 
@@ -331,7 +288,7 @@ abstract class MzNovels :
     }
     // ======================== Filters ========================
 
-    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
+    override fun getFilterList(): FilterList = FilterList(
         RankTypeFilter(),
         RankPeriodFilter(),
     )

@@ -1,0 +1,12 @@
+ext {
+    libVersion = '1.4'
+    extName = 'Eternalune'
+    extClass = '.Eternalune'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://eternalune.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

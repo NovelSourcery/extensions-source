@@ -1,0 +1,11 @@
+ext {
+    libVersion = '1.4'
+    extName = 'Fenrirealm'
+    extClass = '.Fenrirealm'
+    baseUrl = 'https://fenrirealm.com'
+    extVersionCode = 9
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

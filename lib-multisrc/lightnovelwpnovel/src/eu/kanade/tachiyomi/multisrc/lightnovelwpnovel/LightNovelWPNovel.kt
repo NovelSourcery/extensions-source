@@ -8,13 +8,9 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import keiyoushi.source.KeiSource
-import keiyoushi.utils.SlugPath
+import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.utils.formattedText
 import keiyoushi.utils.setAltTitles
-import kotlinx.serialization.json.JsonElement
-import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -27,38 +23,41 @@ import java.util.Locale
  * Base class for LightNovelWP Engine powered novel sites.
  * Handles common parsing and request logic.
  */
-abstract class LightNovelWPNovel :
-    KeiSource(),
+open class LightNovelWPNovel(
+    override val baseUrl: String,
+    override val name: String,
+    override val lang: String = "en",
+) : HttpSource(),
     NovelSource {
 
+    override val isNovelSource = true
+
     override val supportsLatest = true
+    override val client = network.cloudflareClient
 
     protected open val seriesPath = "series"
     protected open val reverseChapters: Boolean = false
 
-    /**
-     * The site's novel detail URL shape, as `/<seriesPath>/<slug>`. [SManga.url] is stored as
-     * the bare slug (see [SlugPath]); a stored value starting with "/" is a pre-existing
-     * full-path entry from before this source adopted slug storage, and is resolved unchanged
-     * regardless of this template.
-     */
-    protected open val mangaPathTemplate: SlugPath get() = SlugPath("/$seriesPath/")
-
-    protected open fun buildPopularMangaRequest(page: Int): Request {
+    override fun popularMangaRequest(page: Int): Request {
         val url = "$baseUrl/$seriesPath?page=$page"
         return GET(url, headers)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.newCall(buildPopularMangaRequest(page)).execute())
+    override fun popularMangaParse(response: Response): MangasPage {
+        val doc = response.asJsoup()
+        val mangas = parseNovels(doc)
+        val hasNextPage = doc.selectFirst(".pagination .next, .pagination a.next") != null
+        return MangasPage(mangas, hasNextPage)
+    }
 
-    protected open fun buildLatestUpdatesRequest(page: Int): Request {
+    override fun latestUpdatesRequest(page: Int): Request {
         val url = "$baseUrl/$seriesPath?page=$page&order=latest"
         return GET(url, headers)
     }
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(client.newCall(buildLatestUpdatesRequest(page)).execute())
+    override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
 
-    protected open fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         var url = "$baseUrl/$seriesPath?page=$page"
 
         if (query.isNotBlank()) {
@@ -86,14 +85,7 @@ abstract class LightNovelWPNovel :
         return GET(url, headers)
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseMangaListResponse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
-
-    protected open fun parseMangaListResponse(response: Response): MangasPage {
-        val doc = response.asJsoup()
-        val mangas = parseNovels(doc)
-        val hasNextPage = doc.selectFirst(".pagination .next, .pagination a.next") != null
-        return MangasPage(mangas, hasNextPage)
-    }
+    override fun searchMangaParse(response: Response) = popularMangaParse(response)
 
     /**
      * Helper function to extract image URL from element with various attribute fallbacks
@@ -115,8 +107,8 @@ abstract class LightNovelWPNovel :
 
                 SManga.create().apply {
                     this.title = title
-                    // Ensure URL is relative path, then store as a bare slug
-                    val relativeUrl = when {
+                    // Ensure URL is relative path
+                    this.url = when {
                         url.startsWith(baseUrl) -> url.removePrefix(baseUrl)
 
                         url.startsWith("http://") || url.startsWith("https://") -> {
@@ -131,7 +123,6 @@ abstract class LightNovelWPNovel :
 
                         else -> "/$url"
                     }
-                    this.url = mangaPathTemplate.slug(relativeUrl)
                     thumbnail_url = cover
                 }
             } catch (e: Exception) {
@@ -140,77 +131,68 @@ abstract class LightNovelWPNovel :
         }
     }
 
-    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
+    override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
 
-    override suspend fun fetchMangaUpdate(
-        manga: SManga,
-        chapters: List<SChapter>,
-        fetchDetails: Boolean,
-        fetchChapters: Boolean,
-    ): SMangaUpdate {
-        // Details and the chapter list both live on the same novel page - fetch it once.
-        val doc = client.newCall(buildMangaDetailsRequest(manga)).execute().asJsoup()
+    override fun mangaDetailsParse(response: Response): SManga {
+        val doc = response.asJsoup()
+        return SManga.create().apply {
+            // Get cover from detail page
+            val thumbImg = doc.selectFirst(".thumb img, .thumbook img, img.ts-post-image")
+            thumbnail_url = parseImageUrl(thumbImg)
 
-        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
-        val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
+            // Parse title from multiple sources - always set it since it's lateinit
+            title = thumbImg?.attr("title")?.trim()?.takeIf { it.isNotBlank() }
+                ?: doc.selectFirst(".entry-title")?.text()?.trim()?.takeIf { it.isNotBlank() }
+                ?: doc.selectFirst("meta[property=og:title]")?.attr("content")
+                    ?.substringBefore(" - ")?.trim()?.takeIf { it.isNotBlank() }
+                ?: doc.selectFirst("title")?.text()
+                    ?.substringBefore(" - ")?.trim()?.takeIf { it.isNotBlank() }
+                ?: doc.selectFirst(".post-title h1")?.text()?.trim()?.takeIf { it.isNotBlank() }
+                ?: "Unknown Title"
 
-        return SMangaUpdate(updatedManga, updatedChapters)
-    }
+            description = doc.selectFirst(".entry-content, [itemprop=description]")?.formattedText()?.trim() ?: ""
 
-    protected open fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
-        // Get cover from detail page
-        val thumbImg = doc.selectFirst(".thumb img, .thumbook img, img.ts-post-image")
-        thumbnail_url = parseImageUrl(thumbImg)
+            val authorElement = doc.select(".spe span:contains(Author), .serl:contains(Author)").first()
+            author = authorElement?.nextElementSibling()?.text()?.trim()
+                ?: authorElement?.parent()?.text()?.substringAfter("Author")?.replace(":", "")?.trim()
+                ?: ""
 
-        // Parse title from multiple sources - always set it since it's lateinit
-        title = thumbImg?.attr("title")?.trim()?.takeIf { it.isNotBlank() }
-            ?: doc.selectFirst(".entry-title")?.text()?.takeIf { it.isNotBlank() }
-            ?: doc.selectFirst("meta[property=og:title]")?.attr("content")
-                ?.substringBefore(" - ")?.trim()?.takeIf { it.isNotBlank() }
-            ?: doc.selectFirst("title")?.text()
-                ?.substringBefore(" - ")?.trim()?.takeIf { it.isNotBlank() }
-            ?: doc.selectFirst(".post-title h1")?.text()?.takeIf { it.isNotBlank() }
-            ?: "Unknown Title"
+            val artistElement = doc.select(".spe span:contains(Artist), .serl:contains(Artist)").first()
+            artist = artistElement?.nextElementSibling()?.text()?.trim()
+                ?: artistElement?.parent()?.text()?.substringAfter("Artist")?.replace(":", "")?.trim()
+                ?: ""
 
-        description = doc.selectFirst(".entry-content, [itemprop=description]")?.formattedText()?.trim() ?: ""
+            genre = doc.select(".genxed a, .sertogenre a").joinToString(", ") { it.text() }
 
-        val authorElement = doc.select(".spe span:contains(Author), .serl:contains(Author)").first()
-        author = authorElement?.nextElementSibling()?.text()
-            ?: authorElement?.parent()?.text()?.substringAfter("Author")?.replace(":", "")?.trim()
-            ?: ""
+            // Parse alternative titles from info section
+            val altNameText = doc.select(
+                ".spe span:contains(Alternative), .spe span:contains(Alt), .infox .alternative, .seriestualt",
+            ).firstOrNull()?.let { el ->
+                el.nextElementSibling()?.text()?.trim()?.takeIf { it.isNotBlank() }
+                    ?: el.parent()?.text()
+                        ?.substringAfter("Alternative")?.substringAfter("Alt")
+                        ?.replace(":", "")?.trim()?.takeIf { it.isNotBlank() }
+            }
+            if (!altNameText.isNullOrBlank()) {
+                val titles = altNameText.split(",", ";")
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                setAltTitles(titles)
+            }
 
-        val artistElement = doc.select(".spe span:contains(Artist), .serl:contains(Artist)").first()
-        artist = artistElement?.nextElementSibling()?.text()
-            ?: artistElement?.parent()?.text()?.substringAfter("Artist")?.replace(":", "")?.trim()
-            ?: ""
-
-        genre = doc.select(".genxed a, .sertogenre a").joinToString { it.text() }
-
-        // Parse alternative titles from info section
-        val altNameText = doc.select(
-            ".spe span:contains(Alternative), .spe span:contains(Alt), .infox .alternative, .seriestualt",
-        ).firstOrNull()?.let { el ->
-            el.nextElementSibling()?.text()?.takeIf { it.isNotBlank() }
-                ?: el.parent()?.text()
-                    ?.substringAfter("Alternative")?.substringAfter("Alt")
-                    ?.replace(":", "")?.trim()?.takeIf { it.isNotBlank() }
-        }
-        if (!altNameText.isNullOrBlank()) {
-            val titles = altNameText.split(",", ";")
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
-            setAltTitles(titles)
-        }
-
-        status = when {
-            doc.select(".sertostat, .spe, .serl").text().contains("Completed", ignoreCase = true) -> SManga.COMPLETED
-            doc.select(".sertostat, .spe, .serl").text().contains("Ongoing", ignoreCase = true) -> SManga.ONGOING
-            doc.select(".sertostat, .spe, .serl").text().contains("Hiatus", ignoreCase = true) -> SManga.ON_HIATUS
-            else -> SManga.UNKNOWN
+            status = when {
+                doc.select(".sertostat, .spe, .serl").text().contains("Completed", ignoreCase = true) -> SManga.COMPLETED
+                doc.select(".sertostat, .spe, .serl").text().contains("Ongoing", ignoreCase = true) -> SManga.ONGOING
+                doc.select(".sertostat, .spe, .serl").text().contains("Hiatus", ignoreCase = true) -> SManga.ON_HIATUS
+                else -> SManga.UNKNOWN
+            }
         }
     }
 
-    protected open fun parseChapterList(doc: Document): List<SChapter> {
+    override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+
+    override fun chapterListParse(response: Response): List<SChapter> {
+        val doc = response.asJsoup()
         val chapters = mutableListOf<SChapter>()
 
         doc.select(".eplister li").forEach { element ->
@@ -221,11 +203,11 @@ abstract class LightNovelWPNovel :
                 // epl-num structure: <div class="epl-num"><span>Ch. 50</span><span><i class="fas fa-lock"></i></span></div>
                 // The chapter number is in the FIRST span, second span may contain lock icon
                 val eplNumElement = element.selectFirst(".epl-num")
-                val chapterNum = eplNumElement?.selectFirst("span")?.text()
-                    ?: eplNumElement?.ownText()
+                val chapterNum = eplNumElement?.selectFirst("span")?.text()?.trim()
+                    ?: eplNumElement?.ownText()?.trim()
                     ?: ""
-                val chapterTitle = element.selectFirst(".epl-title")?.text() ?: ""
-                val dateStr = element.selectFirst(".epl-date")?.text() ?: ""
+                val chapterTitle = element.selectFirst(".epl-title")?.text()?.trim() ?: ""
+                val dateStr = element.selectFirst(".epl-date")?.text()?.trim() ?: ""
 
                 // Check for locked status - look for lock icon or price indicator
                 val isLocked = element.selectFirst(".fa-lock, .fas.fa-lock, i[class*='lock']") != null ||
@@ -239,7 +221,7 @@ abstract class LightNovelWPNovel :
                 }
 
                 // Extract chapter number from epl-num text (trailing digits)
-                val extractedNumber = chapterNum.replace("🔒", "").trim()
+                val extractedNumber = chapterNum.replace("\uD83D\uDD12", "").trim()
                     .let { Regex("(\\d+)$").find(it)?.groupValues?.get(1)?.toFloatOrNull() }
 
                 chapters.add(
@@ -260,18 +242,13 @@ abstract class LightNovelWPNovel :
         return if (reverseChapters) chapters.reversed() else chapters
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
-
-    override suspend fun getMangaByUrl(url: HttpUrl): SManga {
-        val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
-        val doc = client.newCall(buildMangaDetailsRequest(manga)).execute().asJsoup()
-        return parseMangaDetails(doc).apply { this.url = manga.url }
+    override fun pageListParse(response: Response): List<Page> {
+        // Return a page with the chapter URL for fetchPageText
+        val url = response.request.url.encodedPath
+        return listOf(Page(0, url))
     }
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.newCall(GET(baseUrl + chapter.url, headers)).execute()
-        return listOf(Page(0, response.request.url.encodedPath))
-    }
+    override fun imageUrlParse(response: Response): String = ""
 
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
@@ -329,7 +306,7 @@ abstract class LightNovelWPNovel :
         return ""
     }
 
-    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
+    override fun getFilterList(): FilterList = FilterList(
         StatusFilter(),
         SortFilter(),
     )

@@ -1,0 +1,11 @@
+ext {
+    libVersion = '1.4'
+    extName = 'Galaxy Novels'
+    extClass = '.GalaxyNovels'
+    baseUrl = 'https://galaxynovels.com'
+    extVersionCode = 3
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

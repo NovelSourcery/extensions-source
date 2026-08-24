@@ -1,0 +1,10 @@
+ext {
+    libVersion = '1.4'
+    extName = 'MZ Novels'
+    extClass = '.MzNovels'
+    baseUrl = 'https://mznovels.com'
+    extVersionCode = 3
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

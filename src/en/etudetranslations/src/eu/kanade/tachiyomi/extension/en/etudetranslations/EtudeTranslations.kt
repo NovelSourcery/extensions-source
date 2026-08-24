@@ -1,10 +1,13 @@
 ﻿package eu.kanade.tachiyomi.novelextension.en.etudetranslations
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
-import keiyoushi.annotation.Source
 
-@Source
-abstract class EtudeTranslations : MadaraNovel() {
+class EtudeTranslations :
+    MadaraNovel(
+        baseUrl = "https://etudetranslations.com",
+        name = "EtudeTranslations",
+        lang = "en",
+    ) {
     override val useNewChapterEndpointDefault = true
     override val reverseChapterListDefault = true
 }

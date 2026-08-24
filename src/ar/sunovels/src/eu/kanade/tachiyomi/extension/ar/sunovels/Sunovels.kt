@@ -1,53 +1,39 @@
 package eu.kanade.tachiyomi.novelextension.ar.sunovels
 
-import androidx.preference.PreferenceScreen
-import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.GET
-import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
-import keiyoushi.annotation.Source
-import keiyoushi.network.get
-import keiyoushi.source.KeiSource
-import keiyoushi.utils.SlugPath
-import keiyoushi.utils.getPreferencesLazy
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
-import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 
-@Source
-abstract class Sunovels :
-    KeiSource(),
-    NovelSource,
-    ConfigurableSource {
+class Sunovels :
+    HttpSource(),
+    NovelSource {
 
-    private val preferences by getPreferencesLazy()
-
+    override val name = "Sunovels"
+    override val baseUrl = "https://sunovels.com"
+    override val lang = "ar"
     override val supportsLatest = true
+    override val isNovelSource = true
+    override val client = network.client
 
-    /** [SManga.url] stored as bare slug under "/novel/"; a stored value starting with "/" is a
-     * pre-existing full-path entry and is resolved unchanged. */
-    private val mangaPath = SlugPath("/novel/")
+    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/library?page=$page", headers)
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parsePopularOrLatestResponse(client.get("$baseUrl/library?page=$page", headers))
-
-    private fun parsePopularOrLatestResponse(response: Response): MangasPage {
+    override fun popularMangaParse(response: Response): MangasPage {
         val body = response.body?.string() ?: return MangasPage(emptyList(), false)
-        val doc = Jsoup.parse(body, response.request.url.toString())
+        val doc = Jsoup.parse(body)
         val novels = mutableListOf<SManga>()
 
         // Extract per-novel data from RSC: each list-item has href + src + title together
         val listItemPattern = Regex(
-            """"list-item","children".*?"href":"/novel/([^"]+)".*?"src":"/uploads/([^"]+)".*?"children":"([^"]*[؀-ۿ][^"]*)"""",
+            """"list-item","children".*?"href":"/novel/([^"]+)".*?"src":"/uploads/([^"]+)".*?"children":"([^"]*[\u0600-\u06FF][^"]*)"""",
             RegexOption.DOT_MATCHES_ALL,
         )
         val rscBody = extractRscBody(body)
@@ -55,11 +41,11 @@ abstract class Sunovels :
             val slug = match.groupValues[1]
             val src = "/uploads/${match.groupValues[2]}"
             val title = match.groupValues[3].trim()
-            if (novels.any { it.url == mangaPath.slug("/novel/$slug") }) return@forEach
+            if (novels.any { it.url == "/novel/$slug" }) return@forEach
             if (title.isBlank()) return@forEach
             novels.add(
                 SManga.create().apply {
-                    url = mangaPath.slug("/novel/$slug")
+                    url = "/novel/$slug"
                     this.title = title
                     thumbnail_url = src
                 },
@@ -70,13 +56,13 @@ abstract class Sunovels :
         if (novels.isEmpty()) {
             doc.select("li.list-item").forEach { item ->
                 val link = item.selectFirst("a[href*=/novel/]") ?: return@forEach
-                val title = item.selectFirst("h4")?.text() ?: return@forEach
+                val title = item.selectFirst("h4")?.text()?.trim() ?: return@forEach
+                if (novels.any { it.url == link.attr("href") }) return@forEach
                 val slug = link.attr("href").removePrefix("/novel/")
-                if (novels.any { it.url == mangaPath.slug(link.attr("href")) }) return@forEach
                 val realImg = findImageForSlug(body, slug)
                 novels.add(
                     SManga.create().apply {
-                        url = mangaPath.slug(link.attr("href"))
+                        url = link.attr("href")
                         this.title = title
                         thumbnail_url = realImg
                     },
@@ -88,30 +74,35 @@ abstract class Sunovels :
         return MangasPage(novels.distinctBy { it.url }, hasNextPage)
     }
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parsePopularOrLatestResponse(client.get("$baseUrl/library?page=$page&sort=latest", headers))
+    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/library?page=$page&sort=latest", headers)
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
+
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val q = java.net.URLEncoder.encode(query, "UTF-8")
-        val response = client.get("$baseUrl/search/?title=$q&page=$page", headers)
+        return GET("$baseUrl/search/?title=$q&page=$page", headers)
+    }
+
+    override fun searchMangaParse(response: Response): MangasPage {
         val body = response.body?.string() ?: return MangasPage(emptyList(), false)
-        val doc = Jsoup.parse(body, response.request.url.toString())
+        val doc = Jsoup.parse(body)
         val novels = mutableListOf<SManga>()
 
         // Parse from RSC data (search results are in RSC, not regular HTML)
         val rscBody = extractRscBody(body)
         val listItemPattern = Regex(
-            """"list-item","children".*?"href":"/novel/([^"]+)".*?"src":"/uploads/([^"]+)".*?"children":"([^"]*[؀-ۿ][^"]*)"""",
+            """"list-item","children".*?"href":"/novel/([^"]+)".*?"src":"/uploads/([^"]+)".*?"children":"([^"]*[\u0600-\u06FF][^"]*)"""",
             RegexOption.DOT_MATCHES_ALL,
         )
         listItemPattern.findAll(rscBody).forEach { match ->
             val slug = match.groupValues[1]
             val src = "/uploads/${match.groupValues[2]}"
             val title = match.groupValues[3].trim()
-            if (novels.any { it.url == mangaPath.slug("/novel/$slug") }) return@forEach
+            if (novels.any { it.url == "/novel/$slug" }) return@forEach
             if (title.isBlank()) return@forEach
             novels.add(
                 SManga.create().apply {
-                    url = mangaPath.slug("/novel/$slug")
+                    url = "/novel/$slug"
                     this.title = title
                     thumbnail_url = src
                 },
@@ -122,13 +113,13 @@ abstract class Sunovels :
         if (novels.isEmpty()) {
             doc.select("li.list-item").forEach { item ->
                 val link = item.selectFirst("a[href*=/novel/]") ?: return@forEach
-                val title = item.selectFirst("h4")?.text() ?: return@forEach
+                val title = item.selectFirst("h4")?.text()?.trim() ?: return@forEach
+                if (novels.any { it.url == link.attr("href") }) return@forEach
                 val slug = link.attr("href").removePrefix("/novel/")
-                if (novels.any { it.url == mangaPath.slug(link.attr("href")) }) return@forEach
                 val realImg = findImageForSlug(body, slug)
                 novels.add(
                     SManga.create().apply {
-                        url = mangaPath.slug(link.attr("href"))
+                        url = link.attr("href")
                         this.title = title
                         thumbnail_url = realImg
                     },
@@ -144,55 +135,25 @@ abstract class Sunovels :
         return MangasPage(novels, hasNextPage)
     }
 
-    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPath.resolve(manga.url), headers)
-    private fun buildChapterListRequest(manga: SManga): Request = GET(baseUrl + mangaPath.resolve(manga.url) + "?activeTab=chapters", headers)
+    override fun mangaDetailsRequest(manga: SManga): Request = GET("$baseUrl${manga.url}", headers)
 
-    override suspend fun fetchMangaUpdate(
-        manga: SManga,
-        chapters: List<SChapter>,
-        fetchDetails: Boolean,
-        fetchChapters: Boolean,
-    ): SMangaUpdate = coroutineScope {
-        val detailsDeferred = if (fetchDetails) {
-            async {
-                val request = buildMangaDetailsRequest(manga)
-                parseMangaDetails(client.get(request.url, request.headers))
-            }
-        } else {
-            null
-        }
-        val chaptersDeferred = if (fetchChapters) {
-            async {
-                val request = buildChapterListRequest(manga)
-                parseChapterList(client.get(request.url, request.headers))
-            }
-        } else {
-            null
-        }
-
-        SMangaUpdate(
-            manga = detailsDeferred?.await() ?: manga,
-            chapters = chaptersDeferred?.await() ?: chapters,
-        )
-    }
-
-    private fun parseMangaDetails(response: Response): SManga {
+    override fun mangaDetailsParse(response: Response): SManga {
         val body = response.body?.string() ?: return SManga.create()
-        val doc = Jsoup.parse(body, response.request.url.toString())
+        val doc = Jsoup.parse(body)
         return SManga.create().apply {
             val novelH1 = doc.selectFirst(".info h1, .novel-header h1, .main-head h1")
             val novelH3 = doc.selectFirst(".info h3, .novel-header h3, .main-head h3")
-            title = novelH3?.text()?.ifEmpty { null }
-                ?: novelH1?.text()?.ifEmpty { null }
+            title = novelH3?.text()?.trim()?.ifEmpty { null }
+                ?: novelH1?.text()?.trim()?.ifEmpty { null }
                 ?: doc.selectFirst("meta[property=og:title]")
                     ?.attr("content")
-                    ?.removePrefix("رواية ")
-                    ?.substringBefore(" | شمس الروايات")
+                    ?.removePrefix("\u0631\u0648\u0627\u064a\u0629 ")
+                    ?.substringBefore(" | \u0634\u0645\u0633 \u0627\u0644\u0631\u0648\u0627\u064a\u0627\u062a")
                     ?.substringBefore(" | Sunovels")
                     ?.trim()
                 ?: doc.title()
-                    .removePrefix("رواية ")
-                    .substringBefore(" | شمس الروايات")
+                    .removePrefix("\u0631\u0648\u0627\u064a\u0629 ")
+                    .substringBefore(" | \u0634\u0645\u0633 \u0627\u0644\u0631\u0648\u0627\u064a\u0627\u062a")
                     .substringBefore(" | Sunovels")
                     .trim()
             status = when {
@@ -207,28 +168,30 @@ abstract class Sunovels :
                 if (it.startsWith("/")) "$baseUrl$it" else it
             }
             genre = doc.select(".tag, .tags a.tag")
-                .mapNotNull { it.text().takeIf { t -> t.isNotEmpty() } }
+                .mapNotNull { it.text().trim().takeIf { t -> t.isNotEmpty() } }
                 .distinct()
-                .joinToString()
-            description = doc.selectFirst(".description p, .description")?.text()
+                .joinToString(", ")
+            description = doc.selectFirst(".description p, .description")?.text()?.trim()
                 ?: doc.selectFirst("meta[property=og:description]")
                     ?.attr("content")?.trim()
                 ?: ""
         }
     }
 
-    private fun parseChapterList(response: Response): List<SChapter> {
+    override fun chapterListRequest(manga: SManga): Request = GET("$baseUrl${manga.url}?activeTab=chapters", headers)
+
+    override fun chapterListParse(response: Response): List<SChapter> {
         val body = response.body?.string() ?: return emptyList()
         val slug = response.request.url.encodedPath.substringAfter("/novel/").substringBefore("?")
         val novelUrl = "${response.request.url.scheme}://${response.request.url.host}/novel/$slug"
         val chapters = mutableListOf<SChapter>()
 
         // Parse first page chapters (default = page 0 = chapters 1-50)
-        parseChaptersFromHtml(body, slug, chapters, novelUrl)
+        parseChaptersFromHtml(body, slug, chapters)
 
         // Extract total pages
         val totalPages = extractTotalPages(body)
-        if (totalPages <= 1) return chapters.sortedByDescending { it.chapter_number }
+        if (totalPages <= 1) return chapters.sortedBy { it.chapter_number }
 
         // Fetch remaining pages in parallel with retry
         val pagesToFetch = (1 until totalPages).toMutableList()
@@ -247,7 +210,7 @@ abstract class Sunovels :
                             val pageBody = pageResponse.body?.string() ?: return@Thread
                             synchronized(chapters) {
                                 val before = chapters.size
-                                parseChaptersFromHtml(pageBody, slug, chapters, novelUrl)
+                                parseChaptersFromHtml(pageBody, slug, chapters)
                                 if (chapters.size == before) {
                                     synchronized(failedPages) { failedPages.add(page) }
                                 }
@@ -264,57 +227,42 @@ abstract class Sunovels :
             pagesToFetch.addAll(failedPages)
         }
 
-        return chapters.sortedByDescending { it.chapter_number }
+        return chapters.sortedBy { it.chapter_number }
     }
 
-    private fun parseChaptersFromHtml(body: String, slug: String, chapters: MutableList<SChapter>, docUrl: String) {
-        val showLocked = preferences.getBoolean(PREF_SHOW_LOCKED, false)
-
+    private fun parseChaptersFromHtml(body: String, slug: String, chapters: MutableList<SChapter>) {
         // Method 1: Plain HTML links
-        val doc = Jsoup.parse(body, docUrl)
+        val doc = Jsoup.parse(body)
         doc.select("a[href*=/novel/$slug/]").forEach { link ->
             val href = link.attr("href")
             if (href.isEmpty()) return@forEach
             val chapterNum = Regex("/novel/$slug/(\\d+)").find(href)
                 ?.groupValues?.get(1)?.toFloatOrNull() ?: return@forEach
             if (chapters.any { it.chapter_number == chapterNum }) return@forEach
-            val locked = link.selectFirst("svg[data-icon=lock]") != null
-            if (locked && !showLocked) return@forEach
-            val title = link.selectFirst("span, strong")?.text()
-                ?: link.text()
+            val title = link.selectFirst("span, strong")?.text()?.trim()
+                ?: link.text().trim()
             chapters.add(
                 SChapter.create().apply {
                     url = "/novel/$slug/${chapterNum.toInt()}"
-                    name = (if (locked) "🔒 " else "") + title.ifEmpty { "الفصل ${chapterNum.toInt()}" }
+                    name = title.ifEmpty { "\u0627\u0644\u0641\u0635\u0644 ${chapterNum.toInt()}" }
                     chapter_number = chapterNum
                 },
             )
         }
-        // Method 2: Unescaped RSC data - each chapter block is
-        // "href":"/novel/<slug>/<n>","prefetch":...,"title":"<name>" ... a lock-status svg
-        // (data-icon "lock" or "lock-open") before the next chapter's href. The title itself
-        // isn't a fixed shape - early/untitled chapters use a bare "<n> <word>" placeholder,
-        // later ones a real "<word> <n> - <name>" title, so match any string value.
-        // Scoped to start at the chapters list itself - the page also has a "continue reading"
-        // widget referencing one arbitrary chapter earlier in the RSC body, which would otherwise
-        // steal the first real chapter's title/lock-icon match (its own href has no title/icon
-        // nearby, so the non-greedy match skips ahead into the real list to find one).
-        val rscBody = extractRscBody(body).let { it.substringAfter("chaptersList", it) }
-        val chapterBlockPattern = Regex(
-            """"href":"/novel/$slug/(\d+)"[^}]*?"title":"([^"]+)".*?"data-icon":"(lock(?:-open)?)"""",
-            RegexOption.DOT_MATCHES_ALL,
-        )
+        // Method 2: Unescaped RSC data - find href patterns
+        val rscBody = extractRscBody(body)
+        val hrefPattern = Regex(""""href":"/novel/$slug/(\d+)"""")
+        val titlePattern = Regex(""""title":"(\d+ [^"]+)"""")
+        val hrefes = hrefPattern.findAll(rscBody).map { it.groupValues[1].toFloatOrNull() }.filterNotNull().toList()
+        val titles = titlePattern.findAll(rscBody).map { it.groupValues[1] }.toList()
 
-        for (match in chapterBlockPattern.findAll(rscBody)) {
-            val num = match.groupValues[1].toFloatOrNull() ?: continue
+        for ((i, num) in hrefes.withIndex()) {
             if (chapters.any { it.chapter_number == num }) continue
-            val locked = match.groupValues[3] == "lock"
-            if (locked && !showLocked) continue
-            val title = match.groupValues[2]
+            val title = titles.getOrElse(i) { "" }
             chapters.add(
                 SChapter.create().apply {
                     url = "/novel/$slug/${num.toInt()}"
-                    name = (if (locked) "🔒 " else "") + title.ifEmpty { "الفصل ${num.toInt()}" }
+                    name = title.ifEmpty { "\u0627\u0644\u0641\u0635\u0644 ${num.toInt()}" }
                     chapter_number = num
                 },
             )
@@ -343,55 +291,65 @@ abstract class Sunovels :
         return maxPage
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
-
-    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val path = mangaPath.slug(url.encodedPath)
-        val manga = SManga.create().apply { this.url = path }
-        val request = buildMangaDetailsRequest(manga)
-        val response = client.get(request.url, request.headers, ensureSuccess = false)
-        if (!response.isSuccessful) return null
-        return parseMangaDetails(response).apply { this.url = path }
-    }
-
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.get(baseUrl + chapter.url, headers)
-        return listOf(Page(0, response.request.url.encodedPath))
+    override fun pageListParse(response: Response): List<Page> {
+        val url = response.request.url.encodedPath
+        return listOf(Page(0, url))
     }
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get("$baseUrl${page.url}", headers)
-        val doc = response.asJsoup()
+        val doc = client.newCall(GET("$baseUrl${page.url}", headers)).execute().asJsoup()
         val content = doc.selectFirst(
             ".chapter-content, .content, .entry-content, .post-content, article, .text",
         ) ?: return ""
         // Remove hidden watermark elements (d-none class contains anti-scraping hashes)
         content.select("p.d-none, .d-none").remove()
-        // Remove ads, navigation, and other non-content elements, plus the Play
-        // Store/App Store download badges the app embeds inline in the chapter body.
+        // Remove ads, navigation, and other non-content elements
         content.select(
             "script, style, .ads, .navigation, .chapter-nav, " +
-                ".social-share, .comments, nav, footer, " +
-                "a[href*=play.google.com], a[href*=apps.apple.com]",
+                ".social-share, .comments, nav, footer",
         ).remove()
         return content.html().trim()
     }
 
+    override fun imageUrlParse(response: Response): String = ""
+
     /**
      * Extract and concatenate all RSC flight data into a single string for easy searching.
      */
-    private fun extractRscBody(html: String): String = buildString {
+    private fun extractRscBody(html: String): String {
+        val sb = StringBuilder()
         val pattern = Regex("""self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)""")
         pattern.findAll(html).forEach { match ->
             val raw = match.groupValues[1]
-            append(
+            sb.append(
                 raw.replace("\\\"", "\"")
                     .replace("\\\\", "\\")
                     .replace("\\n", "\n")
                     .replace("\\t", "\t"),
             )
-            append("\n")
+            sb.append("\n")
         }
+        return sb.toString()
+    }
+
+    /**
+     * Extract RSC (React Server Components) flight data chunks from the page body.
+     * These are embedded in script tags like: self.__next_f.push([1,"..."])
+     */
+    private fun extractRscChunks(html: String): List<String> {
+        val chunks = mutableListOf<String>()
+        val pattern = Regex("""self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)""")
+        pattern.findAll(html).forEach { match ->
+            val raw = match.groupValues[1]
+            // Unescape JSON string escapes
+            val unescaped = raw
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\")
+                .replace("\\n", "\n")
+                .replace("\\t", "\t")
+            chunks.add(unescaped)
+        }
+        return chunks
     }
 
     /**
@@ -409,18 +367,5 @@ abstract class Sunovels :
         )
         val srcMatch = Regex(""""src":"/uploads/([^"]+)"""").find(searchRange)
         return srcMatch?.groupValues?.get(1)?.let { "/uploads/$it" }
-    }
-
-    override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        SwitchPreferenceCompat(screen.context).apply {
-            key = PREF_SHOW_LOCKED
-            title = "Show locked chapters"
-            summary = "Include premium/locked chapters in the chapter list."
-            setDefaultValue(false)
-        }.also(screen::addPreference)
-    }
-
-    companion object {
-        private const val PREF_SHOW_LOCKED = "pref_show_locked_chapters"
     }
 }

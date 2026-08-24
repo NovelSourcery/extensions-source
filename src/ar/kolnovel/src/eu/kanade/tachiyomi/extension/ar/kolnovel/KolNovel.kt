@@ -1,28 +1,23 @@
 package eu.kanade.tachiyomi.novelextension.ar.kolnovel
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
+import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Page
-import keiyoushi.annotation.Source
-import keiyoushi.network.get
-import keiyoushi.utils.SlugPath
 
 /**
  * Kol Novel uses CSS style-based obfuscation to hide spam paragraphs.
  * The article > style block defines classes whose matching paragraphs should be removed.
  */
-@Source
-abstract class KolNovel : LightNovelWPNovel() {
+class KolNovel :
+    LightNovelWPNovel(
+        baseUrl = "https://kolnovel.com",
+        name = "Kol Novel",
+        lang = "ar",
+    ) {
     override val reverseChapters = true
 
-    // Novel pages live directly under the site root ("/<slug>/"), not under the base class's
-    // default "/series/<slug>" assumption (that path is only the browse/listing archive here) -
-    // verified live. A bare "/" template still resolves pre-existing full-path stored entries
-    // unchanged (SlugPath's own backward-compat rule), so this also fixes any manga.url that was
-    // previously stored as a mismatched "/series/..." path.
-    override val mangaPathTemplate = SlugPath("/")
-
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(baseUrl + page.url, headers)
+        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
         val doc = response.asJsoup()
 
         // Remove code blocks
@@ -57,7 +52,7 @@ abstract class KolNovel : LightNovelWPNovel() {
 
         // Remove paragraphs that are too short (likely spam/ads)
         content.select("p").forEach { p ->
-            val text = p.text()
+            val text = p.text().trim()
 
             // Skip empty paragraphs
             if (text.isEmpty()) {
@@ -72,7 +67,7 @@ abstract class KolNovel : LightNovelWPNovel() {
             }
 
             // Remove paragraphs that are mostly English (spam)
-            val arabicCount = text.count { it in '؀'..'ۿ' || it in 'ݐ'..'ݿ' || it in 'ﭐ'..'﷿' || it in 'ﹰ'..'﻿' }
+            val arabicCount = text.count { it in '\u0600'..'\u06FF' || it in '\u0750'..'\u077F' || it in '\uFB50'..'\uFDFF' || it in '\uFE70'..'\uFEFF' }
             val totalCount = text.replace("\\s".toRegex(), "").length
             if (totalCount > 0 && arabicCount.toFloat() / totalCount < 0.2f) {
                 p.remove()
@@ -104,7 +99,7 @@ abstract class KolNovel : LightNovelWPNovel() {
 
         // Remove any remaining non-content divs
         content.select("div").forEach { div ->
-            val text = div.text()
+            val text = div.text().trim()
             if (text.isEmpty() || text.length < 20) {
                 // Check if this div has no meaningful content
                 val hasImages = div.select("img").isNotEmpty()

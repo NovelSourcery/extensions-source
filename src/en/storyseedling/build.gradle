@@ -1,0 +1,11 @@
+ext {
+    libVersion = '1.4'
+    extName = 'StorySeedling'
+    extClass = '.StorySeedling'
+    baseUrl = 'https://storyseedling.com'
+    extVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

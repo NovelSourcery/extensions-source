@@ -1,22 +1,5 @@
-import io.github.keiyoushi.gradle.api.ContentWarning
-
 plugins {
-    alias(ns.plugins.extension)
+    id("lib-multisrc")
 }
 
-keiyoushi {
-    name = "NovelCool"
-    versionCode = 5
-    contentWarning = ContentWarning.SAFE
-    libVersion = "1.6"
-
-    source {
-        lang = "en"
-        baseUrl = "https://novelcool.com"
-    }
-
-    deeplink {
-        host("novelcool.com")
-        path("/novel/..*")
-    }
-}
+baseVersionCode = 1

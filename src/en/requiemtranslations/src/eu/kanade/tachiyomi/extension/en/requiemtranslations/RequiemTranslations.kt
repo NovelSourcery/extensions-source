@@ -1,16 +1,19 @@
-package eu.kanade.tachiyomi.novelextension.en.requiemtranslations
+﻿package eu.kanade.tachiyomi.novelextension.en.requiemtranslations
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
+import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Page
-import keiyoushi.annotation.Source
-import keiyoushi.network.get
 
 /**
  * Requiem Translations extension.
  * Uses LightNovelWP template with custom content decryption.
  */
-@Source
-abstract class RequiemTranslations : LightNovelWPNovel() {
+class RequiemTranslations :
+    LightNovelWPNovel(
+        baseUrl = "https://requiemtls.com",
+        name = "Requiem Translations",
+        lang = "en",
+    ) {
 
     /**
      * Decodes obfuscated text from Requiem Translations.
@@ -46,7 +49,7 @@ abstract class RequiemTranslations : LightNovelWPNovel() {
     }
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(baseUrl + page.url, headers)
+        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
         val doc = response.asJsoup()
 
         val chapterPath = page.url.trimEnd('/')

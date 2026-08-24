@@ -8,29 +8,26 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
-import keiyoushi.annotation.Source
-import keiyoushi.network.get
-import keiyoushi.source.KeiSource
-import keiyoushi.utils.SlugPath
-import keiyoushi.utils.tryParseDateTime
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
-import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import java.time.format.DateTimeFormatter
+import java.text.SimpleDateFormat
 import java.util.Locale
 
-@Source
-abstract class RewayatClub :
-    KeiSource(),
+class RewayatClub :
+    HttpSource(),
     NovelSource {
 
+    override val name = "Rewayat Club"
+    override val baseUrl = "https://rewayat.club"
+    override val lang = "ar"
     override val supportsLatest = true
+    override val isNovelSource = true
+    override val client = network.client
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -38,92 +35,58 @@ abstract class RewayatClub :
     }
     private val apiUrl = "https://api.rewayat.club"
 
+    private var currentNovelSlug = ""
     private var cachedTranslators: List<String> = emptyList()
     private var currentFilterList: FilterList = FilterList()
 
-    /** [SManga.url] stored as a bare slug via [mangaPathTemplate]. */
-    private val mangaPathTemplate = SlugPath("/novel/")
+    override fun popularMangaRequest(page: Int): Request = GET("$apiUrl/api/novels?page=$page", headers)
 
-    private fun buildPopularMangaRequest(page: Int): Request = GET("$apiUrl/api/novels?page=$page", headers)
-
-    override suspend fun getPopularManga(page: Int): MangasPage {
-        val request = buildPopularMangaRequest(page)
-        return parseNovelsResponse(client.get(request.url, request.headers))
-    }
-
-    private fun buildLatestUpdatesRequest(page: Int): Request = GET("$apiUrl/api/novels?page=$page", headers)
-
-    override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val request = buildLatestUpdatesRequest(page)
-        return parseNovelsResponse(client.get(request.url, request.headers))
-    }
-
-    private fun parseNovelsResponse(response: Response): MangasPage {
+    override fun popularMangaParse(response: Response): MangasPage {
         val body = json.decodeFromString<NovelsResponse>(response.body.string())
         val novels = body.results.map { it.toSManga() }
         return MangasPage(novels, body.next != null)
     }
 
-    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override fun latestUpdatesRequest(page: Int): Request = GET("$apiUrl/api/novels?page=$page", headers)
+
+    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
+
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val q = java.net.URLEncoder.encode(query, "UTF-8")
         return GET("$apiUrl/api/novels?page=$page&search=$q", headers)
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val request = buildSearchMangaRequest(page, query, filters)
-        return parseNovelsResponse(client.get(request.url, request.headers))
-    }
+    override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
 
-    private fun buildMangaDetailsRequest(manga: SManga): Request {
-        val slug = mangaPathTemplate.resolve(manga.url).substringAfterLast("/")
+    override fun mangaDetailsRequest(manga: SManga): Request {
+        val slug = manga.url.substringAfterLast("/")
         return GET("$apiUrl/api/novels/$slug", headers)
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
-
-    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
-        val request = buildMangaDetailsRequest(manga)
-        val response = client.get(request.url, request.headers)
-        if (!response.isSuccessful) return null
-        return json.decodeFromString<NovelItem>(response.body.string()).toSManga()
+    override fun mangaDetailsParse(response: Response): SManga {
+        val bodyStr = response.body.string()
+        val item = json.decodeFromString<NovelItem>(bodyStr)
+        currentNovelSlug = item.slug
+        cachedTranslators = item.contributors.map { it.username }.filter { it.isNotBlank() }.distinct().sorted()
+        return SManga.create().apply {
+            url = "/novel/${item.slug}"
+            title = item.arabic
+            thumbnail_url = "$apiUrl${item.poster_url}"
+            description = item.about
+            genre = item.genre.joinToString { it.arabic }
+            status = when (item.get_novel_status) {
+                "مكتملة" -> SManga.COMPLETED
+                "مستمرة" -> SManga.ONGOING
+                else -> SManga.UNKNOWN
+            }
+        }
     }
 
-    override suspend fun fetchMangaUpdate(
-        manga: SManga,
-        chapters: List<SChapter>,
-        fetchDetails: Boolean,
-        fetchChapters: Boolean,
-    ): SMangaUpdate {
-        val slug = mangaPathTemplate.resolve(manga.url).substringAfterLast("/")
-
-        val updatedManga = if (fetchDetails) {
-            val request = buildMangaDetailsRequest(manga)
-            val response = client.get(request.url, request.headers)
-            val item = json.decodeFromString<NovelItem>(response.body.string())
-            cachedTranslators = item.contributors.map { it.username }.filter { it.isNotBlank() }.distinct().sorted()
-            SManga.create().apply {
-                url = mangaPathTemplate.slug("/novel/${item.slug}")
-                title = item.arabic
-                thumbnail_url = "$apiUrl${item.poster_url}"
-                description = item.about
-                genre = item.genre.joinToString { it.arabic }
-                status = when (item.get_novel_status) {
-                    "مكتملة" -> SManga.COMPLETED
-                    "مستمرة" -> SManga.ONGOING
-                    else -> SManga.UNKNOWN
-                }
-            }
-        } else {
-            manga
+    override fun getFilterList(): FilterList {
+        if (cachedTranslators.isEmpty() && currentNovelSlug.isNotEmpty()) {
+            fetchTranslators(currentNovelSlug)
         }
 
-        val updatedChapters = if (fetchChapters) fetchChapterList(slug) else chapters
-
-        return SMangaUpdate(updatedManga, updatedChapters)
-    }
-
-    override fun getFilterList(data: JsonElement?): FilterList {
         if (cachedTranslators.isEmpty()) {
             currentFilterList = FilterList(
                 Filter.Header("جاري تحميل المساهمين..."),
@@ -141,7 +104,24 @@ abstract class RewayatClub :
         return currentFilterList
     }
 
-    private suspend fun fetchChapterList(novelSlug: String): List<SChapter> {
+    private fun fetchTranslators(slug: String) {
+        try {
+            val resp = client.newCall(GET("$apiUrl/api/novels/$slug", headers)).execute()
+            val item = json.decodeFromString<NovelItem>(resp.body.string())
+            currentNovelSlug = item.slug
+            cachedTranslators = item.contributors.map { it.username }.filter { it.isNotBlank() }.distinct().sorted()
+        } catch (_: Exception) {
+        }
+    }
+
+    override fun chapterListRequest(manga: SManga): Request {
+        if (currentNovelSlug.isEmpty()) {
+            currentNovelSlug = manga.url.substringAfterLast("/")
+        }
+        return GET("$apiUrl/api/chapters/$currentNovelSlug/?ordering=-number&page=1&page_size=500", headers)
+    }
+
+    override fun chapterListParse(response: Response): List<SChapter> {
         val blocked = currentFilterList.filterIsInstance<TranslatorBlockGroup>()
             .firstOrNull()?.state
             ?.filterIsInstance<TranslatorCheckBox>()
@@ -151,10 +131,14 @@ abstract class RewayatClub :
             ?: emptySet()
 
         val allChapters = mutableListOf<ChapterItem>()
+        val novelSlug = response.request.url.encodedPath.substringAfter("/api/chapters/").trimEnd('/')
 
-        var nextUrl: String? = "$apiUrl/api/chapters/$novelSlug/?ordering=-number&page=1&page_size=500"
+        val firstBody = json.decodeFromString<ChaptersResponse>(response.body.string())
+        allChapters.addAll(firstBody.results)
+        var nextUrl = firstBody.next
+
         while (nextUrl != null) {
-            val pageResp = client.get(nextUrl, headers)
+            val pageResp = client.newCall(GET(nextUrl, headers)).execute()
             val body = json.decodeFromString<ChaptersResponse>(pageResp.body.string())
             pageResp.close()
             allChapters.addAll(body.results)
@@ -173,13 +157,13 @@ abstract class RewayatClub :
                 name = ch.title
                 scanlator = ch.uploader?.username
                 chapter_number = ch.number.toFloat()
-                date_upload = DATE_FORMAT.tryParseDateTime(ch.date)
+                date_upload = runCatching { DATE_FORMAT.parse(ch.date)?.time }.getOrNull() ?: 0L
             }
         }.sortedByDescending { it.chapter_number }
     }
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val url = "$baseUrl${chapter.url}"
+    override fun pageListParse(response: Response): List<Page> {
+        val url = response.request.url.encodedPath
         return listOf(Page(0, url))
     }
 
@@ -189,7 +173,7 @@ abstract class RewayatClub :
         val number = parts.lastOrNull().orEmpty()
         if (slug.isNotEmpty() && number.isNotEmpty()) {
             val apiText = runCatching {
-                val resp = client.get("$apiUrl/api/chapters/$slug/$number/", headers)
+                val resp = client.newCall(GET("$apiUrl/api/chapters/$slug/$number/", headers)).execute()
                 val item = json.decodeFromString<ChapterDetail>(resp.body.string())
                 parseChapterContent(item.content)
             }.getOrNull()
@@ -202,12 +186,12 @@ abstract class RewayatClub :
         if (content.isEmpty()) return ""
         val html = content.flatten().joinToString("\n")
         val doc = org.jsoup.Jsoup.parseBodyFragment(html)
-        val paragraphs = doc.select("p").mapNotNull { it.text().ifEmpty { null } }
-        return if (paragraphs.isNotEmpty()) paragraphs.joinToString("\n\n") else doc.text()
+        val paragraphs = doc.select("p").mapNotNull { it.text().trim().ifEmpty { null } }
+        return if (paragraphs.isNotEmpty()) paragraphs.joinToString("\n\n") else doc.text().trim()
     }
 
     private suspend fun parseChapterWebPage(page: Page): String {
-        val doc = client.get("$baseUrl${page.url}", headers).asJsoup()
+        val doc = client.newCall(GET("$baseUrl${page.url}", headers)).execute().asJsoup()
 
         val nuxtScript = doc.select("script").firstOrNull { it.html().contains("window.__NUXT__") }
         if (nuxtScript != null) {
@@ -222,11 +206,11 @@ abstract class RewayatClub :
             contentEl.select(
                 "script, style, nav, footer, header, .ads, .navigation, .chapter-nav, .prev-next, .share, .comments, .breadcrumb, .v-data-table, table",
             ).remove()
-            val paragraphs = contentEl.select("p").mapNotNull { it.text().ifEmpty { null } }
+            val paragraphs = contentEl.select("p").mapNotNull { it.text().trim().ifEmpty { null } }
             if (paragraphs.isNotEmpty()) {
                 return paragraphs.joinToString("\n\n")
             }
-            return contentEl.text()
+            return contentEl.text().trim()
         }
 
         return ""
@@ -235,82 +219,82 @@ abstract class RewayatClub :
     private fun extractNuxtContent(scriptHtml: String): String {
         val match = Regex("""[A-Za-z_$][A-Za-z0-9_$]*\.content=""").find(scriptHtml) ?: return ""
         val valueStart = match.range.first + match.value.length
+        val sb = StringBuilder()
+        var i = valueStart
         val len = scriptHtml.length
 
-        val raw = buildString {
-            var i = valueStart
-
-            while (i < len) {
-                val c = scriptHtml[i]
-                when {
-                    c == '\\' && i + 1 < len -> {
-                        when (scriptHtml[i + 1]) {
-                            'u' -> {
-                                if (i + 5 < len) {
-                                    val hex = scriptHtml.substring(i + 2, i + 6)
-                                    val cp = hex.toIntOrNull(16)
-                                    if (cp != null) {
-                                        appendCodePoint(cp)
-                                        i += 6
-                                        continue
-                                    }
+        while (i < len) {
+            val c = scriptHtml[i]
+            when {
+                c == '\\' && i + 1 < len -> {
+                    when (scriptHtml[i + 1]) {
+                        'u' -> {
+                            if (i + 5 < len) {
+                                val hex = scriptHtml.substring(i + 2, i + 6)
+                                val cp = hex.toIntOrNull(16)
+                                if (cp != null) {
+                                    sb.appendCodePoint(cp)
+                                    i += 6
+                                    continue
                                 }
-                                append('\\')
-                                i++
                             }
-                            'n' -> {
-                                append('\n')
-                                i += 2
-                            }
-                            'r' -> {
-                                append('\r')
-                                i += 2
-                            }
-                            't' -> {
-                                append('\t')
-                                i += 2
-                            }
-                            '\\' -> {
-                                append('\\')
-                                i += 2
-                            }
-                            '"' -> {
-                                append('"')
-                                i += 2
-                            }
-                            '\'' -> {
-                                append('\'')
-                                i += 2
-                            }
-                            '/' -> {
-                                append('/')
-                                i += 2
-                            }
-                            '0' -> {
-                                append('\u0000')
-                                i += 2
-                            }
-                            else -> {
-                                append(c)
-                                i++
-                            }
+                            sb.append('\\')
+                            i++
                         }
-                    }
-                    c == '"' -> {
-                        val next = if (i + 1 < len) scriptHtml[i + 1] else ';'
-                        if (next == ';' || next == ')' || next == '\n' || next == '\r' || next == '}') {
-                            break
+                        'n' -> {
+                            sb.append('\n')
+                            i += 2
                         }
-                        append(c)
-                        i++
-                    }
-                    else -> {
-                        append(c)
-                        i++
+                        'r' -> {
+                            sb.append('\r')
+                            i += 2
+                        }
+                        't' -> {
+                            sb.append('\t')
+                            i += 2
+                        }
+                        '\\' -> {
+                            sb.append('\\')
+                            i += 2
+                        }
+                        '"' -> {
+                            sb.append('"')
+                            i += 2
+                        }
+                        '\'' -> {
+                            sb.append('\'')
+                            i += 2
+                        }
+                        '/' -> {
+                            sb.append('/')
+                            i += 2
+                        }
+                        '0' -> {
+                            sb.append('\u0000')
+                            i += 2
+                        }
+                        else -> {
+                            sb.append(c)
+                            i++
+                        }
                     }
                 }
+                c == '"' -> {
+                    val next = if (i + 1 < len) scriptHtml[i + 1] else ';'
+                    if (next == ';' || next == ')' || next == '\n' || next == '\r' || next == '}') {
+                        break
+                    }
+                    sb.append(c)
+                    i++
+                }
+                else -> {
+                    sb.append(c)
+                    i++
+                }
             }
-        }.trim()
+        }
+
+        val raw = sb.toString().trim()
         if (raw.isEmpty()) return ""
 
         if (raw.startsWith("<")) {
@@ -325,8 +309,14 @@ abstract class RewayatClub :
         return raw
     }
 
+    override fun imageUrlParse(response: Response): String = ""
+
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl${manga.url}"
+
+    override fun getChapterUrl(chapter: SChapter): String = "$baseUrl${chapter.url}"
+
     private fun NovelItem.toSManga() = SManga.create().apply {
-        url = mangaPathTemplate.slug("/novel/$slug")
+        url = "/novel/$slug"
         title = arabic
         thumbnail_url = "$apiUrl${poster_url}"
         genre = this@toSManga.genre.joinToString { it.arabic }
@@ -342,16 +332,16 @@ abstract class RewayatClub :
     private class TranslatorBlockGroup(checkboxes: List<TranslatorCheckBox>) : Filter.Group<TranslatorCheckBox>("المساهمون", checkboxes)
 
     @Serializable
-    class NovelsResponse(
-        private val count: Int = 0,
+    data class NovelsResponse(
+        val count: Int = 0,
         val next: String? = null,
         val results: List<NovelItem> = emptyList(),
     )
 
     @Serializable
-    class NovelItem(
+    data class NovelItem(
         val arabic: String = "",
-        private val english: String = "",
+        val english: String = "",
         val about: String = "",
         val slug: String = "",
         @SerialName("poster_url") val poster_url: String = "",
@@ -361,45 +351,45 @@ abstract class RewayatClub :
     )
 
     @Serializable
-    class ContributorItem(
+    data class ContributorItem(
         val username: String = "",
-        private val id: Int = 0,
+        val id: Int = 0,
     )
 
     @Serializable
-    class GenreItem(val arabic: String = "")
+    data class GenreItem(val arabic: String = "")
 
     @Serializable
-    class ChaptersResponse(
-        private val count: Int = 0,
+    data class ChaptersResponse(
+        val count: Int = 0,
         val next: String? = null,
         val results: List<ChapterItem> = emptyList(),
     )
 
     @Serializable
-    class ChapterItem(
+    data class ChapterItem(
         val number: Int = 0,
         val title: String = "",
         val date: String = "",
-        @SerialName("novel_slug") private val novel_slug: String = "",
+        @SerialName("novel_slug") val novel_slug: String = "",
         val uploader: UploaderItem? = null,
     )
 
     @Serializable
-    class ChapterDetail(
-        private val id: Int = 0,
-        private val number: Int = 0,
-        private val title: String = "",
+    data class ChapterDetail(
+        val id: Int = 0,
+        val number: Int = 0,
+        val title: String = "",
         val content: List<List<String>> = emptyList(),
     )
 
     @Serializable
-    class UploaderItem(
+    data class UploaderItem(
         val username: String = "",
-        private val id: Int = 0,
+        val id: Int = 0,
     )
 
     companion object {
-        private val DATE_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
+        private val DATE_FORMAT = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
     }
 }

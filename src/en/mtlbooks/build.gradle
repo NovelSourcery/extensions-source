@@ -1,0 +1,14 @@
+ext {
+    libVersion = '1.4'
+    extName = 'MtlBooks'
+    extClass = '.MtlBooks'
+    baseUrl = 'https://mtlbooks.com'
+    extVersionCode = 5
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"
+
+dependencies {
+    implementation(project(":lib:chapterutils"))
+}

@@ -1,0 +1,12 @@
+ext {
+    libVersion = '1.4'
+    extName = 'ArNovel'
+    extClass = '.ArNovel'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://ar-no.com'
+    overrideVersionCode = 2
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

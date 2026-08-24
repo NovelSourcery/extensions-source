@@ -30,7 +30,7 @@ dependencies {
     compileOnly(libs.kotlin.gradle)
     implementation(libs.apksig)
     implementation(libs.ksp.gradle)
-    implementation(libs.kotlin.json.buildtools)
+    implementation(libs.kotlin.json)
     implementation(libs.spotless.gradle)
     implementation(libs.tapmoc.gradle)
 

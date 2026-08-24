@@ -1,0 +1,12 @@
+ext {
+    libVersion = '1.4'
+    extName = 'BoxNovel'
+    extClass = '.BoxNovel'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://novelnice.com'
+    overrideVersionCode = 2
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

@@ -1,0 +1,12 @@
+ext {
+    libVersion = '1.4'
+    extName = 'WuxiaWorld.Site'
+    extClass = '.WuxiaWorldSite'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://wuxiaworld.site'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

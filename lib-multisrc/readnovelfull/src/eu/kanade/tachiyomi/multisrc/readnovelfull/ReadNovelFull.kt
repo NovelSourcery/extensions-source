@@ -16,17 +16,13 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.lib.chapterutils.paginatedChapterList
-import keiyoushi.source.KeiSource
-import keiyoushi.utils.SlugPath
 import keiyoushi.utils.setAltTitles
-import kotlinx.serialization.json.JsonElement
 import okhttp3.FormBody
-import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
@@ -52,24 +48,17 @@ import java.util.concurrent.TimeUnit
  * - novelbin.com
  * - lightnovelplus.com
  */
-abstract class ReadNovelFull :
-    KeiSource(),
+abstract class ReadNovelFull(
+    override val name: String,
+    override val baseUrl: String,
+    override val lang: String,
+) : HttpSource(),
     NovelSource,
     ConfigurableSource {
 
     // isNovelSource is provided by NovelSource interface with default value true
 
-    /**
-     * The site's manga detail URL shape, as `<prefix><slug><suffix>`. [SManga.url] is stored as
-     * the bare slug (see [SlugPath]); override when a site doesn't use the common bare-slug
-     * ".html" shape. A stored value starting with "/" is a pre-existing full-path entry from
-     * before this source adopted slug storage, and is resolved unchanged regardless of this
-     * template.
-     */
-    protected open val mangaPathTemplate: SlugPath = SlugPath("/", ".html")
-
-    /** Stores [SManga.url] as a bare slug via [mangaPathTemplate]. */
-    protected fun SManga.setSlugUrl(href: String) = setSlugUrl(mangaPathTemplate, href)
+    override val supportsLatest = true
 
     // Sliding-window rate limit: the first [rateLimitPermits] requests in any [rateLimitPeriodSeconds]
     // window dispatch immediately, the rest are throttled. This lets the common case (one page in fast
@@ -81,8 +70,10 @@ abstract class ReadNovelFull :
     // Max retries when the site answers 429; each retry waits the Retry-After interval.
     protected open val maxRetriesOn429: Int = 3
 
-    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(::retryOnTooManyRequests)
+    override val client = network.cloudflareClient.newBuilder()
+        .addInterceptor(::retryOnTooManyRequests)
         .rateLimit(permits = rateLimitPermits, period = rateLimitPeriodSeconds, unit = TimeUnit.SECONDS)
+        .build()
 
     private fun retryOnTooManyRequests(chain: Interceptor.Chain): Response {
         val request = chain.request()
@@ -132,9 +123,12 @@ abstract class ReadNovelFull :
     protected open val chaptersPaginated: Boolean = false
     protected open val chapterListPageSize: Int = 100
 
+    override fun headersBuilder() = super.headersBuilder()
+        .add("Referer", "$baseUrl/")
+
     // ======================== Popular ========================
 
-    protected open fun buildPopularMangaRequest(page: Int): Request = if (pageAsPath && page > 1) {
+    override fun popularMangaRequest(page: Int): Request = if (pageAsPath && page > 1) {
         // If this specific page path is listed in `noPages`, fall back to query parameter pagination
         if (noPages.any { it.trim().trimStart('/') == popularPage.trim().trimStart('/') }) {
             GET("$baseUrl/$popularPage?$pageParam=$page", headers)
@@ -145,7 +139,7 @@ abstract class ReadNovelFull :
         GET("$baseUrl/$popularPage?$pageParam=$page", headers)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = mangaListParse(client.newCall(buildPopularMangaRequest(page)).execute(), popularMangaSelector(), popularMangaNextPageSelector(), ::popularMangaFromElement)
+    override fun popularMangaParse(response: Response): MangasPage = mangaListParse(response, popularMangaSelector(), popularMangaNextPageSelector(), ::popularMangaFromElement)
 
     protected fun mangaListParse(
         response: Response,
@@ -171,25 +165,25 @@ abstract class ReadNovelFull :
 
         if (link != null) {
             // Prefer title attribute, then text content
-            title = link.attr("title").ifEmpty { link.text() }.ifBlank { "Unknown Title" }
+            title = link.attr("title").ifEmpty { link.text().trim() }.ifBlank { "Unknown Title" }
             // Set URL regardless of title - even "Unknown Title" entries need URLs to work
             val href = link.attr("abs:href")
             if (href.isNotBlank()) {
-                setSlugUrl(href)
+                setUrlWithoutDomain(href)
             }
         } else {
             // Last resort: look for any link with href in the element
             val anyLink = element.selectFirst("a[href]")
             if (anyLink != null) {
-                val linkText = anyLink.attr("title").ifEmpty { anyLink.text() }
+                val linkText = anyLink.attr("title").ifEmpty { anyLink.text().trim() }
                 if (linkText.isNotBlank()) {
                     title = linkText
-                    setSlugUrl(anyLink.attr("abs:href"))
+                    setUrlWithoutDomain(anyLink.attr("abs:href"))
                 } else {
                     // If no text, still set URL with generic title
                     val href = anyLink.attr("abs:href")
                     if (href.isNotBlank()) {
-                        setSlugUrl(href)
+                        setUrlWithoutDomain(href)
                     }
                 }
             }
@@ -208,7 +202,7 @@ abstract class ReadNovelFull :
 
     // ======================== Latest ========================
 
-    protected open fun buildLatestUpdatesRequest(page: Int): Request = if (pageAsPath && page > 1) {
+    override fun latestUpdatesRequest(page: Int): Request = if (pageAsPath && page > 1) {
         if (noPages.any { it.trim().trimStart('/') == latestPage.trim().trimStart('/') }) {
             GET("$baseUrl/$latestPage?$pageParam=$page", headers)
         } else {
@@ -218,7 +212,7 @@ abstract class ReadNovelFull :
         GET("$baseUrl/$latestPage?$pageParam=$page", headers)
     }
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = mangaListParse(client.newCall(buildLatestUpdatesRequest(page)).execute(), latestUpdatesSelector(), latestUpdatesNextPageSelector(), ::latestUpdatesFromElement)
+    override fun latestUpdatesParse(response: Response): MangasPage = mangaListParse(response, latestUpdatesSelector(), latestUpdatesNextPageSelector(), ::latestUpdatesFromElement)
 
     protected open fun latestUpdatesSelector() = popularMangaSelector() + ", ul.ul-list2 li"
 
@@ -230,8 +224,8 @@ abstract class ReadNovelFull :
                 url = ""
                 val link = element.selectFirst("a.tit")
                 if (link != null) {
-                    title = link.attr("title").ifEmpty { link.text() }.ifBlank { "Unknown Title" }
-                    setSlugUrl(link.attr("abs:href"))
+                    title = link.attr("title").ifEmpty { link.text().trim() }.ifBlank { "Unknown Title" }
+                    setUrlWithoutDomain(link.attr("abs:href"))
                 }
                 thumbnail_url = element.selectFirst("div.pic img")?.let { img ->
                     img.attr("abs:data-src").ifEmpty { img.attr("abs:src") }
@@ -245,7 +239,7 @@ abstract class ReadNovelFull :
 
     // ======================== Search ========================
 
-    protected open fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         var selectedType = "all"
         val selectedGenres = mutableListOf<String>()
         var selectedStatus = "all"
@@ -372,7 +366,7 @@ abstract class ReadNovelFull :
         }
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = mangaListParse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute(), searchMangaSelector(), searchMangaNextPageSelector(), ::searchMangaFromElement)
+    override fun searchMangaParse(response: Response): MangasPage = mangaListParse(response, searchMangaSelector(), searchMangaNextPageSelector(), ::searchMangaFromElement)
 
     protected open fun searchMangaSelector() = popularMangaSelector()
 
@@ -381,6 +375,8 @@ abstract class ReadNovelFull :
     protected open fun searchMangaNextPageSelector() = popularMangaNextPageSelector()
 
     // ======================== Details ========================
+
+    override fun mangaDetailsParse(response: Response): SManga = mangaDetailsParse(response.asJsoup())
 
     protected open fun mangaDetailsParse(document: Document): SManga = SManga.create().apply {
         title = ""
@@ -410,12 +406,12 @@ abstract class ReadNovelFull :
             val text = element.text()
             when {
                 text.contains("Author", ignoreCase = true) -> {
-                    author = element.select("a").joinToString { it.text() }
+                    author = element.select("a").joinToString { it.text().trim() }
                         .ifEmpty { text.substringAfter(":").trim() }
                 }
 
                 text.contains("Genre", ignoreCase = true) || element.select("span.glyphicon-th-list").isNotEmpty() -> {
-                    val gs = element.select("a").map { it.text() }.filter { it.isNotBlank() }
+                    val gs = element.select("a").map { it.text().trim() }.filter { it.isNotBlank() }
                     if (gs.isNotEmpty()) {
                         genresList.addAll(gs)
                     } else {
@@ -426,7 +422,7 @@ abstract class ReadNovelFull :
                     }
                     // Also check for genres in child divs with class 'right' or 's2'/'s3' (LibRead/FreeWebNovel)
                     element.select("div.right a, span.s2 a, span.s3 a").forEach { link ->
-                        val linkText = link.text()
+                        val linkText = link.text().trim()
                         if (linkText.isNotBlank() && !genresList.contains(linkText)) {
                             genresList.add(linkText)
                         }
@@ -519,14 +515,14 @@ abstract class ReadNovelFull :
         var descCandidate = document.selectFirst("div.tab-content div#tab-description div.desc-text, div#tab-description div.novel-description-block div.desc-text")
             ?.let { element ->
                 // Extract all paragraphs or full text, preserving line breaks
-                val paragraphs = element.select("p").map { it.text() }.filter { it.isNotBlank() }
+                val paragraphs = element.select("p").map { it.text().trim() }.filter { it.isNotBlank() }
                 if (paragraphs.isNotEmpty()) {
                     paragraphs.joinToString("\n\n")
                 } else {
                     // Preserve br tags as line breaks
                     element.html()
                         .replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
-                        .let { html -> org.jsoup.Jsoup.parse(html).text() }
+                        .let { html -> org.jsoup.Jsoup.parse(html).text().trim() }
                 }
             }
             ?.takeIf { it.isNotBlank() }
@@ -535,14 +531,14 @@ abstract class ReadNovelFull :
         if (descCandidate.isBlank()) {
             descCandidate = document.selectFirst("div.col-xs-12.col-sm-8.col-md-8.desc div.desc-text")
                 ?.let { element ->
-                    val paragraphs = element.select("p").map { it.text() }.filter { it.isNotBlank() }
+                    val paragraphs = element.select("p").map { it.text().trim() }.filter { it.isNotBlank() }
                     if (paragraphs.isNotEmpty()) {
                         paragraphs.joinToString("\n\n")
                     } else {
                         // Preserve br tags as line breaks
                         element.html()
                             .replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
-                            .let { html -> org.jsoup.Jsoup.parse(html).text() }
+                            .let { html -> org.jsoup.Jsoup.parse(html).text().trim() }
                     }
                 }
                 ?.takeIf { it.isNotBlank() }
@@ -557,11 +553,11 @@ abstract class ReadNovelFull :
                     "div.summary div.content, div#editdescription, div.desc-text-full, " +
                     "div.novel-detail-body div.summary, div.desc_panel",
             )?.let { element ->
-                val paragraphs = element.select("p").map { it.text() }.filter { it.isNotBlank() }
+                val paragraphs = element.select("p").map { it.text().trim() }.filter { it.isNotBlank() }
                 if (paragraphs.isNotEmpty()) {
                     paragraphs.joinToString("\n\n")
                 } else {
-                    element.text()
+                    element.text().trim()
                 }
             }
                 ?.takeIf { it.isNotBlank() }
@@ -598,13 +594,13 @@ abstract class ReadNovelFull :
 
         // Extract tags from tag container and add to genres list
         val tags = document.select("div.tag-container a, div.tags a, div.novel-tags a, div.tag a")
-            .mapNotNull { it.text().takeIf { t -> t.isNotBlank() } }
+            .mapNotNull { it.text().trim().takeIf { t -> t.isNotBlank() } }
         if (tags.isNotEmpty()) {
             genresList.addAll(tags)
         }
 
         // Build final genre string from collected genres and tags, deduplicated
-        val finalGenres = genresList.map { it.trim() }.filter { it.isNotBlank() }.distinct().joinToString()
+        val finalGenres = genresList.map { it.trim() }.filter { it.isNotBlank() }.distinct().joinToString(", ")
         if (finalGenres.isNotBlank()) {
             genre = finalGenres
         }
@@ -639,7 +635,7 @@ abstract class ReadNovelFull :
 
     // Request for page [page] of the chapter list. Page 1 is the novel page itself.
     protected open fun chapterListPageRequest(manga: SManga, page: Int): Request {
-        val path = mangaPathTemplate.resolve(manga.url).trimEnd('/')
+        val path = manga.url.trimEnd('/')
         val url = if (page <= 1) baseUrl + path else "$baseUrl$path/$page"
         return GET(url, headers)
     }
@@ -652,24 +648,26 @@ abstract class ReadNovelFull :
         if (chapterUrl.isBlank()) return@mapNotNull null
         SChapter.create().apply {
             setUrlWithoutDomain(chapterUrl)
-            name = element.attr("title").ifEmpty { element.text() }
+            name = element.attr("title").ifEmpty { element.text().trim() }
         }
     }
 
-    override suspend fun fetchMangaUpdate(
+    override suspend fun getMangaUpdate(
         manga: SManga,
         chapters: List<SChapter>,
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)).execute().asJsoup()) else manga
+        @Suppress("DEPRECATION")
+        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(mangaDetailsRequest(manga)).execute()) else manga
         val updatedChapters = if (fetchChapters) fetchReadNovelFullChapterList(manga, chapters) else chapters
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
     private suspend fun fetchReadNovelFullChapterList(manga: SManga, existingChapters: List<SChapter>): List<SChapter> {
         if (!chaptersPaginated) {
-            return parseChapterListResponse(client.newCall(GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)).execute())
+            @Suppress("DEPRECATION")
+            return chapterListParse(client.newCall(chapterListRequest(manga)).execute())
         }
 
         val detailDoc = fetchChapterListPage(manga, 1)
@@ -733,7 +731,7 @@ abstract class ReadNovelFull :
         }
     }
 
-    protected open fun parseChapterListResponse(response: Response): List<SChapter> {
+    override fun chapterListParse(response: Response): List<SChapter> {
         val document = response.asJsoup()
         val novelPath = response.request.url.encodedPath
 
@@ -761,9 +759,9 @@ abstract class ReadNovelFull :
                         SChapter.create().apply {
                             setUrlWithoutDomain(chapterUrl)
                             name = if (element.tagName() == "option") {
-                                element.text().ifEmpty { "Chapter ${index + 1}" }
+                                element.text().trim().ifEmpty { "Chapter ${index + 1}" }
                             } else {
-                                element.attr("title").ifEmpty { element.text() }
+                                element.attr("title").ifEmpty { element.text().trim() }
                             }
                             chapter_number = (index + 1).toFloat()
                         }
@@ -786,24 +784,19 @@ abstract class ReadNovelFull :
 
             SChapter.create().apply {
                 setUrlWithoutDomain(chapterUrl)
-                name = element.attr("title").ifEmpty { element.text() }
+                name = element.attr("title").ifEmpty { element.text().trim() }
                 chapter_number = (index + 1).toFloat()
             }
         }.reversed()
-    }
-
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
-
-    override suspend fun getMangaByUrl(url: HttpUrl): SManga {
-        val doc = client.newCall(GET(url, headers)).execute().asJsoup()
-        return mangaDetailsParse(doc).apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
     }
 
     // ======================== Pages ========================
 
     // Novel: single text page fetched once in fetchPageText. The app's getPageList short-circuit
     // returns the stub without calling this, so it never double-fetches.
-    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, baseUrl + chapter.url))
+    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
+
+    override fun imageUrlParse(response: Response): String = ""
 
     // ======================== Novel Content ========================
 
@@ -853,7 +846,7 @@ abstract class ReadNovelFull :
 
     // ======================== Filters ========================
 
-    override fun getFilterList(data: JsonElement?) = FilterList(
+    override fun getFilterList() = FilterList(
         Filter.Header("Type filters"),
         TypeFilter(getTypeOptions()),
         Filter.Header("Genre filters"),

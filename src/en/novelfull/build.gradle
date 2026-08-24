@@ -1,0 +1,12 @@
+ext {
+    libVersion = '1.6'
+    extName = 'NovelFull'
+    extClass = '.NovelFull'
+    themePkg = 'readnovelfull'
+    baseUrl = 'https://novelfull.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

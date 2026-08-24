@@ -1,9 +1,12 @@
-package eu.kanade.tachiyomi.novelextension.id.bacalightnovel
+﻿package eu.kanade.tachiyomi.novelextension.id.bacalightnovel
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
-import keiyoushi.annotation.Source
 
-@Source
-abstract class BacaLightNovel : LightNovelWPNovel() {
+class BacaLightNovel :
+    LightNovelWPNovel(
+        baseUrl = "https://bacalightnovel.co",
+        name = "BacaLightNovel",
+        lang = "id",
+    ) {
     override val reverseChapters = true
 }

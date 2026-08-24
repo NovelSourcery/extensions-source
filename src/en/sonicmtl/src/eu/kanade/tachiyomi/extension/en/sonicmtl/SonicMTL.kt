@@ -4,16 +4,18 @@ import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
-import keiyoushi.annotation.Source
-import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 
-@Source
-abstract class SonicMTL : MadaraNovel() {
+class SonicMTL :
+    MadaraNovel(
+        baseUrl = "https://www.sonicmtl.com",
+        name = "Sonic MTL",
+        lang = "en",
+    ) {
     override val useNewChapterEndpointDefault = true
 
-    override fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val url = baseUrl.toHttpUrl().newBuilder().apply {
             addQueryParameter("s", query)
             addQueryParameter("post_type", "wp-manga")
@@ -73,7 +75,7 @@ abstract class SonicMTL : MadaraNovel() {
         return GET(finalUrl, headers)
     }
 
-    override fun getFilterList(data: JsonElement?) = FilterList(
+    override fun getFilterList() = FilterList(
         GenreFilter(),
         GenreConditionFilter(),
         StatusFilter(),

@@ -1,0 +1,12 @@
+ext {
+    libVersion = '1.4'
+    extName = 'Novel Arab'
+    extClass = '.NovelArab'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://novelarab.com'
+    overrideVersionCode = 2
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

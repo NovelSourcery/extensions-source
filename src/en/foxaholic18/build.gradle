@@ -1,0 +1,12 @@
+ext {
+    libVersion = '1.4'
+    extName = 'Foxaholic 18+'
+    extClass = '.Foxaholic18'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://18.foxaholic.com'
+    overrideVersionCode = 1
+    isNsfw = true
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

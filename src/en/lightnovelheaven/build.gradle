@@ -1,0 +1,12 @@
+ext {
+    libVersion = '1.4'
+    extName = 'LightNovelHeaven'
+    extClass = '.LightNovelHeaven'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://lightnovelheaven.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

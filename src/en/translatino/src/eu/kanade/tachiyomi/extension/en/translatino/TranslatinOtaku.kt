@@ -4,21 +4,26 @@ import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
-import keiyoushi.annotation.Source
-import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 
 /**
  * TranslatinOtaku / WebNovelTranslations - Madara-based novel site.
  */
-@Source
-abstract class TranslatinOtaku : MadaraNovel() {
+class TranslatinOtaku :
+    MadaraNovel(
+        baseUrl = "https://translatinotaku.net",
+        name = "Translatin Otaku",
+        lang = "en",
+    ) {
     override val useNewChapterEndpointDefault = true
 
-    override fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/page/$page/?s=&post_type=wp-manga&m_orderby=trending", headers)
+    override fun headersBuilder() = super.headersBuilder()
+        .add("Referer", "$baseUrl/")
 
-    override fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/page/$page/?s=&post_type=wp-manga&m_orderby=trending", headers)
+
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val urlBuilder = "$baseUrl/page/$page/".toHttpUrl().newBuilder()
             .addQueryParameter("s", query)
             .addQueryParameter("post_type", "wp-manga")
@@ -65,7 +70,7 @@ abstract class TranslatinOtaku : MadaraNovel() {
 
     // ======================== Filters ========================
 
-    override fun getFilterList(data: JsonElement?) = FilterList(
+    override fun getFilterList() = FilterList(
         GenreFilter(getGenreList()),
         GenreConditionFilter(),
         AuthorFilter(),

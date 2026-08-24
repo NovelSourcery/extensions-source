@@ -1,0 +1,14 @@
+ext {
+    libVersion = '1.6'
+    extName = 'Light Novel World'
+    extClass = '.LightNovelWorld'
+    baseUrl = 'https://lightnovelworld.org'
+    extVersionCode = 2
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"
+
+dependencies {
+    implementation(project(":lib:chapterutils"))
+}

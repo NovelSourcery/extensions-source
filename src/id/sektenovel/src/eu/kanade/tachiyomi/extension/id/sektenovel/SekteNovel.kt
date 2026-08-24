@@ -1,9 +1,12 @@
-package eu.kanade.tachiyomi.novelextension.id.sektenovel
+﻿package eu.kanade.tachiyomi.novelextension.id.sektenovel
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
-import keiyoushi.annotation.Source
 
-@Source
-abstract class SekteNovel : LightNovelWPNovel() {
+class SekteNovel :
+    LightNovelWPNovel(
+        baseUrl = "https://sektenovel.web.id",
+        name = "SekteNovel",
+        lang = "id",
+    ) {
     override val reverseChapters = true
 }

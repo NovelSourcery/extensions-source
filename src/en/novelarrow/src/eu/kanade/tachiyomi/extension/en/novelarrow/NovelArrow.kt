@@ -8,19 +8,12 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import eu.kanade.tachiyomi.util.asJsoup
-import keiyoushi.annotation.Source
-import keiyoushi.network.get
-import keiyoushi.source.KeiSource
-import keiyoushi.utils.SlugPath
+import eu.kanade.tachiyomi.source.online.HttpSource
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
-import okhttp3.HttpUrl
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import org.jsoup.Jsoup
 
 /**
  * novelarrow.com — the successor to the dead novelbin.com. Built on Next.js, so novel details,
@@ -31,78 +24,66 @@ import okhttp3.Response
  * novelarrow (/novel/<slug> for a novel, /chapter/<slug>/<chapter> for a chapter) so existing
  * library entries keep resolving; the chapter list is re-fetched with novelarrow's own urls.
  */
-@Source
-abstract class NovelArrow :
-    KeiSource(),
+class NovelArrow :
+    HttpSource(),
     NovelSource {
 
+    override val name = "NovelArrow"
+    override val baseUrl = "https://novelarrow.com"
+    override val lang = "en"
     override val supportsLatest = true
+    override val isNovelSource = true
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    /**
-     * The site's novel detail URL shape, as `/novel/<slug>`. [SManga.url] is stored as the bare
-     * slug (see [SlugPath]); a stored value starting with "/" is a pre-existing full-path entry
-     * from before this source adopted slug storage, and is resolved unchanged regardless of
-     * this template.
-     */
-    private val mangaPathTemplate: SlugPath = SlugPath("/novel/")
-
-    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor { chain ->
-        val request = chain.request()
-        var url = request.url
-        if (url.host.contains("novelbin.com")) {
-            url = url.newBuilder().host("novelarrow.com").build()
-        }
-        val path = url.encodedPath
-        if (path.startsWith("/b/")) {
-            val segments = path.removePrefix("/b/").trim('/').split("/").filter { it.isNotEmpty() }
-            val newPath = when {
-                segments.size <= 1 -> "/novel/${segments.getOrElse(0) { "" }}"
-                else -> "/chapter/${segments.joinToString("/")}"
+    override val client = network.cloudflareClient.newBuilder()
+        .addInterceptor { chain ->
+            val request = chain.request()
+            var url = request.url
+            if (url.host.contains("novelbin.com")) {
+                url = url.newBuilder().host("novelarrow.com").build()
             }
-            url = url.newBuilder().encodedPath(newPath).build()
+            val path = url.encodedPath
+            if (path.startsWith("/b/")) {
+                val segments = path.removePrefix("/b/").trim('/').split("/").filter { it.isNotEmpty() }
+                val newPath = when {
+                    segments.size <= 1 -> "/novel/${segments.getOrElse(0) { "" }}"
+                    else -> "/chapter/${segments.joinToString("/")}"
+                }
+                url = url.newBuilder().encodedPath(newPath).build()
+            }
+            chain.proceed(request.newBuilder().url(url).build())
         }
-        chain.proceed(request.newBuilder().url(url).build())
-    }
+        .build()
 
     // Next.js only returns the flight payload (details/chapters/content) when this header is set.
     private fun rscHeaders() = headersBuilder().add("RSC", "1").build()
 
     // Browse
 
-    private fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/genre/action?page=$page", headers)
+    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/genre/action?page=$page", headers)
 
-    override suspend fun getPopularManga(page: Int): MangasPage {
-        val request = buildPopularMangaRequest(page)
-        return browseParse(client.get(request.url, request.headers))
-    }
+    override fun popularMangaParse(response: Response): MangasPage = browseParse(response)
 
-    private fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/genre/action?page=$page", headers)
+    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/genre/action?page=$page", headers)
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val request = buildLatestUpdatesRequest(page)
-        return browseParse(client.get(request.url, request.headers))
-    }
+    override fun latestUpdatesParse(response: Response): MangasPage = browseParse(response)
 
-    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val genre = (filters.firstOrNull { it is GenreFilter } as? GenreFilter)?.selected() ?: "action"
         return GET("$baseUrl/genre/$genre?page=$page", headers)
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val request = buildSearchMangaRequest(page, query, filters)
-        return browseParse(client.get(request.url, request.headers))
-    }
+    override fun searchMangaParse(response: Response): MangasPage = browseParse(response)
 
     private fun browseParse(response: Response): MangasPage {
-        val doc = response.asJsoup()
+        val doc = Jsoup.parse(response.body.string(), baseUrl)
         val mangas = doc.select("a[href^=/novel/]:has(img)")
             .distinctBy { it.attr("href") }
             .mapNotNull { a ->
                 val img = a.selectFirst("img") ?: return@mapNotNull null
                 SManga.create().apply {
-                    setSlugUrl(mangaPathTemplate, a.attr("abs:href"))
+                    setUrlWithoutDomain(a.attr("abs:href"))
                     title = img.attr("alt").removeSuffix(" - Novel cover").trim()
                     thumbnail_url = img.attr("abs:src")
                 }
@@ -113,57 +94,43 @@ abstract class NovelArrow :
 
     // Details
 
-    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), rscHeaders())
+    override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, rscHeaders())
 
-    override suspend fun fetchMangaUpdate(
-        manga: SManga,
-        chapters: List<SChapter>,
-        fetchDetails: Boolean,
-        fetchChapters: Boolean,
-    ): SMangaUpdate {
-        val updatedManga = if (fetchDetails) {
-            val mangaDetailsRequest = buildMangaDetailsRequest(manga)
-            parseMangaDetails(client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers).body.string())
-        } else {
-            manga
+    override fun mangaDetailsParse(response: Response): SManga {
+        val flight = response.body.string()
+        return SManga.create().apply {
+            title = STRING.decode(OG_TITLE.firstGroup(flight))
+                ?.substringBefore(" Novel | Read Online")?.trim()
+                ?: STRING.decode(OG_IMAGE_ALT.firstGroup(flight)).orEmpty()
+            thumbnail_url = STRING.decode(COVER.firstGroup(flight))
+            author = STRING.decode(AUTHOR.firstGroup(flight))
+            // The novel's own genres are the "genres" array whose items carry "label"/"href"
+            // (a separate "genres" array holds the site-wide genre nav). The site also has a much
+            // finer-grained "Tags" section (article:tag og-meta) that isn't in that genres array
+            // at all (e.g. APOCALYPSE, FIREARMS, GORE) - fold those in too.
+            val genreLabels = GENRES_ARRAY.findAll(flight)
+                .map { it.groupValues[1] }
+                .firstOrNull { it.contains("\"label\"") }
+                ?.let { body -> GENRE_LABEL.findAll(body).mapNotNull { STRING.decode(it.groupValues[1]) } }
+                .orEmpty()
+            val tagLabels = ARTICLE_TAG.findAll(flight).mapNotNull { STRING.decode(it.groupValues[1]) }
+            genre = (genreLabels + tagLabels)
+                .map { label -> label.lowercase().split(" ").joinToString(" ") { w -> w.replaceFirstChar(Char::uppercase) } }
+                .distinct()
+                .joinToString(", ")
+                .ifBlank { null }
+            status = when (STRING.decode(STATUS.firstGroup(flight))?.lowercase()) {
+                "ongoing" -> SManga.ONGOING
+                "completed" -> SManga.COMPLETED
+                "hiatus" -> SManga.ON_HIATUS
+                "dropped", "cancelled" -> SManga.CANCELLED
+                else -> SManga.UNKNOWN
+            }
+            description = stringArrayAfter(flight, "synopsisParagraphs")
+                .mapNotNull { STRING.decode(it) }
+                .joinToString("\n\n")
+                .ifBlank { null }
         }
-        val updatedChapters = if (fetchChapters) loadChapterList(manga) else chapters
-
-        return SMangaUpdate(updatedManga, updatedChapters)
-    }
-
-    private fun parseMangaDetails(flight: String): SManga = SManga.create().apply {
-        title = STRING.decode(OG_TITLE.firstGroup(flight))
-            ?.substringBefore(" Novel | Read Online")?.trim()
-            ?: STRING.decode(OG_IMAGE_ALT.firstGroup(flight)).orEmpty()
-        thumbnail_url = STRING.decode(COVER.firstGroup(flight))
-        author = STRING.decode(AUTHOR.firstGroup(flight))
-        // The novel's own genres are the "genres" array whose items carry "label"/"href"
-        // (a separate "genres" array holds the site-wide genre nav). The site also has a much
-        // finer-grained "Tags" section (article:tag og-meta) that isn't in that genres array
-        // at all (e.g. APOCALYPSE, FIREARMS, GORE) - fold those in too.
-        val genreLabels = GENRES_ARRAY.findAll(flight)
-            .map { it.groupValues[1] }
-            .firstOrNull { it.contains("\"label\"") }
-            ?.let { body -> GENRE_LABEL.findAll(body).mapNotNull { STRING.decode(it.groupValues[1]) } }
-            .orEmpty()
-        val tagLabels = ARTICLE_TAG.findAll(flight).mapNotNull { STRING.decode(it.groupValues[1]) }
-        genre = (genreLabels + tagLabels)
-            .map { label -> label.lowercase().split(" ").joinToString(" ") { w -> w.replaceFirstChar(Char::uppercase) } }
-            .distinct()
-            .joinToString()
-            .ifBlank { null }
-        status = when (STRING.decode(STATUS.firstGroup(flight))?.lowercase()) {
-            "ongoing" -> SManga.ONGOING
-            "completed" -> SManga.COMPLETED
-            "hiatus" -> SManga.ON_HIATUS
-            "dropped", "cancelled" -> SManga.CANCELLED
-            else -> SManga.UNKNOWN
-        }
-        description = stringArrayAfter(flight, "synopsisParagraphs")
-            .mapNotNull { STRING.decode(it) }
-            .joinToString("\n\n")
-            .ifBlank { null }
     }
 
     // A bracket-balanced regex can't bound a "key":[...] array when an element's text itself
@@ -189,9 +156,13 @@ abstract class NovelArrow :
 
     // The novel page's flight only embeds a slice of chapters; the api-web endpoint returns the
     // full list in one call (limit == total, single page), so use it instead.
-    private suspend fun loadChapterList(manga: SManga): List<SChapter> {
-        val slug = mangaPathTemplate.resolve(manga.url).substringAfter("/novel/").trim('/').substringBefore('/')
-        val response = client.get("$baseUrl/api-web/novels/$slug/chapters?sort=asc", headers)
+    override fun chapterListRequest(manga: SManga): Request {
+        val slug = manga.url.substringAfter("/novel/").trim('/').substringBefore('/')
+        return GET("$baseUrl/api-web/novels/$slug/chapters?sort=asc", headers)
+    }
+
+    override fun chapterListParse(response: Response): List<SChapter> {
+        val slug = response.request.url.pathSegments.getOrNull(2).orEmpty()
         val data = json.decodeFromString<ChapterListResponse>(response.body.string())
         // API returns oldest-first; number ascending then present newest-first.
         return data.items.mapIndexed { index, item ->
@@ -213,24 +184,15 @@ abstract class NovelArrow :
         val premium_content: Boolean = false,
     )
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
-
-    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val slug = mangaPathTemplate.slug(url.encodedPath)
-        val tempManga = SManga.create().apply { this.url = slug }
-        val mangaDetailsRequest = buildMangaDetailsRequest(tempManga)
-        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, ensureSuccess = false)
-        if (!response.isSuccessful) return null
-        return parseMangaDetails(response.body.string()).apply { this.url = slug }
-    }
-
     // Content
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
+    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
+
+    override fun imageUrlParse(response: Response): String = ""
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val flight = client.get(url, rscHeaders()).body.string()
+        val flight = client.newCall(GET(url, rscHeaders())).execute().body.string()
 
         val refId = CONTENT_REF.firstGroup(flight) ?: return ""
         // Flight text chunk: "<id>:T<hexByteLength>,<content>". Cut exactly hexByteLength UTF-8
@@ -243,7 +205,7 @@ abstract class NovelArrow :
 
     // Filters
 
-    override fun getFilterList(data: JsonElement?) = FilterList(GenreFilter())
+    override fun getFilterList() = FilterList(GenreFilter())
 
     private class GenreFilter : Filter.Select<String>("Genre", GENRES.map { it.first }.toTypedArray()) {
         fun selected() = GENRES[state].second

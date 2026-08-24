@@ -1,9 +1,12 @@
 ﻿package eu.kanade.tachiyomi.novelextension.fr.massnovel
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
-import keiyoushi.annotation.Source
 
-@Source
-abstract class MassNovel : MadaraNovel() {
+class MassNovel :
+    MadaraNovel(
+        baseUrl = "https://massnovel.fr",
+        name = "MassNovel",
+        lang = "fr",
+    ) {
     override val useNewChapterEndpointDefault = true
 }

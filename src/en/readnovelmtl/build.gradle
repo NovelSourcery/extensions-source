@@ -1,0 +1,10 @@
+ext {
+    libVersion = '1.4'
+    extName = 'ReadNovelMtl'
+    extClass = '.ReadNovelMtl'
+    baseUrl = 'https://readnovelmtl.com'
+    extVersionCode = 2
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

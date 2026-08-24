@@ -1,0 +1,12 @@
+ext {
+    libVersion = '1.4'
+    extName = 'Dragonholic'
+    extClass = '.Dragonholic'
+    themePkg = 'madaranovel'
+    baseUrl = 'https://dragonholic.com'
+    overrideVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

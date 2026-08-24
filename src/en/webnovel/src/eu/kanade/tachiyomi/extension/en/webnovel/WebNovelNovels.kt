@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.CheckBoxPreference
 import androidx.preference.PreferenceScreen
+import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
@@ -12,45 +13,43 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import eu.kanade.tachiyomi.util.asJsoup
-import keiyoushi.annotation.Source
-import keiyoushi.network.get
-import keiyoushi.source.KeiSource
-import keiyoushi.utils.SlugPath
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
-import kotlinx.serialization.json.JsonElement
+import eu.kanade.tachiyomi.source.online.HttpSource
 import okhttp3.Headers
-import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Request
 import okhttp3.Response
+import org.jsoup.Jsoup
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
-@Source
-abstract class WebNovelNovels :
-    KeiSource(),
+class WebNovelNovels :
+    HttpSource(),
     NovelSource,
     ConfigurableSource {
 
+    override val name = "Webnovel Novels"
+
+    override val baseUrl = "https://www.webnovel.com"
+
+    override val lang = "en"
+
+    override val supportsLatest = true
+
     override val isNovelSource = true
 
-    private val mangaPath = SlugPath("/book/")
+    override val client = network.cloudflareClient
 
-    /** Stores [SManga.url] as a bare slug via [mangaPath]. */
-    private fun SManga.setSlugUrl(href: String) = setSlugUrl(mangaPath, href)
-
-    override fun Headers.Builder.configureHeaders(): Headers.Builder = this
+    override fun headersBuilder(): Headers.Builder = super.headersBuilder()
+        .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .set("Accept-Language", "en-US,en;q=0.9")
         .set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
         .set("Referer", baseUrl)
 
     // Popular
-    override suspend fun getPopularManga(page: Int): MangasPage = parsePopularOrLatest(client.get("$baseUrl/stories/novel?orderBy=1&pageIndex=$page", headers))
+    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/stories/novel?orderBy=1&pageIndex=$page", headers)
 
-    private fun parsePopularOrLatest(response: Response): MangasPage {
-        val document = response.asJsoup()
+    override fun popularMangaParse(response: Response): MangasPage {
+        val document = Jsoup.parse(response.body.string())
         val finalUrl = response.request.url.toString()
         val isMobile = finalUrl.contains("m.webnovel.com")
 
@@ -69,7 +68,7 @@ abstract class WebNovelNovels :
                 val title = link.attr("title").ifEmpty {
                     link.selectFirst("img")?.attr("alt") ?: ""
                 }.ifEmpty {
-                    link.parent()?.selectFirst("h3, h4, .title, p")?.text() ?: ""
+                    link.parent()?.selectFirst("h3, h4, .title, p")?.text()?.trim() ?: ""
                 }
                 if (title.isBlank()) return@forEach
 
@@ -81,7 +80,7 @@ abstract class WebNovelNovels :
                 mangas.add(
                     SManga.create().apply {
                         this.title = title
-                        setSlugUrl(href.replace("m.webnovel.com", "www.webnovel.com"))
+                        setUrlWithoutDomain(href.replace("m.webnovel.com", "www.webnovel.com"))
                         thumbnail_url = if (imgSrc.isNotEmpty()) {
                             if (imgSrc.startsWith("http")) imgSrc else "https:$imgSrc"
                         } else {
@@ -103,7 +102,7 @@ abstract class WebNovelNovels :
                 mangas.add(
                     SManga.create().apply {
                         title = thumb.attr("title").ifEmpty { img.attr("alt") }
-                        setSlugUrl(thumb.attr("href"))
+                        setUrlWithoutDomain(thumb.attr("href"))
                         thumbnail_url = img.attr("data-original").let { src ->
                             if (src.isNotEmpty()) "https:$src" else "https:" + img.attr("src")
                         }
@@ -128,12 +127,14 @@ abstract class WebNovelNovels :
     }
 
     // Latest
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parsePopularOrLatest(client.get("$baseUrl/stories/novel?orderBy=5&pageIndex=$page", headers))
+    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/stories/novel?orderBy=5&pageIndex=$page", headers)
+
+    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
 
     // Search
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (query.isNotBlank()) {
-            return parseSearchResponse(client.get("$baseUrl/search?keywords=$query&pageIndex=$page", headers))
+            return GET("$baseUrl/search?keywords=$query&pageIndex=$page", headers)
         }
 
         // Filters
@@ -172,7 +173,7 @@ abstract class WebNovelNovels :
         val builder = "$baseUrl/stories".toHttpUrl().newBuilder()
 
         if (genre.isNotEmpty()) {
-            return parseSearchResponse(client.get("$baseUrl/stories/$genre?bookStatus=$status&orderBy=$sort&pageIndex=$page", headers))
+            return GET("$baseUrl/stories/$genre?bookStatus=$status&orderBy=$sort&pageIndex=$page", headers)
         } else {
             builder.addPathSegment("novel")
             builder.addQueryParameter("gender", gender)
@@ -189,11 +190,11 @@ abstract class WebNovelNovels :
         builder.addQueryParameter("orderBy", sort)
         builder.addQueryParameter("pageIndex", page.toString())
 
-        return parseSearchResponse(client.get(builder.build().toString(), headers))
+        return GET(builder.build().toString(), headers)
     }
 
-    private fun parseSearchResponse(response: Response): MangasPage {
-        val document = response.asJsoup()
+    override fun searchMangaParse(response: Response): MangasPage {
+        val document = Jsoup.parse(response.body.string())
         val finalUrl = response.request.url.toString()
         val isMobile = finalUrl.contains("m.webnovel.com")
         val isSearch = finalUrl.contains("/search")
@@ -209,7 +210,7 @@ abstract class WebNovelNovels :
                 val title = link.attr("title").ifEmpty {
                     link.selectFirst("img")?.attr("alt") ?: ""
                 }.ifEmpty {
-                    link.parent()?.selectFirst("h3, h4, .title, p")?.text() ?: ""
+                    link.parent()?.selectFirst("h3, h4, .title, p")?.text()?.trim() ?: ""
                 }
                 if (title.isBlank()) return@forEach
 
@@ -221,7 +222,7 @@ abstract class WebNovelNovels :
                 mangas.add(
                     SManga.create().apply {
                         this.title = title
-                        setSlugUrl(href.replace("m.webnovel.com", "www.webnovel.com"))
+                        setUrlWithoutDomain(href.replace("m.webnovel.com", "www.webnovel.com"))
                         thumbnail_url = if (imgSrc.isNotEmpty()) {
                             if (imgSrc.startsWith("http")) imgSrc else "https:$imgSrc"
                         } else {
@@ -246,7 +247,7 @@ abstract class WebNovelNovels :
                 mangas.add(
                     SManga.create().apply {
                         title = thumb.attr("title").ifEmpty { img.attr("alt") }
-                        setSlugUrl(thumb.attr("href"))
+                        setUrlWithoutDomain(thumb.attr("href"))
                         // Search uses 'src', category uses 'data-original'
                         val imgSrc = if (isSearch) img.attr("src") else img.attr("data-original").ifEmpty { img.attr("src") }
                         thumbnail_url = if (imgSrc.startsWith("http")) imgSrc else "https:$imgSrc"
@@ -259,8 +260,8 @@ abstract class WebNovelNovels :
     }
 
     // Details
-    private fun parseMangaDetails(response: Response): SManga {
-        val document = response.asJsoup()
+    override fun mangaDetailsParse(response: Response): SManga {
+        val document = Jsoup.parse(response.body.string())
         return SManga.create().apply {
             title = document.selectFirst(".g_thumb > img")?.attr("alt") ?: "No Title"
             thumbnail_url = "https:" + document.selectFirst(".g_thumb > img")?.attr("src")
@@ -279,19 +280,19 @@ abstract class WebNovelNovels :
                     cleaned.lines().joinToString("\n") { it.trim() }.trim()
                 }.filter { it.isNotBlank() }.joinToString("\n\n")
             // Fallback to whole element text if no paragraphs found
-            description = synopsisText.ifBlank { synopsisEl?.text().orEmpty() }
+            description = synopsisText.ifBlank { synopsisEl?.text()?.trim().orEmpty() }
             author = document.select(".det-info .c_s").firstOrNull { it.text().contains("Author") }?.nextElementSibling()?.text()
             // Prefer tag list under .j_tagWrap (site's tag block). Fallback to older selector.
             val tags = document.select(".j_tagWrap .m-tags a")
-                .map { it.text().replace("#", "").trim() }
+                .map { it.text().trim().replace("#", "").trim() }
                 .filter { it.isNotEmpty() }
 
             genre = if (tags.isNotEmpty()) {
-                tags.joinToString()
+                tags.joinToString(", ")
             } else {
                 document.select(".det-hd-detail > .det-hd-tag").attr("title")
             }
-            status = when (document.select(".det-hd-detail svg").firstOrNull { it.attr("title") == "Status" }?.nextElementSibling()?.text()) {
+            status = when (document.select(".det-hd-detail svg").firstOrNull { it.attr("title") == "Status" }?.nextElementSibling()?.text()?.trim()) {
                 "Completed" -> SManga.COMPLETED
                 "Ongoing" -> SManga.ONGOING
                 else -> SManga.UNKNOWN
@@ -301,21 +302,21 @@ abstract class WebNovelNovels :
             val extras = mutableListOf<String>()
 
             // Rating and number of ratings (e.g. 4.65 (5,977 ratings))
-            val ratingValue = document.selectFirst("p._score strong")?.text()
-            val ratingsCount = document.selectFirst("p._score small")?.text()?.removePrefix("(")?.removeSuffix(")")
+            val ratingValue = document.selectFirst("p._score strong")?.text()?.trim()
+            val ratingsCount = document.selectFirst("p._score small")?.text()?.trim()?.removePrefix("(")?.removeSuffix(")")
             if (!ratingValue.isNullOrEmpty()) {
                 extras.add("Rating: ${ratingValue}${if (!ratingsCount.isNullOrEmpty()) " ($ratingsCount)" else ""}")
             }
 
             // Views (look for svg title="View")
-            val views = document.select(".det-hd-detail svg").firstOrNull { it.attr("title") == "View" }?.nextElementSibling()?.text()
+            val views = document.select(".det-hd-detail svg").firstOrNull { it.attr("title") == "View" }?.nextElementSibling()?.text()?.trim()
             if (!views.isNullOrEmpty()) extras.add("Views: $views")
 
             // Review score breakdown (Translation Quality, Stability of Updates, ...)
             val reviewScoreElements = document.select(".rev-score-list li")
             if (reviewScoreElements.isNotEmpty()) {
                 val scoreLines = reviewScoreElements.mapNotNull { li ->
-                    val name = li.selectFirst("strong")?.text() ?: return@mapNotNull null
+                    val name = li.selectFirst("strong")?.text()?.trim() ?: return@mapNotNull null
                     val full = li.select(".g_star svg._on").size
                     val half = li.select(".g_star svg._half").size
                     val score = full + half * 0.5
@@ -337,35 +338,13 @@ abstract class WebNovelNovels :
     }
 
     // Chapters
-    override suspend fun fetchMangaUpdate(
-        manga: SManga,
-        chapters: List<SChapter>,
-        fetchDetails: Boolean,
-        fetchChapters: Boolean,
-    ): SMangaUpdate = coroutineScope {
-        // Details and chapters live on different pages - fire both concurrently when both are needed.
-        val detailsDeferred = if (fetchDetails) {
-            async { parseMangaDetails(client.get(baseUrl + mangaPath.resolve(manga.url), headers)) }
-        } else {
-            null
-        }
-        val chaptersDeferred = if (fetchChapters) {
-            async { parseChapterList(client.get(baseUrl + mangaPath.resolve(manga.url) + "/catalog", headers)) }
-        } else {
-            null
-        }
+    override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url + "/catalog", headers)
 
-        SMangaUpdate(
-            manga = detailsDeferred?.await() ?: manga,
-            chapters = chaptersDeferred?.await() ?: chapters,
-        )
-    }
-
-    private fun parseChapterList(response: Response): List<SChapter> {
-        val document = response.asJsoup()
+    override fun chapterListParse(response: Response): List<SChapter> {
+        val document = Jsoup.parse(response.body.string())
         val chapters = mutableListOf<SChapter>()
         document.select(".volume-item").forEach { volumeItem ->
-            val originalVolumeName = volumeItem.first()?.text().orEmpty()
+            val originalVolumeName = volumeItem.first()?.text()?.trim().orEmpty()
             val volumeNameMatch = Regex("Volume\\s(\\d+)").find(originalVolumeName)
             val volumeName = volumeNameMatch?.let { "Volume ${it.groupValues[1]}" } ?: "Unknown Volume"
 
@@ -378,7 +357,7 @@ abstract class WebNovelNovels :
 
                 val chapter = SChapter.create().apply {
                     name = if (isLocked) "$volumeName: $chapterName 🔒" else "$volumeName: $chapterName"
-                    setUrlWithoutDomain(a.attr("abs:href"))
+                    setUrlWithoutDomain(a.attr("href"))
                     chapter_number = (chapters.size + 1).toFloat()
                 }
                 chapters.add(chapter)
@@ -398,14 +377,14 @@ abstract class WebNovelNovels :
     }
 
     private val excludeLocked: Boolean
-        get() = preferences.getBoolean(PREF_EXCLUDE_LOCKED, true)
+        get() = preferences.getBoolean(PREF_EXCLUDE_LOCKED, false)
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         CheckBoxPreference(screen.context).apply {
             key = PREF_EXCLUDE_LOCKED
             title = "Exclude locked chapters"
-            summary = "Hide chapters that are locked or paid. Enabled by default."
-            setDefaultValue(true)
+            summary = "Hide chapters that are locked or paid"
+            setDefaultValue(false)
         }.also(screen::addPreference)
     }
 
@@ -414,20 +393,17 @@ abstract class WebNovelNovels :
     }
 
     // Pages - novel content - return single page with chapter URL for text fetching
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
-
-    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.get(url.toString(), headers, ensureSuccess = false)
-        if (!response.isSuccessful) return null
-        return parseMangaDetails(response).apply { setSlugUrl(url.encodedPath) }
+    override fun pageListParse(response: Response): List<Page> {
+        val chapterUrl = response.request.url.toString().removePrefix(baseUrl)
+        return listOf(Page(0, chapterUrl))
     }
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
+    override fun imageUrlParse(response: Response): String = ""
 
     // Novel content
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(baseUrl + page.url, headers)
-        val document = response.asJsoup()
+        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        val document = Jsoup.parse(response.body.string())
 
         // Remove bloat elements (same as TS plugin)
         document.select(".para-comment").remove()
@@ -445,7 +421,7 @@ abstract class WebNovelNovels :
     }
 
     // Filters
-    override fun getFilterList(data: JsonElement?) = FilterList(
+    override fun getFilterList() = FilterList(
         GenderFilter(),
         MaleGenreFilter(),
         FemaleGenreFilter(),

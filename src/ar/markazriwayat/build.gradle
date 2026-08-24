@@ -1,0 +1,11 @@
+ext {
+    libVersion = '1.4'
+    extName = 'Markazriwayat'
+    extClass = '.Markazriwayat'
+    baseUrl = 'https://markazriwayat.com'
+    extVersionCode = 7
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

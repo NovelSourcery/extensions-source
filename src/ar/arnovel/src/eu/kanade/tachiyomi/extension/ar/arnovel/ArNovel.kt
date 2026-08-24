@@ -1,9 +1,12 @@
-package eu.kanade.tachiyomi.novelextension.ar.arnovel
+﻿package eu.kanade.tachiyomi.novelextension.ar.arnovel
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
-import keiyoushi.annotation.Source
 
-@Source
-abstract class ArNovel : MadaraNovel() {
+class ArNovel :
+    MadaraNovel(
+        baseUrl = "https://ar-no.com",
+        name = "ArNovel",
+        lang = "ar",
+    ) {
     override val useNewChapterEndpointDefault = true
 }

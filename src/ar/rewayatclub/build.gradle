@@ -1,0 +1,11 @@
+ext {
+    libVersion = '1.4'
+    extName = 'Rewayat Club'
+    extClass = '.RewayatClub'
+    baseUrl = 'https://rewayat.club'
+    extVersionCode = 5
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

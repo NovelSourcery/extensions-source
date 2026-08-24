@@ -13,7 +13,6 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.network.CacheControlInterceptor
 import keiyoushi.network.RateLimitInterceptor
-import keiyoushi.utils.SlugPath
 import keiyoushi.utils.applicationContext
 import keiyoushi.utils.firstInstanceOrNull
 import keiyoushi.utils.jsonInstance
@@ -384,18 +383,6 @@ abstract class KeiSource : HttpSource() {
         } finally {
             updatesInFlight.remove(manga.url)
         }
-    }
-
-    /** Stores [SManga.url] as a bare slug via [slugPath], reusing [setUrlWithoutDomain]'s domain-stripping for a raw href. */
-    protected fun SManga.setSlugUrl(slugPath: SlugPath, href: String) {
-        setUrlWithoutDomain(href)
-        url = slugPath.slug(url)
-    }
-
-    /** Stores [SChapter.url] as a bare slug via [slugPath], reusing [setUrlWithoutDomain]'s domain-stripping for a raw href. */
-    protected fun SChapter.setSlugUrl(slugPath: SlugPath, href: String) {
-        setUrlWithoutDomain(href)
-        url = slugPath.slug(url)
     }
 
     /**

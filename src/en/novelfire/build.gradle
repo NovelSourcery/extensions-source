@@ -1,0 +1,15 @@
+ext {
+    libVersion = '1.6'
+    extName = 'Novel Phoenix'
+    extClass = '.NovelFire'
+    baseUrl = 'https://novelphoenix.com'
+    extVersionCode = 10
+    id = 7165539527173321330L
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"
+
+dependencies {
+    implementation(project(":lib:chapterutils"))
+}

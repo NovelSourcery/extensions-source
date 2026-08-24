@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
+import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
@@ -13,31 +14,28 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import keiyoushi.annotation.Source
-import keiyoushi.network.get
-import keiyoushi.source.KeiSource
-import keiyoushi.utils.SlugPath
+import eu.kanade.tachiyomi.source.online.HttpSource
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
-import okhttp3.HttpUrl
-import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
-@Source
-abstract class LnCrawler :
-    KeiSource(),
+class LnCrawler :
+    HttpSource(),
     NovelSource,
     ConfigurableSource {
 
+    override val name = "LnCrawler"
+    override val baseUrl = "https://lncrawler.monster"
     private val apiUrl = "https://api.lncrawler.monster"
+    override val lang = "all"
     override val supportsLatest = true
+    override val isNovelSource = true
 
     private val json: Json = Json {
         ignoreUnknownKeys = true
@@ -49,31 +47,27 @@ abstract class LnCrawler :
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
 
-    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor { chain ->
-        val request = chain.request()
-        val response = chain.proceed(request)
+    override val client = network.cloudflareClient.newBuilder()
+        .addInterceptor { chain ->
+            val request = chain.request()
+            val response = chain.proceed(request)
 
-        response.headers("Set-Cookie").forEach { cookie ->
-            if (cookie.startsWith("csrftoken=")) {
-                val token = cookie.substringAfter("csrftoken=").substringBefore(";")
-                preferences.edit().putString(PREF_CSRF_TOKEN, token).apply()
+            response.headers("Set-Cookie").forEach { cookie ->
+                if (cookie.startsWith("csrftoken=")) {
+                    val token = cookie.substringAfter("csrftoken=").substringBefore(";")
+                    preferences.edit().putString(PREF_CSRF_TOKEN, token).apply()
+                }
             }
+
+            response
         }
-
-        response
-    }
-
-    /** [SManga.url] is stored as the bare "<novelSlug>/<sourceSlug>" under `/novels/`; a stored
-     * value starting with "/" is a pre-existing full-path entry and is resolved unchanged. */
-    private val mangaPath = SlugPath("/novels/")
+        .build()
 
     // ======================== Popular ========================
 
-    private fun buildPopularMangaUrl(page: Int): String = "$apiUrl/novels/search/?page=$page&page_size=24&sort_by=popularity&sort_order=desc"
+    override fun popularMangaRequest(page: Int): Request = GET("$apiUrl/novels/search/?page=$page&page_size=24&sort_by=popularity&sort_order=desc", headers)
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parsePopularMangaResponse(client.get(buildPopularMangaUrl(page), headers))
-
-    private fun parsePopularMangaResponse(response: Response): MangasPage {
+    override fun popularMangaParse(response: Response): MangasPage {
         val searchResponse = json.decodeFromString<SearchResponse>(response.body.string())
 
         val novels = searchResponse.results.map { novel ->
@@ -86,118 +80,99 @@ abstract class LnCrawler :
 
     // ======================== Latest ========================
 
-    private fun buildLatestUpdatesUrl(page: Int): String = "$apiUrl/novels/search/?page=$page&page_size=24&sort_by=last_updated&sort_order=desc"
+    override fun latestUpdatesRequest(page: Int): Request = GET("$apiUrl/novels/search/?page=$page&page_size=24&sort_by=last_updated&sort_order=desc", headers)
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parsePopularMangaResponse(client.get(buildLatestUpdatesUrl(page), headers))
+    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
 
     // ======================== Search ========================
 
-    private fun buildSearchMangaUrl(page: Int, query: String, filters: FilterList): String {
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+        val url = StringBuilder("$apiUrl/novels/search/?page=$page&page_size=24")
+
+        if (query.isNotBlank()) {
+            url.append("&query=${java.net.URLEncoder.encode(query, "UTF-8")}")
+        }
+
         var sortBy = "popularity"
         var sortOrder = "desc"
 
-        return buildString {
-            append("$apiUrl/novels/search/?page=$page&page_size=24")
-
-            if (query.isNotBlank()) {
-                append("&query=${java.net.URLEncoder.encode(query, "UTF-8")}")
-            }
-
-            filters.forEach { filter ->
-                when (filter) {
-                    is LanguageFilter -> {
-                        if (filter.state > 0) {
-                            append("&language=${filter.pairValues[filter.state].second}")
-                        }
+        filters.forEach { filter ->
+            when (filter) {
+                is LanguageFilter -> {
+                    if (filter.state > 0) {
+                        url.append("&language=${filter.pairValues[filter.state].second}")
                     }
-
-                    is SortFilter -> {
-                        sortBy = filter.pairValues[filter.state].second
-                    }
-
-                    is SortOrderFilter -> {
-                        sortOrder = filter.pairValues[filter.state].second
-                    }
-
-                    is MinRatingFilter -> {
-                        if (filter.state.isNotBlank()) {
-                            append("&min_rating=${filter.state}")
-                        }
-                    }
-
-                    is TagFilter -> {
-                        filter.state.split(",")
-                            .map { it.trim() }
-                            .filter { it.isNotEmpty() }
-                            .forEach { tag ->
-                                append("&tag=${java.net.URLEncoder.encode(tag, "UTF-8")}")
-                            }
-                    }
-
-                    is ExcludeTagFilter -> {
-                        filter.state.split(",")
-                            .map { it.trim() }
-                            .filter { it.isNotEmpty() }
-                            .forEach { tag ->
-                                append("&exclude_tag=${java.net.URLEncoder.encode(tag, "UTF-8")}")
-                            }
-                    }
-
-                    is AuthorFilter -> {
-                        filter.state.split(",")
-                            .map { it.trim() }
-                            .filter { it.isNotEmpty() }
-                            .forEach { author ->
-                                append("&author=${java.net.URLEncoder.encode(author, "UTF-8")}")
-                            }
-                    }
-
-                    else -> {}
                 }
-            }
 
-            append("&sort_by=$sortBy&sort_order=$sortOrder")
+                is SortFilter -> {
+                    sortBy = filter.pairValues[filter.state].second
+                }
+
+                is SortOrderFilter -> {
+                    sortOrder = filter.pairValues[filter.state].second
+                }
+
+                is MinRatingFilter -> {
+                    if (filter.state.isNotBlank()) {
+                        url.append("&min_rating=${filter.state}")
+                    }
+                }
+
+                is TagFilter -> {
+                    filter.state.split(",")
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .forEach { tag ->
+                            url.append("&tag=${java.net.URLEncoder.encode(tag, "UTF-8")}")
+                        }
+                }
+
+                is ExcludeTagFilter -> {
+                    filter.state.split(",")
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .forEach { tag ->
+                            url.append("&exclude_tag=${java.net.URLEncoder.encode(tag, "UTF-8")}")
+                        }
+                }
+
+                is AuthorFilter -> {
+                    filter.state.split(",")
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .forEach { author ->
+                            url.append("&author=${java.net.URLEncoder.encode(author, "UTF-8")}")
+                        }
+                }
+
+                else -> {}
+            }
         }
+
+        url.append("&sort_by=$sortBy&sort_order=$sortOrder")
+
+        return GET(url.toString(), headers)
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parsePopularMangaResponse(client.get(buildSearchMangaUrl(page, query, filters), headers))
+    override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
 
     // ======================== Details ========================
 
-    private fun buildMangaDetailsUrl(manga: SManga): String {
-        val slug = mangaPath.resolve(manga.url).removePrefix("/novels/").substringBefore("/")
-        return "$apiUrl/novels/$slug/"
+    override fun mangaDetailsRequest(manga: SManga): Request {
+        val slug = manga.url.removePrefix("/novels/").substringBefore("/")
+        return GET("$apiUrl/novels/$slug/", headers)
     }
 
-    override suspend fun fetchMangaUpdate(
-        manga: SManga,
-        chapters: List<SChapter>,
-        fetchDetails: Boolean,
-        fetchChapters: Boolean,
-    ): SMangaUpdate {
-        val updatedManga = if (fetchDetails) {
-            parseMangaDetails(client.get(buildMangaDetailsUrl(manga), headers))
-        } else {
-            manga
-        }
-        val updatedChapters = if (fetchChapters) {
-            parseChapterList(client.get(buildChapterListUrl(manga), headers))
-        } else {
-            chapters
-        }
-        return SMangaUpdate(updatedManga, updatedChapters)
-    }
-
-    private fun parseMangaDetails(response: Response): SManga {
+    override fun mangaDetailsParse(response: Response): SManga {
         val novel = json.decodeFromString<NovelDetail>(response.body.string())
 
         val source = getPreferredSource(novel)
 
         return SManga.create().apply {
-            url = mangaPath.slug("/novels/${novel.slug}/${source?.sourceSlug ?: ""}")
+            url = "/novels/${novel.slug}/${source?.sourceSlug ?: ""}"
             title = novel.title
             thumbnail_url = resolveCover(source?.coverUrl ?: novel.preferedSource?.coverUrl)
-            author = source?.authors?.joinToString() ?: novel.preferedSource?.authors?.joinToString()
+            author = source?.authors?.joinToString(", ") ?: novel.preferedSource?.authors?.joinToString(", ")
 
             description = buildString {
                 val synopsis = source?.synopsis ?: novel.preferedSource?.synopsis ?: ""
@@ -215,7 +190,7 @@ abstract class LnCrawler :
                 }
             }
 
-            genre = source?.tags?.joinToString() ?: novel.preferedSource?.tags?.joinToString() ?: ""
+            genre = source?.tags?.joinToString(", ") ?: novel.preferedSource?.tags?.joinToString(", ") ?: ""
 
             status = SManga.UNKNOWN
         }
@@ -223,19 +198,19 @@ abstract class LnCrawler :
 
     // ======================== Chapters ========================
 
-    private fun buildChapterListUrl(manga: SManga): String {
-        val parts = mangaPath.resolve(manga.url).removePrefix("/novels/").split("/")
+    override fun chapterListRequest(manga: SManga): Request {
+        val parts = manga.url.removePrefix("/novels/").split("/")
         val novelSlug = parts[0]
         val sourceSlug = parts.getOrNull(1)
 
         return if (sourceSlug.isNullOrEmpty()) {
-            "$apiUrl/novels/$novelSlug/"
+            GET("$apiUrl/novels/$novelSlug/", headers)
         } else {
-            "$apiUrl/novels/$novelSlug/$sourceSlug/chapters/?page=1&page_size=1000"
+            GET("$apiUrl/novels/$novelSlug/$sourceSlug/chapters/?page=1&page_size=1000", headers)
         }
     }
 
-    private suspend fun parseChapterList(response: Response): List<SChapter> {
+    override fun chapterListParse(response: Response): List<SChapter> {
         val body = response.body.string()
 
         return if (body.contains("\"chapters\":")) {
@@ -248,8 +223,8 @@ abstract class LnCrawler :
             if (chapterResponse.totalPages > chapterResponse.currentPage) {
                 for (p in (chapterResponse.currentPage + 1)..chapterResponse.totalPages) {
                     try {
-                        val moreUrl = "$apiUrl/novels/${chapterResponse.novelSlug}/${chapterResponse.sourceSlug}/chapters/?page=$p&page_size=1000"
-                        val moreResp = client.get(moreUrl, headers, ensureSuccess = false)
+                        val moreReq = GET("$apiUrl/novels/${chapterResponse.novelSlug}/${chapterResponse.sourceSlug}/chapters/?page=$p&page_size=1000", headers)
+                        val moreResp = client.newCall(moreReq).execute()
                         if (moreResp.isSuccessful) {
                             val moreBody = moreResp.body.string()
                             val moreChapterResponse = json.decodeFromString<ChapterListResponse>(moreBody)
@@ -280,9 +255,9 @@ abstract class LnCrawler :
             val source = getPreferredSource(novel)
 
             if (source != null) {
-                val chaptersUrl = "$apiUrl/novels/${novel.slug}/${source.sourceSlug}/chapters/?page=1&page_size=1000"
-                val chaptersResponse = client.get(chaptersUrl, headers)
-                return parseChapterList(chaptersResponse)
+                val chaptersRequest = GET("$apiUrl/novels/${novel.slug}/${source.sourceSlug}/chapters/?page=1&page_size=1000", headers)
+                val chaptersResponse = client.newCall(chaptersRequest).execute()
+                return chapterListParse(chaptersResponse)
             }
 
             emptyList()
@@ -290,64 +265,38 @@ abstract class LnCrawler :
     }
 
     // Return web URL for the manga (used by app webview)
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
-
-    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val manga = SManga.create().apply { this.url = mangaPath.slug(url.encodedPath) }
-        val response = client.get(buildMangaDetailsUrl(manga), headers, ensureSuccess = false)
-        if (!response.isSuccessful) return null
-        // parseMangaDetails already sets .url from the DTO's own slug/sourceSlug fields.
-        return parseMangaDetails(response)
-    }
+    override fun getMangaUrl(manga: SManga): String = baseUrl + (if (manga.url.startsWith("/")) manga.url else "/${manga.url}")
 
     // Return web URL for the chapter (used by app webview)
     override fun getChapterUrl(chapter: SChapter): String = baseUrl + (if (chapter.url.startsWith("/")) chapter.url else "/${chapter.url}")
 
     // ======================== Pages ========================
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.get("$apiUrl${chapter.url}", headers)
-        return listOf(Page(0, response.request.url.toString()))
-    }
+    override fun pageListRequest(chapter: SChapter): Request = GET("$apiUrl${chapter.url.replace("/chapter/", "/chapter/")}/", headers)
+
+    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
 
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val response = client.get(url, headers)
+        val request = GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
+        val response = client.newCall(request).execute()
         val chapter = json.decodeFromString<ChapterContent>(response.body.string())
+
+        val content = StringBuilder()
 
         val document = Jsoup.parse(chapter.body)
 
-        return buildString {
-            document.body().children().forEach { element ->
-                when (element.tagName()) {
-                    "h1", "h2", "h3" -> {
-                        append("<h2>${element.text()}</h2>\n")
-                    }
+        document.body().children().forEach { element ->
+            when (element.tagName()) {
+                "h1", "h2", "h3" -> {
+                    content.append("<h2>${element.text()}</h2>\n")
+                }
 
-                    "p" -> {
-                        val img = element.selectFirst("img")
-                        if (img != null) {
-                            val imgSrc = img.attr("src")
-                            val fullUrl = if (imgSrc.startsWith("images/") && chapter.imagesPath != null) {
-                                "${chapter.imagesPath}/${imgSrc.removePrefix("images/")}"
-                            } else if (imgSrc.startsWith("http")) {
-                                imgSrc
-                            } else {
-                                "$apiUrl/$imgSrc"
-                            }
-                            append("<img src=\"$fullUrl\">\n")
-                        } else {
-                            val text = element.text()
-                            if (!text.isNullOrEmpty()) {
-                                append("<p>$text</p>\n")
-                            }
-                        }
-                    }
-
-                    "img" -> {
-                        val imgSrc = element.attr("src")
+                "p" -> {
+                    val img = element.selectFirst("img")
+                    if (img != null) {
+                        val imgSrc = img.attr("src")
                         val fullUrl = if (imgSrc.startsWith("images/") && chapter.imagesPath != null) {
                             "${chapter.imagesPath}/${imgSrc.removePrefix("images/")}"
                         } else if (imgSrc.startsWith("http")) {
@@ -355,23 +304,44 @@ abstract class LnCrawler :
                         } else {
                             "$apiUrl/$imgSrc"
                         }
-                        append("<img src=\"$fullUrl\">\n")
-                    }
-
-                    else -> {
-                        val text = element.text()
+                        content.append("<img src=\"$fullUrl\">\n")
+                    } else {
+                        val text = element.text()?.trim()
                         if (!text.isNullOrEmpty()) {
-                            append("<p>$text</p>\n")
+                            content.append("<p>$text</p>\n")
                         }
+                    }
+                }
+
+                "img" -> {
+                    val imgSrc = element.attr("src")
+                    val fullUrl = if (imgSrc.startsWith("images/") && chapter.imagesPath != null) {
+                        "${chapter.imagesPath}/${imgSrc.removePrefix("images/")}"
+                    } else if (imgSrc.startsWith("http")) {
+                        imgSrc
+                    } else {
+                        "$apiUrl/$imgSrc"
+                    }
+                    content.append("<img src=\"$fullUrl\">\n")
+                }
+
+                else -> {
+                    val text = element.text()?.trim()
+                    if (!text.isNullOrEmpty()) {
+                        content.append("<p>$text</p>\n")
                     }
                 }
             }
         }
+
+        return content.toString()
     }
+
+    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
 
     // ======================== Filters ========================
 
-    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
+    override fun getFilterList(): FilterList = FilterList(
         Filter.Header("Language"),
         LanguageFilter("Language", languageOptions),
         Filter.Separator(),
@@ -458,12 +428,12 @@ abstract class LnCrawler :
     // ======================== Helpers ========================
 
     private fun novelToSManga(novel: NovelSearchResult): SManga = SManga.create().apply {
-        url = mangaPath.slug(toWebPath("/novels/${novel.preferedSource?.novelSlug ?: novel.slug}/${novel.preferedSource?.sourceSlug ?: ""}"))
+        url = toWebPath("/novels/${novel.preferedSource?.novelSlug ?: novel.slug}/${novel.preferedSource?.sourceSlug ?: ""}")
         title = novel.title
         thumbnail_url = resolveCover(novel.preferedSource?.coverMinUrl ?: novel.preferedSource?.coverUrl)
         author = novel.preferedSource?.authors?.firstOrNull()
         description = novel.preferedSource?.synopsis?.let { Jsoup.parse(it).text() }
-        genre = novel.preferedSource?.tags?.take(5)?.joinToString() ?: ""
+        genre = novel.preferedSource?.tags?.take(5)?.joinToString(", ") ?: ""
     }
 
     private fun toWebPath(input: String?): String {
@@ -533,108 +503,108 @@ abstract class LnCrawler :
     // ======================== Data Classes ========================
 
     @Serializable
-    class SearchResponse(
-        private val count: Int,
+    data class SearchResponse(
+        val count: Int,
         @SerialName("total_pages") val totalPages: Int,
         @SerialName("current_page") val currentPage: Int,
         val results: List<NovelSearchResult>,
     )
 
     @Serializable
-    class NovelSearchResult(
-        private val id: String,
+    data class NovelSearchResult(
+        val id: String,
         val title: String,
         val slug: String = "",
-        @SerialName("sources_count") private val sourcesCount: Int = 0,
-        @SerialName("avg_rating") private val avgRating: Double? = null,
-        @SerialName("rating_count") private val ratingCount: Int = 0,
-        @SerialName("total_views") private val totalViews: Int = 0,
-        @SerialName("weekly_views") private val weeklyViews: Int = 0,
-        @SerialName("prefered_source") val preferedSource: SourceInfo? = null,
-        private val languages: List<String>? = null,
-        @SerialName("is_bookmarked") private val isBookmarked: Boolean? = null,
-        @SerialName("comment_count") private val commentCount: Int = 0,
-    )
-
-    @Serializable
-    class NovelDetail(
-        private val id: String,
-        val title: String,
-        val slug: String,
-        val sources: List<SourceInfo>? = null,
-        @SerialName("created_at") private val createdAt: String? = null,
-        @SerialName("updated_at") private val updatedAt: String? = null,
+        @SerialName("sources_count") val sourcesCount: Int = 0,
         @SerialName("avg_rating") val avgRating: Double? = null,
         @SerialName("rating_count") val ratingCount: Int = 0,
         @SerialName("total_views") val totalViews: Int = 0,
         @SerialName("weekly_views") val weeklyViews: Int = 0,
         @SerialName("prefered_source") val preferedSource: SourceInfo? = null,
-        @SerialName("similar_novels") private val similarNovels: List<NovelSearchResult>? = null,
+        val languages: List<String>? = null,
+        @SerialName("is_bookmarked") val isBookmarked: Boolean? = null,
+        @SerialName("comment_count") val commentCount: Int = 0,
     )
 
     @Serializable
-    class SourceInfo(
-        private val id: String,
-        private val title: String,
-        @SerialName("source_url") private val sourceUrl: String? = null,
+    data class NovelDetail(
+        val id: String,
+        val title: String,
+        val slug: String,
+        val sources: List<SourceInfo>? = null,
+        @SerialName("created_at") val createdAt: String? = null,
+        @SerialName("updated_at") val updatedAt: String? = null,
+        @SerialName("avg_rating") val avgRating: Double? = null,
+        @SerialName("rating_count") val ratingCount: Int = 0,
+        @SerialName("total_views") val totalViews: Int = 0,
+        @SerialName("weekly_views") val weeklyViews: Int = 0,
+        @SerialName("prefered_source") val preferedSource: SourceInfo? = null,
+        @SerialName("similar_novels") val similarNovels: List<NovelSearchResult>? = null,
+    )
+
+    @Serializable
+    data class SourceInfo(
+        val id: String,
+        val title: String,
+        @SerialName("source_url") val sourceUrl: String? = null,
         @SerialName("source_name") val sourceName: String,
         @SerialName("source_slug") val sourceSlug: String,
         val authors: List<String>? = null,
         val tags: List<String>? = null,
-        private val language: String? = null,
+        val language: String? = null,
         val synopsis: String? = null,
         @SerialName("cover_min_url") val coverMinUrl: String? = null,
         @SerialName("cover_url") val coverUrl: String? = null,
         @SerialName("chapters_count") val chaptersCount: Int = 0,
         @SerialName("volumes_count") val volumesCount: Int = 0,
-        @SerialName("last_chapter_update") private val lastChapterUpdate: String? = null,
-        @SerialName("novel_id") private val novelId: String? = null,
+        @SerialName("last_chapter_update") val lastChapterUpdate: String? = null,
+        @SerialName("novel_id") val novelId: String? = null,
         @SerialName("novel_slug") val novelSlug: String? = null,
-        @SerialName("novel_title") private val novelTitle: String? = null,
-        @SerialName("latest_available_chapter") private val latestAvailableChapter: ChapterInfo? = null,
-        @SerialName("overview_url") private val overviewUrl: String? = null,
+        @SerialName("novel_title") val novelTitle: String? = null,
+        @SerialName("latest_available_chapter") val latestAvailableChapter: ChapterInfo? = null,
+        @SerialName("overview_url") val overviewUrl: String? = null,
     )
 
     @Serializable
-    class ChapterInfo(
-        private val id: Int,
+    data class ChapterInfo(
+        val id: Int,
         @SerialName("chapter_id") val chapterId: Int,
         val title: String,
-        private val url: String? = null,
-        private val volume: Int? = null,
+        val url: String? = null,
+        val volume: Int? = null,
         @SerialName("volume_title") val volumeTitle: String? = null,
-        @SerialName("has_content") private val hasContent: Boolean = true,
+        @SerialName("has_content") val hasContent: Boolean = true,
     )
 
     @Serializable
-    class ChapterListResponse(
-        @SerialName("novel_id") private val novelId: String,
-        @SerialName("novel_title") private val novelTitle: String,
+    data class ChapterListResponse(
+        @SerialName("novel_id") val novelId: String,
+        @SerialName("novel_title") val novelTitle: String,
         @SerialName("novel_slug") val novelSlug: String,
-        @SerialName("source_id") private val sourceId: String,
-        @SerialName("source_name") private val sourceName: String,
+        @SerialName("source_id") val sourceId: String,
+        @SerialName("source_name") val sourceName: String,
         @SerialName("source_slug") val sourceSlug: String,
-        private val count: Int,
+        val count: Int,
         @SerialName("total_pages") val totalPages: Int,
         @SerialName("current_page") val currentPage: Int,
         val chapters: List<ChapterInfo>,
     )
 
     @Serializable
-    class ChapterContent(
-        private val id: Int,
-        @SerialName("chapter_id") private val chapterId: Int,
-        private val title: String,
-        @SerialName("novel_title") private val novelTitle: String? = null,
-        @SerialName("novel_id") private val novelId: String? = null,
-        @SerialName("novel_slug") private val novelSlug: String? = null,
-        @SerialName("source_id") private val sourceId: String? = null,
-        @SerialName("source_name") private val sourceName: String? = null,
-        @SerialName("source_slug") private val sourceSlug: String? = null,
+    data class ChapterContent(
+        val id: Int,
+        @SerialName("chapter_id") val chapterId: Int,
+        val title: String,
+        @SerialName("novel_title") val novelTitle: String? = null,
+        @SerialName("novel_id") val novelId: String? = null,
+        @SerialName("novel_slug") val novelSlug: String? = null,
+        @SerialName("source_id") val sourceId: String? = null,
+        @SerialName("source_name") val sourceName: String? = null,
+        @SerialName("source_slug") val sourceSlug: String? = null,
         val body: String,
-        @SerialName("prev_chapter") private val prevChapter: Int? = null,
-        @SerialName("next_chapter") private val nextChapter: Int? = null,
+        @SerialName("prev_chapter") val prevChapter: Int? = null,
+        @SerialName("next_chapter") val nextChapter: Int? = null,
         @SerialName("images_path") val imagesPath: String? = null,
-        @SerialName("source_overview_image_url") private val sourceOverviewImageUrl: String? = null,
+        @SerialName("source_overview_image_url") val sourceOverviewImageUrl: String? = null,
     )
 }

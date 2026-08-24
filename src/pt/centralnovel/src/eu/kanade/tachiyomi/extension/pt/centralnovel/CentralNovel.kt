@@ -1,9 +1,12 @@
-package eu.kanade.tachiyomi.novelextension.pt.centralnovel
+﻿package eu.kanade.tachiyomi.novelextension.pt.centralnovel
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
-import keiyoushi.annotation.Source
 
-@Source
-abstract class CentralNovel : LightNovelWPNovel() {
+class CentralNovel :
+    LightNovelWPNovel(
+        baseUrl = "https://centralnovel.com",
+        name = "CentralNovel",
+        lang = "pt",
+    ) {
     override val reverseChapters = true
 }

@@ -1,0 +1,12 @@
+ext {
+    libVersion = '1.6'
+    extName = 'AllNovel'
+    extClass = '.AllNovel'
+    themePkg = 'readnovelfull'
+    baseUrl = 'https://allnovel.org'
+    overrideVersionCode = 2
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

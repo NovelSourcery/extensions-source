@@ -1,0 +1,12 @@
+ext {
+    libVersion = '1.6'
+    extName = 'AllNovelFull'
+    extClass = '.AllNovelFull'
+    themePkg = 'readnovelfull'
+    baseUrl = 'https://novgo.net'
+    overrideVersionCode = 2
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

@@ -33,8 +33,3 @@ class ChapterDto(
     val number: Int,
     @SerialName("publishDate") val publishDate: String? = null,
 )
-
-@Serializable
-class ChapterListDto(
-    val chapters: List<ChapterDto>,
-)

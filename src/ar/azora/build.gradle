@@ -1,0 +1,10 @@
+ext {
+    libVersion = '1.4'
+    extName = 'Azora'
+    extClass = '.Azora'
+    extVersionCode = 4
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

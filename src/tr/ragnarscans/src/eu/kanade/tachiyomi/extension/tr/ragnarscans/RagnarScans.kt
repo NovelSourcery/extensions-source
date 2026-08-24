@@ -1,9 +1,12 @@
-package eu.kanade.tachiyomi.novelextension.tr.ragnarscans
+﻿package eu.kanade.tachiyomi.novelextension.tr.ragnarscans
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
-import keiyoushi.annotation.Source
 
-@Source
-abstract class RagnarScans : MadaraNovel() {
+class RagnarScans :
+    MadaraNovel(
+        baseUrl = "https://ragnarscans.com",
+        name = "RagnarScans",
+        lang = "tr",
+    ) {
     override val useNewChapterEndpointDefault = true
 }

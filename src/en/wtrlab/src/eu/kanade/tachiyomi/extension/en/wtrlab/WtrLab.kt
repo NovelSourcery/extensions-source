@@ -7,6 +7,7 @@ import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.SourceTracker
@@ -14,91 +15,80 @@ import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
+import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import eu.kanade.tachiyomi.util.asJsoup
-import keiyoushi.annotation.Source
+import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.lib.chapterutils.mergeChapters
 import keiyoushi.lib.chapterutils.shouldReturnExisting
-import keiyoushi.network.get
-import keiyoushi.network.post
-import keiyoushi.source.KeiSource
-import keiyoushi.utils.SlugPath
-import keiyoushi.utils.jsonInstance
 import keiyoushi.utils.setAltTitles
-import keiyoushi.utils.toJsonRequestBody
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import okhttp3.Headers
-import okhttp3.HttpUrl
+import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
+import uy.kohesive.injekt.injectLazy
 import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-@Source
-abstract class WtrLab :
-    KeiSource(),
+class WtrLab :
+    HttpSource(),
     NovelSource,
     ConfigurableSource,
     SourceTracker {
 
-    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor { chain ->
-        val original = chain.request()
-        if (!original.url.encodedPath.contains("/_next/data/")) {
-            chain.proceed(original)
-        } else {
-            var currentRequest = original
-            var response = chain.proceed(currentRequest)
-            var attempt = 0
-            while (!response.isSuccessful && attempt < MAX_BUILD_ID_RETRIES) {
-                val failedBuildId = BUILD_ID_IN_PATH_REGEX.find(currentRequest.url.encodedPath)
-                    ?.groupValues?.get(1) ?: break
-                response.close()
-                cachedBuildId = null
-                val freshBuildId = runCatching { getBuildId() }.getOrNull() ?: break
-                currentRequest = currentRequest.newBuilder()
-                    .url(currentRequest.url.toString().replace(failedBuildId, freshBuildId))
-                    .build()
-                response = chain.proceed(currentRequest)
-                attempt++
+    override val name = "WTR-LAB"
+    override val baseUrl = "https://wtr-lab.com"
+    override val lang = "en"
+    override val supportsLatest = true
+
+    override val client = network.client.newBuilder()
+        .addInterceptor { chain ->
+            val original = chain.request()
+            if (!original.url.encodedPath.contains("/_next/data/")) {
+                chain.proceed(original)
+            } else {
+
+                var currentRequest = original
+                var response = chain.proceed(currentRequest)
+                var attempt = 0
+                while (!response.isSuccessful && attempt < MAX_BUILD_ID_RETRIES) {
+                    val failedBuildId = BUILD_ID_IN_PATH_REGEX.find(currentRequest.url.encodedPath)
+                        ?.groupValues?.get(1) ?: break
+                    response.close()
+                    cachedBuildId = null
+                    val freshBuildId = runCatching { getBuildId() }.getOrNull() ?: break
+                    currentRequest = currentRequest.newBuilder()
+                        .url(currentRequest.url.toString().replace(failedBuildId, freshBuildId))
+                        .build()
+                    response = chain.proceed(currentRequest)
+                    attempt++
+                }
+                response
             }
-            response
         }
-    }
+        .build()
 
-    private val json = jsonInstance
-
-    // The event/add endpoint omits "chapter_id" entirely when unresolved; json doesn't
-    // guarantee that for null fields, so this overrides just that behavior for encoding.
-    private val requestJson = Json(json) { explicitNulls = false }
+    private val json: Json by injectLazy()
     private val preferences = Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
-
-    /** [SManga.url] is stored as bare "<rawId>/<slug>"; a stored value starting with "/" is a
-     * pre-existing full-path entry (either "/en/novel/<id>/<slug>" or the legacy
-     * "/en/serie-<id>/<slug>") and is resolved unchanged. */
-    private val mangaPath = SlugPath("/en/novel/")
 
     private val apiHeaders by lazy {
         headersBuilder()
@@ -152,7 +142,8 @@ abstract class WtrLab :
             cachedBuildId?.let { return it }
 
             val response = client.newCall(GET("$baseUrl/en/novel-finder", headers)).execute()
-            val doc = response.asJsoup()
+            val html = response.body.string()
+            val doc = Jsoup.parse(html)
             val nextData = doc.selectFirst("#__NEXT_DATA__")?.data()
                 ?: throw Exception("Could not find __NEXT_DATA__ on page")
 
@@ -195,7 +186,7 @@ abstract class WtrLab :
         return rawArray
     }
 
-    private suspend fun translateWithGoogle(paragraphs: List<String>): String {
+    private fun translateWithGoogle(paragraphs: List<String>): String {
         val apiKey = getGoogleApiKey()
         if (apiKey.isEmpty()) {
             return paragraphs.joinToString("") { "<p>$it</p>" }
@@ -221,18 +212,15 @@ abstract class WtrLab :
         val bodyString = json.encodeToString(JsonArray.serializer(), fullBody)
         Log.d("WtrLab", "req body content: ${bodyString.take(1000)}")
 
-        val translateHeaders = Headers.Builder()
-            .add("X-Goog-Api-Key", apiKey)
-            .add("Origin", "https://wtr-lab.com")
-            .add("Referer", "https://wtr-lab.com/")
+        val request = Request.Builder()
+            .url("https://translate-pa.googleapis.com/v1/translateHtml")
+            .header("X-Goog-Api-Key", apiKey)
+            .header("Origin", "https://wtr-lab.com")
+            .header("Referer", "https://wtr-lab.com/")
+            .post(bodyString.toRequestBody("application/json+protobuf".toMediaType()))
             .build()
 
-        val response = client.post(
-            "https://translate-pa.googleapis.com/v1/translateHtml",
-            translateHeaders,
-            bodyString.toRequestBody("application/json+protobuf".toMediaType()),
-            ensureSuccess = false,
-        )
+        val response = client.newCall(request).execute()
         if (!response.isSuccessful) {
             return paragraphs.joinToString("") { "<p>$it</p>" }
         }
@@ -284,17 +272,19 @@ abstract class WtrLab :
             else -> "ai"
         }
 
-        suspend fun fetchReader(mode: String): Response {
-            val body = ReaderRequestBody(
-                translate = mode,
-                language = "en",
-                raw_id = rawId,
-                chapter_no = chapterNo,
-            ).toJsonRequestBody()
-            return client.post("$baseUrl/api/reader/get", apiHeaders, body, ensureSuccess = false)
+        fun createRequest(mode: String): okhttp3.Request {
+            val body = buildJsonObject {
+                put("translate", mode)
+                put("language", "en")
+                put("raw_id", rawId)
+                put("chapter_no", chapterNo)
+                put("retry", false)
+                put("force_retry", false)
+            }.toString().toRequestBody("application/json".toMediaType())
+            return POST("$baseUrl/api/reader/get", apiHeaders, body)
         }
 
-        var response = fetchReader(apiTranslateParam)
+        var response = client.newCall(createRequest(apiTranslateParam)).execute()
         var responseBody = response.body.string()
 
         if (apiTranslateParam == "ai") {
@@ -308,7 +298,7 @@ abstract class WtrLab :
             if (isFailure) {
                 translationMode = "raw"
                 apiTranslateParam = "raw"
-                response = fetchReader(apiTranslateParam)
+                response = client.newCall(createRequest(apiTranslateParam)).execute()
                 responseBody = response.body.string()
             }
         }
@@ -465,14 +455,13 @@ abstract class WtrLab :
         return result
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage {
+    override fun popularMangaRequest(page: Int): Request {
         val buildId = getBuildId()
         val url = "$baseUrl/_next/data/$buildId/en/novel-finder.json?orderBy=views&order=desc&page=$page"
-        val response = client.get(url, headers)
-        return parseSeriesPage(response)
+        return GET(url, headers)
     }
 
-    private suspend fun parseSeriesPage(response: Response): MangasPage {
+    override fun popularMangaParse(response: Response): MangasPage {
         val jsonResult = json.parseToJsonElement(response.body.string()).jsonObject
         val pageProps = jsonResult["pageProps"]?.jsonObject
         val series = pageProps?.get("series") as? JsonArray
@@ -499,7 +488,7 @@ abstract class WtrLab :
             SManga.create().apply {
                 title = data?.get("title")?.jsonPrimitive?.contentOrNull ?: ""
                 thumbnail_url = transformImageUrl(data?.get("image")?.jsonPrimitive?.contentOrNull)
-                url = "$rawId/$slug"
+                url = "/en/novel/$rawId/$slug"
             }
         }
 
@@ -508,10 +497,15 @@ abstract class WtrLab :
         return MangasPage(mangas, hasNextPage)
     }
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val requestBody = PageRequestDto(page).toJsonRequestBody()
+    override fun latestUpdatesRequest(page: Int): Request {
+        val requestBody = buildJsonObject {
+            put("page", page)
+        }.toString().toRequestBody("application/json".toMediaType())
 
-        val response = client.post("$baseUrl/api/home/recent", apiHeaders, requestBody)
+        return POST("$baseUrl/api/home/recent", apiHeaders, requestBody)
+    }
+
+    override fun latestUpdatesParse(response: Response): MangasPage {
         val jsonResult = json.parseToJsonElement(response.body.string()).jsonObject
         val data = jsonResult["data"] as? JsonArray ?: return MangasPage(emptyList(), false)
 
@@ -525,7 +519,7 @@ abstract class WtrLab :
             SManga.create().apply {
                 title = serieData?.get("title")?.jsonPrimitive?.contentOrNull ?: ""
                 thumbnail_url = transformImageUrl(serieData?.get("image")?.jsonPrimitive?.contentOrNull)
-                url = "$rawId/$slug"
+                url = "/en/novel/$rawId/$slug"
             }
         }
 
@@ -534,7 +528,7 @@ abstract class WtrLab :
         return MangasPage(mangas, hasNextPage)
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val buildId = getBuildId()
 
         val params = mutableListOf<String>()
@@ -625,33 +619,25 @@ abstract class WtrLab :
         params.add("page=$page")
 
         val url = "$baseUrl/_next/data/$buildId/en/novel-finder.json?${params.joinToString("&")}"
-        val response = client.get(url, headers)
-        return parseSeriesPage(response)
-    }
+        return GET(url, headers)
+    } override fun searchMangaParse(response: Response) = popularMangaParse(response)
 
-    private fun buildMangaDetailsUrl(manga: SManga): String {
+    override fun mangaDetailsRequest(manga: SManga): Request {
         val buildId = getBuildId()
         // url shape: /en/novel/<raw_id>/<slug> (legacy: /en/serie-<raw_id>/<slug>). The _next/data
         // JSON route 308s straight to the plain HTML page for legacy paths, so always request the
         // canonical novel/ path here.
-        val match = Regex("""(?:novel/|serie-)(\d+)/([^/?#]+)""").find(mangaPath.resolve(manga.url))
+        val match = Regex("""(?:novel/|serie-)(\d+)/([^/?#]+)""").find(manga.url)
         val rawId = match?.groupValues?.get(1) ?: ""
         val slug = match?.groupValues?.get(2) ?: ""
-        return "$baseUrl/_next/data/$buildId/en/novel/$rawId/$slug.json" +
+        val url = "$baseUrl/_next/data/$buildId/en/novel/$rawId/$slug.json" +
             "?locale=en&raw_id=$rawId&serie_slug=$slug"
+        return GET(url, headers)
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl${manga.url}"
 
-    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val slug = mangaPath.slug(url.encodedPath)
-        val tempManga = SManga.create().apply { this.url = slug }
-        val response = client.get(buildMangaDetailsUrl(tempManga), headers, ensureSuccess = false)
-        if (!response.isSuccessful) return null
-        return parseMangaDetailsJson(response).apply { this.url = slug }
-    }
-
-    private suspend fun parseMangaDetailsJson(response: Response): SManga {
+    override fun mangaDetailsParse(response: Response): SManga {
         val manga = SManga.create()
         var root = json.parseToJsonElement(response.body.string()).jsonObject
 
@@ -676,7 +662,7 @@ abstract class WtrLab :
             val redirectSlug = redirectMatch.groupValues[2]
             val redirectUrl = "$baseUrl/_next/data/${getBuildId()}/en/novel/$redirectRawId/$redirectSlug.json" +
                 "?locale=en&raw_id=$redirectRawId&serie_slug=$redirectSlug"
-            val redirectResponse = client.get(redirectUrl, headers, ensureSuccess = false)
+            val redirectResponse = client.newCall(GET(redirectUrl, headers)).execute()
             if (!redirectResponse.isSuccessful) {
                 val code = redirectResponse.code
                 redirectResponse.close()
@@ -764,7 +750,7 @@ abstract class WtrLab :
             .filter { it.isNotEmpty() }
             .distinctBy { it.lowercase() }
         if (combined.isNotEmpty()) {
-            manga.genre = combined.joinToString()
+            manga.genre = combined.joinToString(", ")
         }
 
         val finalAltTitles = altTitles
@@ -778,33 +764,13 @@ abstract class WtrLab :
         return manga
     }
 
-    private fun buildChapterListUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    override fun chapterListRequest(manga: SManga): Request = GET("$baseUrl${manga.url}", headers)
 
-    override suspend fun fetchMangaUpdate(
-        manga: SManga,
-        chapters: List<SChapter>,
-        fetchDetails: Boolean,
-        fetchChapters: Boolean,
-    ): SMangaUpdate = coroutineScope {
-        // Details (JSON API) and chapters (plain HTML page) live on different endpoints - fire
-        // both concurrently when both are needed, rather than awaiting them sequentially.
-        val detailsDeferred = if (fetchDetails) {
-            async { parseMangaDetailsJson(client.get(buildMangaDetailsUrl(manga), headers, ensureSuccess = false)) }
-        } else {
-            null
-        }
-        val chaptersDeferred = if (fetchChapters) async { fetchChapterListInternal(manga, chapters) } else null
-
-        SMangaUpdate(
-            manga = detailsDeferred?.await() ?: manga,
-            chapters = chaptersDeferred?.await() ?: chapters,
-        )
-    }
-
-    private suspend fun fetchChapterListInternal(manga: SManga, chapters: List<SChapter>): List<SChapter> {
-        val response = client.get(buildChapterListUrl(manga), headers)
+    override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
+        val response = client.newCall(chapterListRequest(manga)).execute()
+        val html = response.body.string()
+        val doc = Jsoup.parse(html)
         val url = response.request.url.toString()
-        val doc = response.asJsoup()
 
         val urlMatch = Regex("""(?:serie-|novel/)(\d+)/([^/]+)""").find(url)
             ?: return emptyList()
@@ -815,28 +781,45 @@ abstract class WtrLab :
 
         if (chapterCount == 0) return emptyList()
 
-        Log.d(TAG, "getChapterList: rawId=$rawId existing=${chapters.size} siteTotal=$chapterCount")
+        Log.d(TAG, "getChapterList: rawId=$rawId existing=${context.existingChapters.size} siteTotal=$chapterCount")
 
-        if (shouldReturnExisting(chapters.size, chapterCount)) {
+        if (!context.forceRefresh && shouldReturnExisting(context.existingChapters.size, chapterCount)) {
             Log.d(TAG, "getChapterList: count unchanged — returning existing")
-            return chapters
+            return context.existingChapters
         }
 
-        val existingCount = chapters.size
+        val existingCount = context.existingChapters.size
         // On a normal refresh, align the start to the 250-chapter batch boundary the site uses, so the
-        // current (possibly partial) batch is re-fetched and we don't request odd offsets. A forced
-        // refresh (empty existing chapters) re-fetches everything from the start.
-        val (startOrder, keepCount) = if (existingCount == 0) {
+        // current (possibly partial) batch is re-fetched and we don't request odd offsets. A force
+        // refresh re-fetches everything from the start.
+        val (startOrder, keepCount) = if (context.forceRefresh || existingCount == 0) {
             1 to 0
         } else {
             val alignedStart = (existingCount / CHAPTER_BATCH) * CHAPTER_BATCH + 1
             alignedStart to (alignedStart - 1)
         }
 
-        Log.d(TAG, "getChapterList: startOrder=$startOrder keepCount=$keepCount")
+        Log.d(TAG, "getChapterList: force=${context.forceRefresh} startOrder=$startOrder keepCount=$keepCount")
 
         val fresh = fetchAllChapters(rawId, chapterCount, slug, startOrder)
-        return mergeChapters(chapters, fresh, keepCount).reversed()
+        return mergeChapters(context.existingChapters, fresh, keepCount).reversed()
+    }
+
+    override fun chapterListParse(response: Response): List<SChapter> {
+        val html = response.body.string()
+        val doc = Jsoup.parse(html)
+        val url = response.request.url.toString()
+
+        val urlMatch = Regex("""(?:serie-|novel/)(\d+)/([^/]+)""").find(url)
+            ?: return emptyList()
+
+        val rawId = urlMatch.groupValues[1].toInt()
+        val slug = urlMatch.groupValues[2]
+        val chapterCount = extractChapterCount(doc)
+
+        if (chapterCount == 0) return emptyList()
+
+        return fetchAllChapters(rawId, chapterCount, slug).reversed()
     }
 
     private fun extractChapterCount(doc: Document): Int {
@@ -860,7 +843,7 @@ abstract class WtrLab :
             .find(doc.text())?.groupValues?.get(1)?.toIntOrNull() ?: 0
     }
 
-    private suspend fun fetchAllChapters(rawId: Int, totalChapters: Int, slug: String, startOrder: Int = 1): List<SChapter> {
+    private fun fetchAllChapters(rawId: Int, totalChapters: Int, slug: String, startOrder: Int = 1): List<SChapter> {
         val allChapters = mutableListOf<SChapter>()
         val batchSize = CHAPTER_BATCH
 
@@ -869,7 +852,9 @@ abstract class WtrLab :
             val end = minOf(start + batchSize - 1, totalChapters)
 
             try {
-                val response = client.get("$baseUrl/api/chapters/$rawId?start=$start&end=$end", headers)
+                val response = client.newCall(
+                    GET("$baseUrl/api/chapters/$rawId?start=$start&end=$end", headers),
+                ).execute()
 
                 val jsonResult = json.parseToJsonElement(response.body.string()).jsonObject
                 val chapters = jsonResult["chapters"] as? JsonArray ?: break
@@ -903,18 +888,22 @@ abstract class WtrLab :
 
     private fun parseDate(dateStr: String?): Long {
         if (dateStr == null) return 0L
-        return runCatching {
-            java.time.LocalDate.parse(dateStr.substring(0, 10), DATE_FORMATTER)
-                .atStartOfDay(java.time.ZoneId.systemDefault())
-                .toInstant()
-                .toEpochMilli()
-        }.getOrDefault(0L)
+        return try {
+            val format = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+            format.parse(dateStr.substring(0, 10))?.time ?: 0L
+        } catch (e: Exception) {
+            0L
+        }
     }
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
+    override fun pageListRequest(chapter: SChapter): Request = GET("$baseUrl${chapter.url}", headers)
+
+    override fun pageListParse(response: Response): List<Page> {
         // fetchPageText will parse the URL to extract rawId and chapterNo
-        return listOf(Page(0, "$baseUrl${chapter.url}", null))
+        return listOf(Page(0, response.request.url.toString(), null))
     }
+
+    override fun imageUrlParse(response: Response) = ""
 
     private fun getTranslationMode() = preferences.getString(TRANSLATION_MODE_KEY, "ai") ?: "ai"
     private fun getDecryptionKey() = preferences.getString(DECRYPTION_KEY, "") ?: ""
@@ -932,6 +921,7 @@ abstract class WtrLab :
 
     private val serieIdCache = mutableMapOf<Int, Int>()
     private val chapterIdCache = mutableMapOf<Pair<Int, Int>, Int>()
+    private val jsonMime = "application/json".toMediaType()
 
     private fun folderReading() = preferences.getString(PREF_FOLDER_READING, "1")?.toIntOrNull() ?: 1
     private fun folderCompleted() = preferences.getString(PREF_FOLDER_COMPLETED, "3")?.toIntOrNull() ?: 3
@@ -939,34 +929,6 @@ abstract class WtrLab :
     private fun managedFolders() = listOf(folderReading(), FOLDER_READ_LATER, folderCompleted(), folderTrash()).distinct()
 
     private data class SerieIds(val sid: Int, val rawId: Int)
-
-    @Serializable
-    private class ReaderRequestBody(
-        val translate: String,
-        val language: String,
-        val raw_id: Int,
-        val chapter_no: Int,
-        val retry: Boolean = false,
-        val force_retry: Boolean = false,
-    )
-
-    @Serializable
-    private class FolderRequestBody(val sid: Int, val raw_id: Int, val folder: Int)
-
-    @Serializable
-    private class ReadEventRequestBody(
-        val serie_id: Int,
-        val raw_id: Int,
-        val translate: String,
-        val order: Int,
-        val language: String = "en",
-        val chapter_id: Int? = null,
-        val new_event: Boolean = true,
-        val version: Int = 2,
-    )
-
-    @Serializable
-    private class PageRequestDto(val page: Int)
 
     private fun SChapter.isRead(): Boolean = try {
         this::class.java.getMethod("getRead").invoke(this) as? Boolean ?: false
@@ -981,15 +943,15 @@ abstract class WtrLab :
 
     private fun rawIdOf(url: String): Int? = Regex("""novel/(\d+)/""").find(url)?.groupValues?.get(1)?.toIntOrNull()
 
-    private suspend fun serieIds(manga: SManga): SerieIds? {
-        val rawId = rawIdOf(mangaPath.resolve(manga.url)) ?: return null
+    private fun serieIds(manga: SManga): SerieIds? {
+        val rawId = rawIdOf(manga.url) ?: return null
         val cached = serieIdCache[rawId] ?: preferences.getInt("$SID_PREFIX$rawId", -1).takeIf { it > 0 }
         val sid = cached ?: fetchSerieId(manga, rawId) ?: return null
         return SerieIds(sid, rawId)
     }
 
-    private suspend fun fetchSerieId(manga: SManga, rawId: Int): Int? = try {
-        val response = client.get(buildMangaDetailsUrl(manga), headers, ensureSuccess = false)
+    private fun fetchSerieId(manga: SManga, rawId: Int): Int? = try {
+        val response = client.newCall(mangaDetailsRequest(manga)).execute()
         val root = json.parseToJsonElement(response.body.string()).jsonObject
         val sid = root["pageProps"]?.jsonObject
             ?.get("serie")?.jsonObject
@@ -1001,12 +963,14 @@ abstract class WtrLab :
         null
     }
 
-    private suspend fun chapterIdFor(rawId: Int, order: Int): Int? {
+    private fun chapterIdFor(rawId: Int, order: Int): Int? {
         chapterIdCache[rawId to order]?.let { return it }
         return try {
             val start = ((order - 1) / CHAPTER_BATCH) * CHAPTER_BATCH + 1
             val end = start + CHAPTER_BATCH - 1
-            val response = client.get("$baseUrl/api/chapters/$rawId?start=$start&end=$end", headers)
+            val response = client.newCall(
+                GET("$baseUrl/api/chapters/$rawId?start=$start&end=$end", headers),
+            ).execute()
             val chapters = json.parseToJsonElement(response.body.string()).jsonObject["chapters"] as? JsonArray
             chapters?.forEach { el ->
                 val o = el.jsonObject
@@ -1021,14 +985,18 @@ abstract class WtrLab :
         }
     }
 
-    private suspend fun postFolder(action: String, ids: SerieIds, folder: Int) {
-        val body = FolderRequestBody(ids.sid, ids.rawId, folder).toJsonRequestBody()
+    private fun postFolder(action: String, ids: SerieIds, folder: Int) {
+        val body = buildJsonObject {
+            put("sid", ids.sid)
+            put("raw_id", ids.rawId)
+            put("folder", folder)
+        }.toString().toRequestBody(jsonMime)
         runCatching {
-            client.post("$baseUrl/api/library/folder/$action", apiHeaders, body).close()
+            client.newCall(POST("$baseUrl/api/library/folder/$action", apiHeaders, body)).execute().close()
         }
     }
 
-    private suspend fun moveToFolder(ids: SerieIds, target: Int) {
+    private fun moveToFolder(ids: SerieIds, target: Int) {
         postFolder("add", ids, target)
         managedFolders().filter { it != target }.forEach { postFolder("delete", ids, it) }
     }
@@ -1066,28 +1034,32 @@ abstract class WtrLab :
         }
     }
 
-    private suspend fun postReadEvent(ids: SerieIds, order: Int) {
+    private fun postReadEvent(ids: SerieIds, order: Int) {
         if (order <= 0) return
-        val body = ReadEventRequestBody(
-            serie_id = ids.sid,
-            raw_id = ids.rawId,
-            translate = getTranslationMode(),
-            order = order,
-            chapter_id = chapterIdFor(ids.rawId, order),
-        ).toJsonRequestBody(requestJson)
+        val chapterId = chapterIdFor(ids.rawId, order)
+        val body = buildJsonObject {
+            put("serie_id", ids.sid)
+            put("raw_id", ids.rawId)
+            put("language", "en")
+            put("translate", getTranslationMode())
+            if (chapterId != null) put("chapter_id", chapterId)
+            put("order", order)
+            put("new_event", true)
+            put("version", 2)
+        }.toString().toRequestBody(jsonMime)
         runCatching {
-            client.post("$baseUrl/api/event/add", apiHeaders, body).close()
+            client.newCall(POST("$baseUrl/api/event/add", apiHeaders, body)).execute().close()
         }
     }
 
     @Volatile private var userFoldersFetched = false
 
-    private suspend fun cacheUserFolders() {
+    private fun cacheUserFolders() {
         if (!preferences.getBoolean(PREF_CACHE_USER_FOLDERS, true)) return
         if (userFoldersFetched) return
         userFoldersFetched = true
         runCatching {
-            val response = client.get("$baseUrl/api/user/config/all", apiHeaders)
+            val response = client.newCall(GET("$baseUrl/api/user/config/all", apiHeaders)).execute()
             val folders = json.parseToJsonElement(response.body.string()).jsonObject["data"]
                 ?.jsonObject?.get("user_folders") as? JsonArray
             if (folders != null) {
@@ -1309,7 +1281,7 @@ abstract class WtrLab :
         }.also(screen::addPreference)
     }
 
-    override fun getFilterList(data: JsonElement?) = FilterList(
+    override fun getFilterList() = FilterList(
         Filter.Header("Note: Filters are applied together with search"),
         OrderByFilter(),
         OrderFilter(),
@@ -1337,8 +1309,6 @@ abstract class WtrLab :
         private const val MAX_BUILD_ID_RETRIES = 3
         private const val MAX_DETAILS_REDIRECT_HOPS = 5
         private val BUILD_ID_IN_PATH_REGEX = Regex("""/_next/data/([^/]+)/""")
-        private val DATE_FORMATTER: java.time.format.DateTimeFormatter =
-            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd", java.util.Locale.US)
 
         private val genreIdToName: Map<String, String> by lazy {
             DEFAULT_GENRE_BOXES.associate { it.value to it.name }

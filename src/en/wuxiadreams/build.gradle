@@ -1,0 +1,11 @@
+ext {
+    libVersion = '1.4'
+    extName = 'WuxiaDreams'
+    extClass = '.WuxiaDreams'
+    baseUrl = 'https://wuxiadreams.com'
+    extVersionCode = 1
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

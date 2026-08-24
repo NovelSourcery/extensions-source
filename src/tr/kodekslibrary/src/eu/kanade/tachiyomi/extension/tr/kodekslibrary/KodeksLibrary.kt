@@ -1,9 +1,12 @@
-package eu.kanade.tachiyomi.novelextension.tr.kodekslibrary
+﻿package eu.kanade.tachiyomi.novelextension.tr.kodekslibrary
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
-import keiyoushi.annotation.Source
 
-@Source
-abstract class KodeksLibrary : LightNovelWPNovel() {
+class KodeksLibrary :
+    LightNovelWPNovel(
+        baseUrl = "https://www.kodekslibrary.com",
+        name = "KodeksLibrary",
+        lang = "tr",
+    ) {
     override val reverseChapters = true
 }

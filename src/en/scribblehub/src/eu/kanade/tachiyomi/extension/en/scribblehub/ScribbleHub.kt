@@ -3,6 +3,8 @@ package eu.kanade.tachiyomi.novelextension.en.scribblehub
 import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
+import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
@@ -11,72 +13,65 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import eu.kanade.tachiyomi.util.asJsoup
-import keiyoushi.annotation.Source
-import keiyoushi.network.get
-import keiyoushi.network.post
-import keiyoushi.source.KeiSource
-import keiyoushi.utils.SlugPath
-import kotlinx.serialization.json.JsonElement
+import eu.kanade.tachiyomi.source.online.HttpSource
 import okhttp3.FormBody
-import okhttp3.Headers
-import okhttp3.HttpUrl
+import okhttp3.Request
+import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.util.Calendar
 
-@Source
-abstract class ScribbleHub :
-    KeiSource(),
+class ScribbleHub :
+    HttpSource(),
     NovelSource,
     ConfigurableSource {
 
+    override val name = "Scribble Hub"
+    override val baseUrl = "https://www.scribblehub.com"
+    override val lang = "en"
     override val supportsLatest = true
+
+    override val client = network.client
 
     // Site's Cloudflare rule allowlists on this client hint alone; without it, the cf_clearance
     // cookie from the WebView challenge solve isn't sufficient on its own for some requests.
-    override fun Headers.Builder.configureHeaders(): Headers.Builder = this
+    override fun headersBuilder() = super.headersBuilder()
         .add("sec-ch-ua", "\"Chromium\"")
 
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
 
-    /** [SManga.url] is stored as the bare slug under "/series/" (e.g. "1135722/novel-name");
-     * a stored value starting with "/" is a pre-existing full-path entry and is resolved
-     * unchanged. */
-    private val mangaPath = SlugPath("/series/")
-
     // Popular novels
-    protected open fun buildPopularMangaUrl(page: Int): String = "$baseUrl/series-finder/?sf=1&sort=ratings&order=desc&pg=$page"
+    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/series-finder/?sf=1&sort=ratings&order=desc&pg=$page", headers)
 
-    override suspend fun getPopularManga(page: Int): MangasPage {
-        val doc = client.get(buildPopularMangaUrl(page), headers).asJsoup()
+    override fun popularMangaParse(response: Response): MangasPage {
+        val doc = Jsoup.parse(response.body.string())
         return parseNovelsFromSearch(doc)
     }
 
     // Latest updates
-    protected open fun buildLatestUpdatesUrl(page: Int): String = "$baseUrl/latest-series/?pg=$page"
+    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/latest-series/?pg=$page", headers)
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val doc = client.get(buildLatestUpdatesUrl(page), headers).asJsoup()
+    override fun latestUpdatesParse(response: Response): MangasPage {
+        val doc = Jsoup.parse(response.body.string())
         return parseNovelsFromSearch(doc)
     }
 
     // Search
-    protected open fun buildSearchMangaUrl(page: Int, query: String, filters: FilterList): String = if (query.isNotEmpty()) {
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = if (query.isNotEmpty()) {
         // Text search - ScribbleHub uses 'pgi' for text search pagination
-        "$baseUrl/?s=${query.replace(" ", "+")}&post_type=fictionposts&pgi=$page"
+        GET("$baseUrl/?s=${query.replace(" ", "+")}&post_type=fictionposts&pgi=$page", headers)
     } else {
         // Filter search - uses pg parameter
-        buildFilterUrl(page, filters)
+        val url = buildFilterUrl(page, filters)
+        GET(url, headers)
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val doc = client.get(buildSearchMangaUrl(page, query, filters), headers).asJsoup()
+    override fun searchMangaParse(response: Response): MangasPage {
+        val doc = Jsoup.parse(response.body.string())
         return parseNovelsFromSearch(doc)
     }
 
@@ -88,7 +83,7 @@ abstract class ScribbleHub :
             SManga.create().apply {
                 title = titleElement.text()
                 thumbnail_url = element.select(".search_img img").attr("src")
-                url = mangaPath.slug(novelUrl.removePrefix(baseUrl))
+                url = novelUrl.removePrefix(baseUrl)
             }
         }
 
@@ -121,56 +116,49 @@ abstract class ScribbleHub :
         return MangasPage(novels, hasNextPage)
     }
 
-    // Manga details + Chapters
-    protected open fun buildMangaDetailsUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    // Manga details
+    override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
 
-    override suspend fun fetchMangaUpdate(
-        manga: SManga,
-        chapters: List<SChapter>,
-        fetchDetails: Boolean,
-        fetchChapters: Boolean,
-    ): SMangaUpdate {
-        // Details and the chapter list (via novel id) both come from the same novel page.
-        val response = client.get(buildMangaDetailsUrl(manga), headers)
-        val doc = response.asJsoup()
+    override fun mangaDetailsParse(response: Response): SManga {
+        val doc = Jsoup.parse(response.body.string())
 
-        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
-        val updatedChapters = if (fetchChapters) fetchChapterList(doc, response.request.url.encodedPath) else chapters
+        return SManga.create().apply {
+            title = doc.select(".fic_title").text().ifEmpty { "Untitled" }
 
-        return SMangaUpdate(updatedManga, updatedChapters)
-    }
+            // Get high-res cover - try data-src first for lazy loading
+            val coverElement = doc.select(".fic_image img").first()
+            thumbnail_url = coverElement?.let { img ->
+                img.attr("data-src").ifEmpty { img.attr("src") }
+            } ?: ""
 
-    private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
-        title = doc.select(".fic_title").text().ifEmpty { "Untitled" }
+            author = doc.select(".auth_name_fic").text().trim()
+            // Collect genres and tags (tags are in .wi_fic_showtags a.stag)
+            val genresFromPage = doc.select(".fic_genre").map { it.text().trim() }.filter { it.isNotEmpty() }
+            val tagsFromPage = doc.select(".wi_fic_showtags a.stag, .wi_fic_showtags_inner a.stag").map { it.text().trim() }.filter { it.isNotEmpty() }
+            val allGenres = (genresFromPage + tagsFromPage).distinct()
+            genre = allGenres.joinToString(", ")
 
-        // Get high-res cover - try data-src first for lazy loading
-        val coverElement = doc.select(".fic_image img").first()
-        thumbnail_url = coverElement?.let { img ->
-            img.attr("data-src").ifEmpty { img.attr("src") }
-        } ?: ""
+            // Extract status from stats
+            val statsText = doc.select(".rnd_stats").text().lowercase()
+            status = when {
+                statsText.contains("ongoing") -> SManga.ONGOING
+                statsText.contains("completed") -> SManga.COMPLETED
+                statsText.contains("hiatus") -> SManga.ON_HIATUS
+                else -> SManga.UNKNOWN
+            }
 
-        author = doc.select(".auth_name_fic").text()
-        // Collect genres and tags (tags are in .wi_fic_showtags a.stag)
-        val genresFromPage = doc.select(".fic_genre").map { it.text() }.filter { it.isNotEmpty() }
-        val tagsFromPage = doc.select(".wi_fic_showtags a.stag, .wi_fic_showtags_inner a.stag").map { it.text() }.filter { it.isNotEmpty() }
-        val allGenres = (genresFromPage + tagsFromPage).distinct()
-        genre = allGenres.joinToString()
-
-        // Extract status from stats
-        val statsText = doc.select(".rnd_stats").text().lowercase()
-        status = when {
-            statsText.contains("ongoing") -> SManga.ONGOING
-            statsText.contains("completed") -> SManga.COMPLETED
-            statsText.contains("hiatus") -> SManga.ON_HIATUS
-            else -> SManga.UNKNOWN
+            description = doc.select(".wi_fic_desc").text().trim()
         }
-
-        description = doc.select(".wi_fic_desc").text()
     }
 
-    private suspend fun fetchChapterList(doc: Document, urlPath: String): List<SChapter> {
+    // Chapter list
+    override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+
+    override fun chapterListParse(response: Response): List<SChapter> {
+        val doc = Jsoup.parse(response.body.string())
+
         // Extract novel ID from the page - try multiple methods
-        val novelId = extractNovelId(doc, urlPath)
+        val novelId = extractNovelId(doc, response.request.url.encodedPath)
         if (novelId.isEmpty()) return emptyList()
 
         // Fetch full chapter list via AJAX (pagenum=-1 means all chapters)
@@ -180,7 +168,8 @@ abstract class ScribbleHub :
             .add("mypostid", novelId)
             .build()
 
-        val chaptersResponse = client.post("$baseUrl/wp-admin/admin-ajax.php", headers, formBody)
+        val chaptersRequest = POST("$baseUrl/wp-admin/admin-ajax.php", headers, formBody)
+        val chaptersResponse = client.newCall(chaptersRequest).execute()
         val chaptersHtml = chaptersResponse.body.string()
 
         val chaptersDoc = Jsoup.parse(chaptersHtml)
@@ -189,7 +178,7 @@ abstract class ScribbleHub :
             val link = element.select("a").first() ?: return@mapNotNull null
             val chapterUrl = link.attr("href")
             val chapterName = element.select(".toc_a").first()?.text() ?: link.text()
-            val dateText = element.select(".fic_date_pub").text()
+            val dateText = element.select(".fic_date_pub").text().trim()
 
             SChapter.create().apply {
                 name = chapterName.trim()
@@ -248,29 +237,22 @@ abstract class ScribbleHub :
         }
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
-
-    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.get(url, headers, ensureSuccess = false)
-        if (!response.isSuccessful) return null
-        val doc = response.asJsoup()
-        return parseMangaDetails(doc).apply { this.url = mangaPath.slug(url.encodedPath) }
-    }
-
     // Page list
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.get(baseUrl + chapter.url, headers)
+    override fun pageListRequest(chapter: SChapter): Request = GET(baseUrl + chapter.url, headers)
+
+    override fun pageListParse(response: Response): List<Page> {
+        // Return single page with chapter URL
         return listOf(Page(0, response.request.url.toString(), null))
     }
 
     // Novel source implementation
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
+        val response = client.newCall(GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)).execute()
         val body = response.body.string()
         val doc = Jsoup.parse(body, page.url)
 
         // Handle CAPTCHA cases
-        val title = doc.select("title").text().lowercase()
+        val title = doc.select("title").text().trim().lowercase()
         val blockedTitles = listOf(
             "bot verification",
             "just a moment...",
@@ -290,8 +272,10 @@ abstract class ScribbleHub :
         // Add preferences if needed
     }
 
+    override fun imageUrlParse(response: Response) = ""
+
     // Filters
-    override fun getFilterList(data: JsonElement?) = FilterList(
+    override fun getFilterList() = FilterList(
         Filter.Header("NOTE: Filters are ignored if using text search!"),
         Filter.Separator(),
         SortFilter(),

@@ -1,0 +1,11 @@
+ext {
+    libVersion = '1.4'
+    extName = 'MVLEMPYR'
+    extClass = '.MVLEMPYR'
+    baseUrl = 'https://www.mvlempyr.io'
+    extVersionCode = 3
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

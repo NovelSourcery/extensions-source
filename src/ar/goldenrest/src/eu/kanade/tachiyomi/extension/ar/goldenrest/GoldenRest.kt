@@ -9,56 +9,42 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import keiyoushi.annotation.Source
-import keiyoushi.network.get
-import keiyoushi.network.post
-import keiyoushi.source.KeiSource
-import keiyoushi.utils.SlugPath
-import keiyoushi.utils.toJsonRequestBody
-import keiyoushi.utils.tryParse
+import eu.kanade.tachiyomi.source.online.HttpSource
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
-import okhttp3.Headers
-import okhttp3.HttpUrl
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import uy.kohesive.injekt.injectLazy
-import kotlin.time.Instant
 
-@Source
-abstract class GoldenRest :
-    KeiSource(),
+class GoldenRest :
+    HttpSource(),
     NovelSource {
+
+    override val name = "Golden Rest"
+
+    override val baseUrl = "https://golden.rest"
+
+    override val lang = "ar"
 
     override val supportsLatest = true
 
+    override val client = network.cloudflareClient
+
     private val json: Json by injectLazy()
 
-    /** [SManga.url] stored as bare manga id via [mangaPathTemplate]. */
-    private val mangaPathTemplate = SlugPath("/mangas/")
-
-    override fun Headers.Builder.configureHeaders(): Headers.Builder = this
-        .add("Accept", "application/json")
-        .add("X-Requested-With", "XMLHttpRequest")
-
-    private fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/api/releases?page=$page", headers)
-
-    override suspend fun getPopularManga(page: Int): MangasPage {
-        val request = buildPopularMangaRequest(page)
-        return parseReleasesResponse(client.get(request.url, request.headers))
+    private val apiHeaders by lazy {
+        headersBuilder()
+            .add("Accept", "application/json")
+            .add("X-Requested-With", "XMLHttpRequest")
+            .build()
     }
 
-    private fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/api/releases?page=$page", headers)
+    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/api/releases?page=$page", apiHeaders)
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val request = buildLatestUpdatesRequest(page)
-        return parseReleasesResponse(client.get(request.url, request.headers))
-    }
-
-    private fun parseReleasesResponse(response: Response): MangasPage {
+    override fun popularMangaParse(response: Response): MangasPage {
         val data = json.decodeFromString<ReleasesResponse>(response.body.string())
         val mangas = data.releases
             .filter { it.manga?.is_novel == true }
@@ -69,21 +55,25 @@ abstract class GoldenRest :
         return MangasPage(mangas, mangas.isNotEmpty())
     }
 
-    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/api/releases?page=$page", apiHeaders)
+
+    override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
+
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         if (query.startsWith("ID:")) {
             val id = query.removePrefix("ID:").trim()
-            return GET("$baseUrl/api/mangas/$id", headers)
+            return GET("$baseUrl/api/mangas/$id", apiHeaders)
         }
 
-        val body = SearchRequestDto(query, page.toString()).toJsonRequestBody()
+        val body = buildJsonObject {
+            put("title", query)
+            put("page", page.toString())
+        }.toString().toRequestBody("application/json".toMediaType())
 
-        return POST("$baseUrl/api/mangas/search", headers, body)
+        return POST("$baseUrl/api/mangas/search", apiHeaders, body)
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val request = buildSearchMangaRequest(page, query, filters)
-        val response = request.body?.let { client.post(request.url, request.headers, it) }
-            ?: client.get(request.url, request.headers)
+    override fun searchMangaParse(response: Response): MangasPage {
         val body = response.body.string()
 
         val mangaResponse = try {
@@ -106,34 +96,22 @@ abstract class GoldenRest :
         return MangasPage(mangas, mangas.isNotEmpty())
     }
 
-    private fun mangaId(manga: SManga): String = mangaPathTemplate.resolve(manga.url).removePrefix("/mangas/").substringBefore("/")
-
-    private fun buildMangaDetailsRequest(manga: SManga): Request = GET("$baseUrl/api/mangas/${mangaId(manga)}", headers)
-
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
-
-    override suspend fun fetchMangaUpdate(
-        manga: SManga,
-        chapters: List<SChapter>,
-        fetchDetails: Boolean,
-        fetchChapters: Boolean,
-    ): SMangaUpdate {
-        val updatedManga = if (fetchDetails) {
-            val request = buildMangaDetailsRequest(manga)
-            val response = client.get(request.url, request.headers)
-            val data = json.decodeFromString<MangaResponse>(response.body.string())
-            data.mangaData?.toSManga() ?: throw Exception("Manga not found")
-        } else {
-            manga
-        }
-
-        val updatedChapters = if (fetchChapters) loadChapterList(manga) else chapters
-
-        return SMangaUpdate(updatedManga, updatedChapters)
+    override fun mangaDetailsRequest(manga: SManga): Request {
+        val id = manga.url.substringBeforeLast("/").substringAfterLast("/")
+        return GET("$baseUrl/api/mangas/$id", apiHeaders)
     }
 
-    private suspend fun loadChapterList(manga: SManga): List<SChapter> {
-        val response = client.get("$baseUrl/api/mangas/${mangaId(manga)}/releases?page=1", headers)
+    override fun mangaDetailsParse(response: Response): SManga {
+        val data = json.decodeFromString<MangaResponse>(response.body.string())
+        return data.mangaData?.toSManga() ?: throw Exception("Manga not found")
+    }
+
+    override fun chapterListRequest(manga: SManga): Request {
+        val id = manga.url.substringBeforeLast("/").substringAfterLast("/")
+        return GET("$baseUrl/api/mangas/$id/releases?page=1", apiHeaders)
+    }
+
+    override fun chapterListParse(response: Response): List<SChapter> {
         val data = json.decodeFromString<ReleasesResponse>(response.body.string())
         val seen = mutableSetOf<Float>()
 
@@ -154,16 +132,17 @@ abstract class GoldenRest :
             .sortedByDescending { it.chapter_number }
     }
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
+    override fun pageListRequest(chapter: SChapter): Request {
         val releaseId = chapter.url.substringAfterLast("/")
-        val response = client.get("$baseUrl/api/releases/$releaseId", headers)
-        return listOf(Page(0, response.request.url.encodedPath))
+        return GET("$baseUrl/api/releases/$releaseId", apiHeaders)
     }
+
+    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
 
     override suspend fun fetchPageText(page: Page): String {
         val releaseId = page.url.substringAfterLast("/").substringBefore("?")
 
-        val releaseResponse = client.get("$baseUrl/api/releases/$releaseId", headers)
+        val releaseResponse = client.newCall(GET("$baseUrl/api/releases/$releaseId", apiHeaders)).execute()
         val releaseBody = releaseResponse.body.string()
 
         val releaseData = try {
@@ -179,11 +158,13 @@ abstract class GoldenRest :
                 .joinToString("\n") { "<p>${it.trim()}</p>" }
         }
 
-        val downloadResponse = client.post(
-            "$baseUrl/api/releases/$releaseId/download",
-            headers,
-            "{}".toRequestBody("application/json".toMediaType()),
-        )
+        val downloadResponse = client.newCall(
+            POST(
+                "$baseUrl/api/releases/$releaseId/download",
+                apiHeaders,
+                "{}".toRequestBody("application/json".toMediaType()),
+            ),
+        ).execute()
 
         val downloadBody = downloadResponse.body.string()
 
@@ -204,16 +185,13 @@ abstract class GoldenRest :
         }
     }
 
-    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
-        val request = buildMangaDetailsRequest(manga)
-        val response = client.get(request.url, request.headers)
-        if (!response.isSuccessful) return null
-        val data = json.decodeFromString<MangaResponse>(response.body.string()).mangaData ?: return null
-        return data.toSManga()
-    }
+    override fun imageUrlParse(response: Response): String = ""
 
-    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl${manga.url}"
+
+    override fun getChapterUrl(chapter: SChapter): String = "$baseUrl${chapter.url}"
+
+    override fun getFilterList(): FilterList = FilterList(
         StatusFilter(),
         TypeFilter(),
     )
@@ -230,20 +208,31 @@ abstract class GoldenRest :
             arrayOf("الكل", "مانها", "مانهوا", "مانغا", "ويبتون"),
         )
 
+    private val mangaClient by lazy {
+        network.cloudflareClient.newBuilder()
+            .addInterceptor { chain ->
+                val request = chain.request().newBuilder()
+                    .header("Accept", "image/webp,image/apng,image/*,*/*;q=0.8")
+                    .build()
+                chain.proceed(request)
+            }
+            .build()
+    }
+
     private val coverUrl = "https://golden.rest"
 
     private fun MangaDto.toSManga(): SManga = SManga.create().apply {
-        url = mangaPathTemplate.slug("/mangas/$id/${this@toSManga.title.toSlug()}")
+        url = "/mangas/$id/${this@toSManga.title.toSlug()}"
         title = arabic_title?.takeIf { it.isNotBlank() } ?: this@toSManga.title
         thumbnail_url = if (cover.isNotBlank()) {
-            "$coverUrl/uploads/manga/cover/$id/$cover"
+            "$coverUrl/manga/cover/$id/medium_$cover"
         } else {
             ""
         }
         description = summary ?: ""
         author = this@toSManga.authors.firstOrNull()?.name
         artist = this@toSManga.artists.firstOrNull()?.name
-        genre = this@toSManga.categories.joinToString { it.name }
+        genre = this@toSManga.categories.joinToString(", ") { it.name }
         status = when (this@toSManga.storyStatus) {
             1 -> SManga.COMPLETED
             2 -> SManga.ONGOING
@@ -259,5 +248,11 @@ abstract class GoldenRest :
         .replace("-+".toRegex(), "-")
         .trim('-')
 
-    private fun parseDate(dateStr: String): Long = Instant.tryParse(dateStr)
+    private fun parseDate(dateStr: String): Long = try {
+        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
+        sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        sdf.parse(dateStr)?.time ?: 0L
+    } catch (_: Exception) {
+        0L
+    }
 }

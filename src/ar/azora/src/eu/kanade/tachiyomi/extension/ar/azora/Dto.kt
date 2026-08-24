@@ -2,9 +2,12 @@ package eu.kanade.tachiyomi.novelextension.ar.azora
 
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
+import keiyoushi.utils.tryParse
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlin.time.Instant
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.TimeZone
 
 @Serializable
 class PostsResponse(
@@ -24,7 +27,7 @@ class PostDto(
     val genres: List<GenreDto> = emptyList(),
 ) {
     fun toSManga() = SManga.create().apply {
-        url = slug
+        url = "/series/$slug"
         title = postTitle
         thumbnail_url = featuredImage
         author = alternativeTitles.trim()
@@ -65,6 +68,10 @@ class ChapterDto(
         url = "/series/$seriesSlug/$slug"
         name = title.ifEmpty { "الفصل ${this@ChapterDto.number}" }
         chapter_number = this@ChapterDto.number.toFloat()
-        date_upload = Instant.parseOrNull(createdAt)?.toEpochMilliseconds() ?: 0L
+        date_upload = dateFormat.tryParse(createdAt)
     }
+}
+
+private val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ROOT).apply {
+    timeZone = TimeZone.getTimeZone("UTC")
 }

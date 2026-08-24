@@ -1,0 +1,12 @@
+ext {
+    libVersion = '1.4'
+    extName = 'Fans MTL'
+    extClass = '.FansMTL'
+    themePkg = 'readwn'
+    baseUrl = 'https://www.fanmtl.com'
+    overrideVersionCode = 2
+    isNsfw = false
+    isNovel = true
+}
+
+apply plugin: "ns.plugins.extension.legacy"

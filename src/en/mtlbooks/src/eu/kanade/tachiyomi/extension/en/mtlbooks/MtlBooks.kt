@@ -1,65 +1,63 @@
 ﻿package eu.kanade.tachiyomi.novelextension.en.mtlbooks
 
 import android.util.Log
+import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
+import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import keiyoushi.annotation.Source
+import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.lib.chapterutils.incrementalStartPage
 import keiyoushi.lib.chapterutils.mergeChapters
 import keiyoushi.lib.chapterutils.shouldReturnExisting
-import keiyoushi.network.get
-import keiyoushi.network.post
-import keiyoushi.source.KeiSource
-import keiyoushi.utils.SlugPath
-import keiyoushi.utils.jsonInstance
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
-import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody
+import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import uy.kohesive.injekt.injectLazy
 
-@Source
-abstract class MtlBooks :
-    KeiSource(),
+class MtlBooks :
+    HttpSource(),
     NovelSource {
 
+    override val name = "MtlBooks"
+    override val baseUrl = "https://mtlbooks.com"
     private val apiUrl = "https://alpha.mtlbooks.com/api/v1"
     private val imageProxy = "https://wsrv.nl"
-    private val mangaPath = SlugPath("/novel/")
+    override val lang = "en"
+    override val supportsLatest = true
+    override val isNovelSource = true
 
-    private val json: Json = jsonInstance
+    private val json: Json by injectLazy()
 
+    override val client = network.cloudflareClient
     // ======================== Popular ========================
 
-    override suspend fun getPopularManga(page: Int): MangasPage {
+    override fun popularMangaRequest(page: Int): Request {
         val url = "$apiUrl/search/?page=$page&order=popular&sort=DESC&source=all"
-        return parseSearchResponse(client.get(url, headers))
+        return GET(url, headers)
     }
 
-    private fun parseSearchResponse(response: Response): MangasPage {
+    override fun popularMangaParse(response: Response): MangasPage {
         val apiResponse = json.decodeFromString<SearchResponse>(response.body.string())
 
         val novels = apiResponse.result.data.map { novel ->
             SManga.create().apply {
-                url = novel.slug
+                url = "/novel/${novel.slug}"
                 title = novel.name
                 thumbnail_url = buildImageUrl(novel.thumbnail)
                 author = novel.users?.name
                 description = novel.description
-                genre = (novel.genres + novel.tags).joinToString()
+                genre = (novel.genres + novel.tags).joinToString(", ")
                 status = when (novel.status.lowercase()) {
                     "ongoing" -> SManga.ONGOING
                     "completed" -> SManga.COMPLETED
@@ -74,27 +72,26 @@ abstract class MtlBooks :
     }
     // ======================== Latest ========================
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage {
+    override fun latestUpdatesRequest(page: Int): Request {
         val url = "$apiUrl/search/?page=$page&order=recent&sort=DESC&source=all"
-        return parseSearchResponse(client.get(url, headers))
+        return GET(url, headers)
     }
+
+    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
     // ======================== Search ========================
 
-    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val slug = url.toString().substringAfter("/novel/", "")
-            .substringBefore('?')
-            .substringBefore('#')
-            .trim('/')
-            .substringBefore('/')
-        if (slug.isBlank()) return null
-        return try {
-            parseMangaDetails(client.get("$apiUrl/novels/$slug", headers).body.string())
-        } catch (_: Exception) {
-            null
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+        if (query.startsWith("http")) {
+            val slug = query.substringAfter("/novel/", "")
+                .substringBefore('?')
+                .substringBefore('#')
+                .trim('/')
+                .substringBefore('/')
+            if (slug.isNotBlank()) {
+                return GET("$apiUrl/novels/$slug", headers)
+            }
         }
-    }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val params = mutableListOf<String>()
         params.add("page=$page")
 
@@ -180,33 +177,45 @@ abstract class MtlBooks :
         }
 
         val url = "$apiUrl/search/?${params.joinToString("&")}"
-        return parseSearchResponse(client.get(url, headers))
+        return GET(url, headers)
+    }
+
+    override fun searchMangaParse(response: Response): MangasPage {
+        // Single-novel lookup from a URL search
+        if (response.request.url.encodedPath.contains("/novels/")) {
+            return try {
+                MangasPage(listOf(mangaDetailsParse(response)), false)
+            } catch (_: Exception) {
+                MangasPage(emptyList(), false)
+            }
+        }
+        return popularMangaParse(response)
     }
     // ======================== Details ========================
 
-    private fun buildMangaDetailsUrl(manga: SManga): String {
+    override fun mangaDetailsRequest(manga: SManga): Request {
         val slug = manga.url.substringAfter("/novel/")
-        return "$apiUrl/novels/$slug"
+        return GET("$apiUrl/novels/$slug", headers)
     }
 
     // Webview should open the site page, not the JSON API endpoint
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = baseUrl + manga.url
 
     // chapter.url is the site path; strip the "/chapter/" segment of legacy entries
     override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapter.url.replace("/chapter/", "/")
 
-    private fun parseMangaDetails(body: String): SManga {
-        val apiResponse = json.decodeFromString<NovelDetailResponse>(body)
+    override fun mangaDetailsParse(response: Response): SManga {
+        val apiResponse = json.decodeFromString<NovelDetailResponse>(response.body.string())
         val novel = apiResponse.result
 
         return SManga.create().apply {
-            url = novel.slug
+            url = "/novel/${novel.slug}"
             title = novel.name
             thumbnail_url = buildImageUrl(novel.thumbnail)
             author = novel.users?.name
             description = novel.description
             // Include both genres and tags
-            genre = (novel.genres + novel.tags).joinToString()
+            genre = (novel.genres + novel.tags).joinToString(", ")
             status = when (novel.status.lowercase()) {
                 "ongoing" -> SManga.ONGOING
                 "completed" -> SManga.COMPLETED
@@ -217,46 +226,29 @@ abstract class MtlBooks :
     }
     // ======================== Chapters ========================
 
-    private fun buildChapterListBody(slug: String, page: Int = 1): RequestBody = json.encodeToString(
-        ChapterListRequest.serializer(),
-        ChapterListRequest(slug, page, "ASC"),
-    ).toRequestBody("application/json".toMediaType())
-
-    override suspend fun fetchMangaUpdate(
-        manga: SManga,
-        chapters: List<SChapter>,
-        fetchDetails: Boolean,
-        fetchChapters: Boolean,
-    ): SMangaUpdate = coroutineScope {
-        // Details and chapters come from different endpoints - fire both concurrently when both
-        // flags are set, rather than awaiting them sequentially.
-        val detailsDeferred = if (fetchDetails) {
-            async { parseMangaDetails(client.get(buildMangaDetailsUrl(manga), headers).body.string()) }
-        } else {
-            null
-        }
-        val chaptersDeferred = if (fetchChapters) async { fetchChapterList(manga, chapters) } else null
-
-        SMangaUpdate(
-            manga = detailsDeferred?.await() ?: manga,
-            chapters = chaptersDeferred?.await() ?: chapters,
-        )
+    override fun chapterListRequest(manga: SManga): Request {
+        val slug = manga.url.substringAfter("/novel/")
+        val body = json.encodeToString(
+            ChapterListRequest.serializer(),
+            ChapterListRequest(slug, 1, "ASC"),
+        ).toRequestBody("application/json".toMediaType())
+        return POST("$apiUrl/chapters/list", headers, body)
     }
 
-    private suspend fun fetchChapterList(manga: SManga, existingChapters: List<SChapter>): List<SChapter> {
+    override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
         val slug = manga.url.substringAfter("/novel/")
 
         // Page 1 is always required for the total chapter count. The API sometimes returns a
         // result missing the expected fields instead of an HTTP error - fall back to the cached
         // list rather than crash when we have one.
-        val page1Response = client.post("$apiUrl/chapters/list", headers, buildChapterListBody(slug))
+        val page1Response = client.newCall(chapterListRequest(manga)).execute()
         val page1Body = page1Response.body.string()
         val page1 = try {
             json.decodeFromString<ChapterListResponse>(page1Body)
         } catch (e: Exception) {
-            if (existingChapters.isNotEmpty()) {
-                Log.w(TAG, "fetchChapterList: page 1 decode failed (${page1Response.code}), keeping existing - ${e.message}")
-                return existingChapters
+            if (context.existingChapters.isNotEmpty()) {
+                Log.w(TAG, "getChapterList: page 1 decode failed (${page1Response.code}), keeping existing - ${e.message}")
+                return context.existingChapters
             }
             throw Exception("MTLBooks chapter list error (${page1Response.code}): ${page1Body.take(200)}")
         }
@@ -266,17 +258,17 @@ abstract class MtlBooks :
         val totalPages = (total + limit - 1) / limit
         val novelSlug = page1.result.novelSlug
 
-        Log.d(TAG, "fetchChapterList: slug=$slug existing=${existingChapters.size} siteTotal=$total totalPages=$totalPages")
+        Log.d(TAG, "getChapterList: slug=$slug existing=${context.existingChapters.size} siteTotal=$total totalPages=$totalPages")
 
-        if (shouldReturnExisting(existingChapters.size, total)) {
-            Log.d(TAG, "fetchChapterList: count unchanged — returning existing")
-            return existingChapters
+        if (shouldReturnExisting(context.existingChapters.size, total)) {
+            Log.d(TAG, "getChapterList: count unchanged — returning existing")
+            return context.existingChapters
         }
 
-        val existingCount = existingChapters.size
+        val existingCount = context.existingChapters.size
         val startPage = if (existingCount > 0) incrementalStartPage(existingCount, limit) else 1
         val keepCount = (startPage - 1) * limit
-        Log.d(TAG, "fetchChapterList: startPage=$startPage keepCount=$keepCount")
+        Log.d(TAG, "getChapterList: startPage=$startPage keepCount=$keepCount")
 
         val freshChapters = mutableListOf<SChapter>()
 
@@ -287,18 +279,22 @@ abstract class MtlBooks :
 
         for (page in maxOf(startPage, 2)..totalPages) {
             try {
+                val body = json.encodeToString(
+                    ChapterListRequest.serializer(),
+                    ChapterListRequest(novelSlug, page, "ASC"),
+                ).toRequestBody("application/json".toMediaType())
                 val pageData = json.decodeFromString<ChapterListResponse>(
-                    client.post("$apiUrl/chapters/list", headers, buildChapterListBody(novelSlug, page)).body.string(),
+                    client.newCall(POST("$apiUrl/chapters/list", headers, body)).execute().body.string(),
                 )
                 pageData.result.chapterLists.forEach { freshChapters.add(chapterItemToSChapter(novelSlug, it)) }
             } catch (e: Exception) {
-                Log.w(TAG, "fetchChapterList: page $page failed — ${e.message}")
+                Log.w(TAG, "getChapterList: page $page failed — ${e.message}")
                 break
             }
         }
 
-        Log.d(TAG, "fetchChapterList: fresh=${freshChapters.size} keep=$keepCount")
-        return mergeChapters(existingChapters, freshChapters, keepCount).reversed()
+        Log.d(TAG, "getChapterList: fresh=${freshChapters.size} keep=$keepCount")
+        return mergeChapters(context.existingChapters, freshChapters, keepCount).reversed()
     }
 
     private fun chapterItemToSChapter(novelSlug: String, ch: ChapterItem): SChapter = SChapter.create().apply {
@@ -306,13 +302,66 @@ abstract class MtlBooks :
         name = ch.chapterTitle
         chapter_number = ch.chapterNumber.toFloat()
     }
+
+    // Fallback path for when getChapterList is not used; performs a full fetch with no optimisation.
+    override fun chapterListParse(response: Response): List<SChapter> {
+        val body = response.body.string()
+        val firstPage = try {
+            json.decodeFromString<ChapterListResponse>(body)
+        } catch (e: Exception) {
+            throw Exception("MTLBooks chapter list error (${response.code}): ${body.take(200)}")
+        }
+        val totalPages = (firstPage.result.pagination.total + firstPage.result.pagination.limit - 1) / firstPage.result.pagination.limit
+        val novelSlug = firstPage.result.novelSlug
+
+        val chapters = firstPage.result.chapterLists.map { chapterItemToSChapter(novelSlug, it) }.toMutableList()
+
+        for (page in 2..totalPages) {
+            try {
+                val body = json.encodeToString(
+                    ChapterListRequest.serializer(),
+                    ChapterListRequest(novelSlug, page, "ASC"),
+                ).toRequestBody("application/json".toMediaType())
+                val pageData = json.decodeFromString<ChapterListResponse>(
+                    client.newCall(POST("$apiUrl/chapters/list", headers, body)).execute().body.string(),
+                )
+                pageData.result.chapterLists.forEach { chapters.add(chapterItemToSChapter(novelSlug, it)) }
+            } catch (_: Exception) {
+                break
+            }
+        }
+
+        return chapters.reversed()
+    }
     // ======================== Pages ========================
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
+    override fun pageListRequest(chapter: SChapter): Request {
+        // "/novel/<slug>/<chapterSlug>" (current) or "/novel/<slug>/chapter/<chapterSlug>" (legacy)
+        val parts = chapter.url.trim('/').split("/")
+        val novelSlug = parts.getOrNull(1) ?: ""
+        val chapterSlug = parts.lastOrNull() ?: ""
+
+        val body = json.encodeToString(
+            ChapterReadRequest.serializer(),
+            ChapterReadRequest(novelSlug, chapterSlug),
+        ).toRequestBody("application/json".toMediaType())
+
+        return POST("$apiUrl/chapters/read", headers, body)
+    }
+
+    override fun pageListParse(response: Response): List<Page> {
+        val chapterResponse = json.decodeFromString<ChapterReadResponse>(response.body.string())
+        val novelSlug = chapterResponse.result.novelSlug
+        val chapterSlug = chapterResponse.result.chapter.chapterSlug
+
+        return listOf(Page(0, "mtlbooks://$novelSlug/$chapterSlug"))
+    }
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        // page.url shape: /novel/{novelSlug}/{chapterSlug}, or legacy /novel/{novelSlug}/chapter/{chapterSlug}
+        // chapter.url shape: /novel/{novelSlug}/{chapterSlug}, or legacy
+        // /novel/{novelSlug}/chapter/{chapterSlug}. Take the last segment for the chapter slug so
+        // the legacy "chapter" path piece never gets sent as the slug itself.
         val parts = page.url.trim('/').split("/")
         val novelSlug = parts.getOrNull(1) ?: ""
         val chapterSlug = parts.lastOrNull() ?: ""
@@ -322,7 +371,7 @@ abstract class MtlBooks :
             ChapterReadRequest(novelSlug, chapterSlug),
         ).toRequestBody("application/json".toMediaType())
 
-        val response = client.post("$apiUrl/chapters/read", headers, body)
+        val response = client.newCall(POST("$apiUrl/chapters/read", headers, body)).execute()
         val responseBody = response.body.string()
         if (!response.isSuccessful) {
             throw Exception("MTLBooks server error (${response.code}): ${responseBody.take(200)}")
@@ -334,17 +383,18 @@ abstract class MtlBooks :
         return if (rawContent.isNullOrBlank()) {
             "<p>No content available for this chapter.</p>"
         } else {
-            buildString {
-                rawContent.split("\n").filter { it.isNotBlank() }.forEach { line ->
-                    append("<p>${line.trim()}</p>\n")
-                }
-            }.ifEmpty { "<p>No content available.</p>" }
+            val content = StringBuilder()
+            rawContent.split("\n").filter { it.isNotBlank() }.forEach { line ->
+                content.append("<p>${line.trim()}</p>\n")
+            }
+            content.toString().ifEmpty { "<p>No content available.</p>" }
         }
     }
 
+    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
     // ======================== Filters ========================
 
-    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
+    override fun getFilterList(): FilterList = FilterList(
         OrderFilter("Order By", orderOptions.map { it.first }.toTypedArray()),
         SortFilter("Sort", sortOptions.map { it.first }.toTypedArray()),
         WordCountFilter("Word Count", wordCountOptions.map { it.first }.toTypedArray()),
@@ -426,18 +476,18 @@ abstract class MtlBooks :
     // ======================== Data Classes ========================
 
     @Serializable
-    class SearchResponse(
+    data class SearchResponse(
         val status: Int,
         val result: SearchResult,
     )
 
     @Serializable
-    class SearchResult(
+    data class SearchResult(
         val data: List<NovelItem>,
     )
 
     @Serializable
-    class NovelItem(
+    data class NovelItem(
         val name: String,
         val slug: String,
         @SerialName("alt_name") val altName: List<String> = emptyList(),
@@ -452,19 +502,19 @@ abstract class MtlBooks :
     )
 
     @Serializable
-    class AuthorInfo(
+    data class AuthorInfo(
         val id: Int? = null,
         val name: String? = null,
     )
 
     @Serializable
-    class NovelDetailResponse(
+    data class NovelDetailResponse(
         val status: Int,
         val result: NovelDetail,
     )
 
     @Serializable
-    class NovelDetail(
+    data class NovelDetail(
         val id: Int,
         val name: String,
         val slug: String,
@@ -479,62 +529,62 @@ abstract class MtlBooks :
     )
 
     @Serializable
-    class ChapterListRequest(
-        @SerialName("novel_slug") private val novelSlug: String,
-        private val page: Int,
-        private val order: String,
+    data class ChapterListRequest(
+        @SerialName("novel_slug") val novelSlug: String,
+        val page: Int,
+        val order: String,
     )
 
     @Serializable
-    class ChapterListResponse(
+    data class ChapterListResponse(
         val status: Int,
         val result: ChapterListResult,
     )
 
     @Serializable
-    class ChapterListResult(
+    data class ChapterListResult(
         @SerialName("novel_slug") val novelSlug: String,
-        @SerialName("total_chapters") private val totalChapters: Int,
+        @SerialName("total_chapters") val totalChapters: Int,
         @SerialName("chapter_lists") val chapterLists: List<ChapterItem>,
         val pagination: Pagination,
     )
 
     @Serializable
-    class ChapterItem(
+    data class ChapterItem(
         @SerialName("chapter_number") val chapterNumber: Int,
         @SerialName("chapter_title") val chapterTitle: String,
         @SerialName("chapter_slug") val chapterSlug: String,
     )
 
     @Serializable
-    class Pagination(
-        private val page: Int,
+    data class Pagination(
+        val page: Int,
         val limit: Int,
         val total: Int,
     )
 
     @Serializable
-    class ChapterReadRequest(
-        @SerialName("novel_slug") private val novelSlug: String,
-        @SerialName("chapter_slug") private val chapterSlug: String,
+    data class ChapterReadRequest(
+        @SerialName("novel_slug") val novelSlug: String,
+        @SerialName("chapter_slug") val chapterSlug: String,
     )
 
     @Serializable
-    class ChapterReadResponse(
+    data class ChapterReadResponse(
         val status: Int,
         val result: ChapterReadResult,
     )
 
     @Serializable
-    class ChapterReadResult(
+    data class ChapterReadResult(
         @SerialName("novel_slug") val novelSlug: String,
         val chapter: ChapterContent,
     )
 
     @Serializable
-    class ChapterContent(
-        @SerialName("chapter_number") private val chapterNumber: Int,
-        @SerialName("chapter_title") private val chapterTitle: String,
+    data class ChapterContent(
+        @SerialName("chapter_number") val chapterNumber: Int,
+        @SerialName("chapter_title") val chapterTitle: String,
         @SerialName("chapter_slug") val chapterSlug: String,
         val content: String? = null,
     )

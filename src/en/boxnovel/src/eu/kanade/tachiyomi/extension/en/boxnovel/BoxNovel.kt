@@ -4,19 +4,19 @@ import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
-import keiyoushi.annotation.Source
-import keiyoushi.utils.SlugPath
-import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 
-@Source
-abstract class BoxNovel : MadaraNovel() {
+class BoxNovel :
+    MadaraNovel(
+        baseUrl = "https://novelnice.com",
+        name = "BoxNovel",
+        lang = "en",
+    ) {
     override val useNewChapterEndpointDefault = true
     override val reverseChapterListDefault = true
-    override val mangaPathTemplate = SlugPath("/read/")
 
-    override fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val url = "$baseUrl/page/$page/".toHttpUrl().newBuilder()
             .addQueryParameter("s", query)
             .addQueryParameter("post_type", "wp-manga")
@@ -70,7 +70,7 @@ abstract class BoxNovel : MadaraNovel() {
         return GET(url.build(), headers)
     }
 
-    override fun getFilterList(data: JsonElement?) = FilterList(
+    override fun getFilterList() = FilterList(
         AuthorFilter(),
         ArtistFilter(),
         YearFilter(),

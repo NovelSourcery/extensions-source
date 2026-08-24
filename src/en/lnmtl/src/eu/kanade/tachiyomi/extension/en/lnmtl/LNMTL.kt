@@ -1,28 +1,25 @@
 package eu.kanade.tachiyomi.novelextension.en.lnmtl
 
+import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
-import keiyoushi.annotation.Source
-import keiyoushi.network.get
-import keiyoushi.source.KeiSource
-import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Headers
-import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
+import rx.Observable
 
 /**
  * LNMTL (lnmtl.com). Machine-translated Chinese web novels. There is no CatalogueSource here
@@ -40,14 +37,17 @@ import org.jsoup.nodes.Document
  * nested `<w>/<t>` spans (one per translated word/term, `data-title` holds the original Chinese) -
  * Jsoup's `.text()` on the sentence flattens those back into a normal (if roughly MTL'd) sentence.
  */
-@Source
-abstract class LNMTL :
-    KeiSource(),
+class LNMTL :
+    HttpSource(),
     NovelSource {
 
+    override val name = "LNMTL"
+    override val baseUrl = "https://lnmtl.com"
+    override val lang = "en"
     override val supportsLatest = true
+    override val isNovelSource = true
 
-    override fun Headers.Builder.configureHeaders(): Headers.Builder = this
+    override fun headersBuilder(): Headers.Builder = super.headersBuilder()
         .add(
             "User-Agent",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
@@ -55,28 +55,25 @@ abstract class LNMTL :
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    /** [SManga.url] is stored as the bare slug under `/novel/`; a stored value starting with
-     * "/" is a pre-existing full-path entry and is resolved unchanged. */
-    private val mangaPath = SlugPath("/novel/")
-
-    /** Stores [SManga.url] as a bare slug via [mangaPath]. */
-    private fun SManga.setSlugUrl(href: String) {
-        setUrlWithoutDomain(href)
-        url = mangaPath.slug(url)
-    }
-
     // ======================== Browse ========================
 
-    private fun novelListUrl(page: Int, orderBy: String): HttpUrl = "$baseUrl/novel".toHttpUrl().newBuilder()
-        .addQueryParameter("orderBy", orderBy)
-        .addQueryParameter("order", "desc")
-        .addQueryParameter("filter", "all")
-        .addQueryParameter("page", page.toString())
-        .build()
+    override fun popularMangaRequest(page: Int): Request = novelListRequest(page, "favourites")
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelListing(client.get(novelListUrl(page, "favourites"), headers))
+    override fun latestUpdatesRequest(page: Int): Request = novelListRequest(page, "date")
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelListing(client.get(novelListUrl(page, "date"), headers))
+    private fun novelListRequest(page: Int, orderBy: String): Request {
+        val url = "$baseUrl/novel".toHttpUrl().newBuilder()
+            .addQueryParameter("orderBy", orderBy)
+            .addQueryParameter("order", "desc")
+            .addQueryParameter("filter", "all")
+            .addQueryParameter("page", page.toString())
+            .build()
+        return GET(url, headers)
+    }
+
+    override fun popularMangaParse(response: Response): MangasPage = parseNovelListing(response)
+
+    override fun latestUpdatesParse(response: Response): MangasPage = parseNovelListing(response)
 
     private fun parseNovelListing(response: Response): MangasPage {
         val doc = response.asJsoup()
@@ -85,7 +82,7 @@ abstract class LNMTL :
             val img = a.selectFirst("img") ?: return@mapNotNull null
             if (href.isBlank()) return@mapNotNull null
             SManga.create().apply {
-                setSlugUrl(href)
+                setUrlWithoutDomain(href)
                 title = img.attr("alt")
                 thumbnail_url = img.attr("abs:src")
             }
@@ -100,9 +97,15 @@ abstract class LNMTL :
 
     private val searchPageSize = 20
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = throw UnsupportedOperationException("handled in fetchSearchManga")
+
+    override fun searchMangaParse(response: Response): MangasPage = throw UnsupportedOperationException("handled in fetchSearchManga")
+
+    override fun fetchSearchManga(page: Int, query: String, filters: FilterList): Observable<MangasPage> = Observable.fromCallable { searchMangaBlocking(page, query) }
+
+    private fun searchMangaBlocking(page: Int, query: String): MangasPage {
         val indexUrl = searchIndexUrl()
-        val body = client.get(indexUrl, headers).use { it.body.string() }
+        val body = client.newCall(GET(indexUrl, headers)).execute().use { it.body.string() }
         val all = json.parseToJsonElement(body).jsonArray
 
         fun normalize(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
@@ -114,7 +117,7 @@ abstract class LNMTL :
             if (needle.isNotEmpty() && !normalize(name).contains(needle)) return@mapNotNull null
             val slug = item["slug"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
             SManga.create().apply {
-                setSlugUrl("$baseUrl/novel/$slug")
+                setUrlWithoutDomain("$baseUrl/novel/$slug")
                 title = name
                 thumbnail_url = item["image"]?.jsonPrimitive?.contentOrNull
             }
@@ -126,8 +129,8 @@ abstract class LNMTL :
         return MangasPage(matches.subList(from, to), to < matches.size)
     }
 
-    private suspend fun searchIndexUrl(): String {
-        val home = client.get(baseUrl, headers).use { it.asJsoup() }
+    private fun searchIndexUrl(): String {
+        val home = client.newCall(GET(baseUrl, headers)).execute().use { it.asJsoup() }
         val prefetchRegex = Regex("""prefetch:\s*'(/[^']+\.json)""")
         for (script in home.select("footer script")) {
             val match = prefetchRegex.find(script.data()) ?: continue
@@ -136,58 +139,44 @@ abstract class LNMTL :
         throw Exception("Could not find LNMTL search catalogue url")
     }
 
-    // ======================== Details + Chapters ========================
+    // ======================== Details ========================
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl${manga.url}"
 
-    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val manga = SManga.create().apply { this.url = mangaPath.slug(url.encodedPath) }
-        val response = client.get(buildMangaDetailsUrl(manga), headers, ensureSuccess = false)
-        if (!response.isSuccessful) return null
-        return parseMangaDetails(response.asJsoup()).apply { this.url = manga.url }
-    }
+    override fun mangaDetailsRequest(manga: SManga): Request = GET("$baseUrl${manga.url}", headers)
 
-    private fun buildMangaDetailsUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    override fun mangaDetailsParse(response: Response): SManga {
+        val doc = response.asJsoup()
+        return SManga.create().apply {
+            val cover = doc.selectFirst("img.img-rounded")
+            title = cover?.attr("title").orEmpty()
+            thumbnail_url = cover?.attr("abs:src")
 
-    override suspend fun fetchMangaUpdate(
-        manga: SManga,
-        chapters: List<SChapter>,
-        fetchDetails: Boolean,
-        fetchChapters: Boolean,
-    ): SMangaUpdate {
-        // Details and the chapter volumes list both live on the same novel page - fetch it once.
-        val doc = client.get(buildMangaDetailsUrl(manga), headers).asJsoup()
+            author = doc.selectFirst("dt:containsOwn(Authors) ~ dd")?.text()?.trim()
 
-        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
-        val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
+            status = when (doc.selectFirst("dt:containsOwn(Current status) ~ dd")?.text()?.trim()) {
+                "Ongoing" -> SManga.ONGOING
+                "Completed" -> SManga.COMPLETED
+                else -> SManga.UNKNOWN
+            }
 
-        return SMangaUpdate(updatedManga, updatedChapters)
-    }
+            genre = doc.select("div.panel-heading:containsOwn(Genres) ~ div.panel-body ul.list-inline li a")
+                .joinToString(", ") { it.text().trim() }
 
-    private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
-        val cover = doc.selectFirst("img.img-rounded")
-        title = cover?.attr("title").orEmpty()
-        thumbnail_url = cover?.attr("abs:src")
-
-        author = doc.selectFirst("dt:containsOwn(Authors) ~ dd")?.text()
-
-        status = when (doc.selectFirst("dt:containsOwn(Current status) ~ dd")?.text()) {
-            "Ongoing" -> SManga.ONGOING
-            "Completed" -> SManga.COMPLETED
-            else -> SManga.UNKNOWN
+            description = doc.select("div.description p").joinToString("\n\n") { it.text().trim() }
+                .ifBlank { null }
         }
-
-        genre = doc.select("div.panel-heading:containsOwn(Genres) ~ div.panel-body ul.list-inline li a")
-            .joinToString { it.text() }
-
-        description = doc.select("div.description p").joinToString("\n\n") { it.text() }
-            .ifBlank { null }
     }
 
+    // ======================== Chapters ========================
     // The novel page embeds `lnmtl.volumes = [...]`; each volume's chapters live behind a
     // paginated `/chapter?volumeId=X&page=N` JSON endpoint. Building the full chapter list means
     // walking every volume's every page - there is no single "give me everything" endpoint.
-    private suspend fun parseChapterList(doc: Document): List<SChapter> {
+
+    override fun chapterListRequest(manga: SManga): Request = mangaDetailsRequest(manga)
+
+    override fun chapterListParse(response: Response): List<SChapter> {
+        val doc = response.asJsoup()
         val volumesJson = doc.select("script").map { it.data() }
             .firstNotNullOfOrNull { Regex("""lnmtl\.volumes\s*=\s*(\[.+?])\s*;""").find(it) }
             ?: return emptyList()
@@ -203,7 +192,7 @@ abstract class LNMTL :
                     .addQueryParameter("volumeId", volumeId)
                     .addQueryParameter("page", page.toString())
                     .build()
-                val pageBody = client.get(url, headers).use { it.body.string() }
+                val pageBody = client.newCall(GET(url, headers)).execute().use { it.body.string() }
                 val pageJson = json.parseToJsonElement(pageBody).jsonObject
                 lastPage = pageJson["last_page"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 1
                 val data = pageJson["data"]?.jsonArray ?: break
@@ -235,20 +224,23 @@ abstract class LNMTL :
 
     // ======================== Content ========================
     // Single metadata page per chapter; the real fetch happens in fetchPageText.
+    override fun pageListRequest(chapter: SChapter): Request = throw UnsupportedOperationException("Not used")
+    override fun pageListParse(response: Response): List<Page> = throw UnsupportedOperationException("Not used")
+    override fun fetchPageList(chapter: SChapter): Observable<List<Page>> = Observable.just(listOf(Page(0, chapter.url)))
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
+    override fun imageUrlParse(response: Response): String = ""
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.get("$baseUrl${page.url}", headers).use { it.asJsoup() }
+        val doc = client.newCall(GET("$baseUrl${page.url}", headers)).execute().use { it.asJsoup() }
         return extractChapterText(doc)
     }
 
     // Sentences are flat siblings in the source HTML (translated/original alternating, no
     // paragraph wrapper) - one <p> per sentence matches the site's own rendering.
     private fun extractChapterText(doc: Document): String = doc.select("sentence.translated")
-        .map { it.text().replace('„', '"') }
+        .map { it.text().trim().replace('„', '"') }
         .filter { it.isNotEmpty() }
         .joinToString("") { "<p>$it</p>" }
 
-    override fun getFilterList(data: JsonElement?): FilterList = FilterList()
+    override fun getFilterList(): FilterList = FilterList()
 }

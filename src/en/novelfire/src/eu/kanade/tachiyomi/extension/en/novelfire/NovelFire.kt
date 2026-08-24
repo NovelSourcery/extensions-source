@@ -17,33 +17,28 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import eu.kanade.tachiyomi.util.asJsoup
-import keiyoushi.annotation.Source
+import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.lib.chapterutils.checkCloudflare
 import keiyoushi.lib.chapterutils.paginatedChapterList
 import keiyoushi.lib.chapterutils.shouldReturnExisting
-import keiyoushi.network.get
+import keiyoushi.lib.chapterutils.sortByChapterNumber
 import keiyoushi.network.rateLimit
-import keiyoushi.source.KeiSource
-import keiyoushi.utils.SlugPath
-import keiyoushi.utils.parseAs
-import keiyoushi.utils.toJsonString
-import keiyoushi.utils.tryParseDateTime
+import keiyoushi.utils.tryParse
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonElement
-import okhttp3.HttpUrl
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
+import uy.kohesive.injekt.injectLazy
 import java.io.File
-import java.time.format.DateTimeFormatter
+import java.text.SimpleDateFormat
 
 /**
  * NovelFire novel source - ported from LN Reader plugin
@@ -53,16 +48,20 @@ import java.time.format.DateTimeFormatter
  *
  * NovelFire rebranded to Novel Phoenix (novelphoenix.com) on the same backend - same DOM,
  * same endpoints, only the domain and the novel path segment changed (/book/ -> /novel/).
- * The source `id` is pinned (in build.gradle.kts) to the pre-rebrand value so existing
- * libraries migrate without a source change; absoluteUrl() rewrites any /book/ paths still
- * stored from before the move.
+ * [id] is pinned to the pre-rebrand value so existing libraries migrate without a source
+ * change; absoluteUrl() rewrites any /book/ paths still stored from before the move.
  */
-@Source
-abstract class NovelFire :
-    KeiSource(),
+class NovelFire :
+    HttpSource(),
     NovelSource,
     ConfigurableSource,
     RateLimited {
+
+    override val name = "Novel Phoenix"
+    override val id = 7165539527173321330L
+    override val baseUrl = "https://novelphoenix.com"
+    override val lang = "en"
+    override val supportsLatest = true
 
     // NovelFire actively detects and blocks rapid requests server-side (see
     // NovelFireThrottlingError below), so this self-throttle is a real floor, not a formality -
@@ -72,10 +71,13 @@ abstract class NovelFire :
     override val recommendedDelayMillis = 1500L
     override val recommendedPermits = 2
 
-    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = rateLimit(minimumDelayMillis, recommendedPermits)
+    override val client = network.client.newBuilder()
+        .rateLimit(minimumDelayMillis, recommendedPermits)
+        .build()
+    private val json: Json by injectLazy()
 
     override val isNovelSource = true
-    private val dateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+    private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
 
     // SharedPreferences for tag caching and settings
     private val preferences: SharedPreferences by lazy {
@@ -98,10 +100,10 @@ abstract class NovelFire :
     // ======================== Tag Caching ========================
 
     @Serializable
-    class TagItem(val id: Int, val name: String)
+    data class TagItem(val id: Int, val name: String)
 
     @Serializable
-    class TagResponse(val status: Int = 0, val data: List<TagItem> = emptyList())
+    data class TagResponse(val status: Int = 0, val data: List<TagItem> = emptyList())
 
     /**
      * Load cached tags from SharedPreferences into memory.
@@ -110,7 +112,7 @@ abstract class NovelFire :
         if (tagCache.isNotEmpty()) return tagCache
         val cached = preferences.getString(TAGS_CACHE_KEY, null) ?: return emptyList()
         return try {
-            cached.parseAs<List<TagItem>>().also { tagCache = it }
+            json.decodeFromString<List<TagItem>>(cached).also { tagCache = it }
         } catch (e: Exception) {
             emptyList()
         }
@@ -120,13 +122,14 @@ abstract class NovelFire :
      * Fetch all tags from the NovelFire AJAX endpoint and cache them.
      * Called lazily on first search that uses tags.
      */
-    private suspend fun fetchAndCacheTags(): List<TagItem> = try {
-        val response = client.get("$baseUrl/ajax/getTags?term=", headers)
-        val tagResponse = response.body.string().parseAs<TagResponse>()
+    private fun fetchAndCacheTags(): List<TagItem> = try {
+        val response = client.newCall(GET("$baseUrl/ajax/getTags?term=", headers)).execute()
+        val body = response.body.string()
+        val tagResponse = json.decodeFromString<TagResponse>(body)
         val tags = tagResponse.data
         if (tags.isNotEmpty()) {
             preferences.edit()
-                .putString(TAGS_CACHE_KEY, tags.toJsonString())
+                .putString(TAGS_CACHE_KEY, json.encodeToString(tags))
                 .putLong(TAGS_CACHE_TIME_KEY, System.currentTimeMillis())
                 .apply()
             tagCache = tags
@@ -140,7 +143,7 @@ abstract class NovelFire :
      * Get tags, using cache if available, otherwise fetching from network.
      * Refreshes cache if older than 7 days.
      */
-    private suspend fun getTags(): List<TagItem> {
+    private fun getTags(): List<TagItem> {
         val cached = loadCachedTags()
         if (cached.isNotEmpty()) {
             val cacheTime = preferences.getLong(TAGS_CACHE_TIME_KEY, 0L)
@@ -176,6 +179,8 @@ abstract class NovelFire :
         preferences.edit().putBoolean(LEGACY_CACHE_CLEANED_KEY, true).apply()
     }
 
+    override fun imageUrlParse(response: Response): String = ""
+
     // Normalize an href (absolute, root-relative or bare-relative) to a leading-slash path so
     // baseUrl + url always joins with a single slash, even when delegated via a mirror base URL.
     private fun String.toNovelPath(): String {
@@ -200,43 +205,31 @@ abstract class NovelFire :
         return baseUrl.trimEnd('/') + "/" + migratedPath
     }
 
-    // New entries store the bare slug; resolve() reconstructs "/novel/<slug>" for those, while
-    // legacy full-path entries (old "/book/..." or "/novel/...") pass through unchanged here and
-    // get their book->novel rewrite from absoluteUrl() itself.
-    private val mangaPath = SlugPath("/novel/")
-
-    // The rebrand means urls stored before the move still point at /book/ - route WebView/share
-    // links through absoluteUrl() too, or they'd 404 on the new domain.
-    override fun getMangaUrl(manga: SManga): String = absoluteUrl(mangaPath.resolve(manga.url))
-
-    override fun getChapterUrl(chapter: SChapter): String = absoluteUrl(chapter.url)
-
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(absoluteUrl(page.url), headers)
+        val response = client.newCall(GET(absoluteUrl(page.url), headers)).execute()
         return parseChapterContent(response)
     }
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val path = absoluteUrl(chapter.url).toHttpUrl().encodedPath
-        return listOf(Page(0, path))
+    // ======================== Popular/Browse ========================
+
+    override fun popularMangaRequest(page: Int): Request {
+        val filters = getFilterList()
+        return searchMangaRequest(page, "", filters)
     }
 
-    // ======================== Popular/Browse/Search ========================
+    override fun popularMangaParse(response: Response): MangasPage = searchMangaParse(response)
 
-    private suspend fun fetchNovelList(request: Request): MangasPage {
-        val response = client.get(request.url, request.headers)
-        val doc = response.asJsoup()
+    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/search-adv?ctgcon=and&totalchapter=0&ratcon=min&rating=0&status=-1&sort=date&tagcon=and&page=$page", headers)
+
+    override fun latestUpdatesParse(response: Response): MangasPage {
+        val doc = Jsoup.parse(response.body.string())
         checkCloudflare(doc)
         return parseNovelList(doc)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = fetchNovelList(buildSearchRequest(page, "", getFilterList()))
+    // ======================== Search ========================
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = fetchNovelList(GET("$baseUrl/search-adv?ctgcon=and&totalchapter=0&ratcon=min&rating=0&status=-1&sort=date&tagcon=and&page=$page", headers))
-
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = fetchNovelList(buildSearchRequest(page, query, filters))
-
-    private suspend fun buildSearchRequest(page: Int, query: String, filters: FilterList): Request {
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         // If there's a search query, use the simple search endpoint
         if (query.isNotEmpty()) {
             return GET("$baseUrl/search?keyword=${java.net.URLEncoder.encode(query, "UTF-8")}&page=$page", headers)
@@ -320,6 +313,12 @@ abstract class NovelFire :
         return GET(url.build(), headers)
     }
 
+    override fun searchMangaParse(response: Response): MangasPage {
+        val doc = Jsoup.parse(response.body.string())
+        checkCloudflare(doc)
+        return parseNovelList(doc)
+    }
+
     private fun parseNovelList(doc: Document): MangasPage {
         val novels = doc.select(".novel-item").mapNotNull { element ->
             try {
@@ -338,7 +337,7 @@ abstract class NovelFire :
 
                 SManga.create().apply {
                     this.title = title
-                    this.url = mangaPath.slug(novelUrl.toNovelPath())
+                    this.url = novelUrl.toNovelPath()
                     // Default cover fallback
                     thumbnail_url = when {
                         coverUrl.isNullOrEmpty() -> "$baseUrl/images/no-cover.jpg"
@@ -365,108 +364,113 @@ abstract class NovelFire :
 
     // ======================== Novel Details ========================
 
-    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val path = url.encodedPath.toNovelPath()
-        val response = client.get(absoluteUrl(path), headers, ensureSuccess = false)
-        if (!response.isSuccessful) return null
-        val doc = response.asJsoup()
+    // Default HttpSource request builders concatenate baseUrl + manga.url directly, bypassing
+    // absoluteUrl()'s /book/ -> /novel/ rewrite. Route both through it explicitly so manga still
+    // stored with a pre-rebrand url resolve correctly.
+    override fun mangaDetailsRequest(manga: SManga): Request = GET(absoluteUrl(manga.url), headers)
+
+    override fun chapterListRequest(manga: SManga): Request = GET(absoluteUrl(manga.url), headers)
+
+    override fun mangaDetailsParse(response: Response): SManga {
+        val doc = Jsoup.parse(response.body.string())
         checkCloudflare(doc)
-        return mangaDetailsParse(doc).apply { this.url = mangaPath.slug(path) }
-    }
 
-    private fun mangaDetailsParse(doc: Document): SManga = SManga.create().apply {
-        // Multiple fallbacks for title
-        title = doc.selectFirst(".novel-title")?.text()?.takeIf { it.isNotBlank() }
-            ?: doc.selectFirst(".cover > img")?.attr("alt")?.takeIf { it.isNotBlank() }
-            ?: doc.selectFirst("h1")?.text()?.takeIf { it.isNotBlank() }
-            ?: "No Title Found"
+        val manga = SManga.create().apply {
+            // Multiple fallbacks for title
+            title = doc.selectFirst(".novel-title")?.text()?.trim()?.takeIf { it.isNotBlank() }
+                ?: doc.selectFirst(".cover > img")?.attr("alt")?.takeIf { it.isNotBlank() }
+                ?: doc.selectFirst("h1")?.text()?.trim()?.takeIf { it.isNotBlank() }
+                ?: "No Title Found"
 
-        // Get cover image
-        val coverElement = doc.selectFirst(".cover > img")
-        val coverUrl = coverElement?.attr("src") ?: coverElement?.attr("data-src")
-        // Default cover fallback
-        thumbnail_url = when {
-            coverUrl.isNullOrEmpty() -> "$baseUrl/images/no-cover.jpg"
-            coverUrl.startsWith("http") -> coverUrl
-            coverUrl.startsWith("/") -> baseUrl + coverUrl
-            else -> coverUrl
+            // Get cover image
+            val coverElement = doc.selectFirst(".cover > img")
+            val coverUrl = coverElement?.attr("src") ?: coverElement?.attr("data-src")
+            // Default cover fallback
+            thumbnail_url = when {
+                coverUrl.isNullOrEmpty() -> "$baseUrl/images/no-cover.jpg"
+                coverUrl.startsWith("http") -> coverUrl
+                coverUrl.startsWith("/") -> baseUrl + coverUrl
+                else -> coverUrl
+            }
+
+            // Get genres
+            genre = doc.select(".categories .property-item")
+                .joinToString(", ") { it.text().trim() }
+
+            // Get summary
+            val summary = doc.selectFirst(".summary .content")?.text()?.trim()
+            description = summary?.replace("Show More", "") ?: "No Summary Found"
+
+            // Get author
+            author = doc.selectFirst(".author .property-item > span")?.text() ?: doc.selectFirst(".author .property-item")?.text() ?: "No Author Found"
+
+            // Get status
+            val statusText = doc.selectFirst(".header-stats .ongoing, .header-stats .completed")?.text()?.lowercase()
+            status = when {
+                statusText?.contains("ongoing") == true -> SManga.ONGOING
+                statusText?.contains("completed") == true -> SManga.COMPLETED
+                else -> SManga.UNKNOWN
+            }
         }
 
-        // Get genres
-        genre = doc.select(".categories .property-item")
-            .joinToString { it.text() }
-
-        // Get summary
-        val summary = doc.selectFirst(".summary .content")?.text()
-        description = summary?.replace("Show More", "") ?: "No Summary Found"
-
-        // Get author
-        author = doc.selectFirst(".author .property-item > span")?.text() ?: doc.selectFirst(".author .property-item")?.text() ?: "No Author Found"
-
-        // Get status
-        val statusText = doc.selectFirst(".header-stats .ongoing, .header-stats .completed")?.text()?.lowercase()
-        status = when {
-            statusText?.contains("ongoing") == true -> SManga.ONGOING
-            statusText?.contains("completed") == true -> SManga.COMPLETED
-            else -> SManga.UNKNOWN
-        }
+        return manga
     }
 
     // ======================== Chapters ========================
 
     // JSON response data classes
     @Serializable
-    class ChapterAjaxResponse(
+    data class ChapterAjaxResponse(
         val data: List<ChapterData> = emptyList(),
         val recordsTotal: Int = 0,
         val recordsFiltered: Int = 0,
     )
 
     @Serializable
-    class ChapterData(
+    data class ChapterData(
         @SerialName("n_sort") val nSort: Int = 0,
         val slug: String = "",
         val title: String = "",
         @SerialName("created_at") val createdAt: String = "",
     )
 
-    override suspend fun fetchMangaUpdate(
+    override suspend fun getMangaUpdate(
         manga: SManga,
         chapters: List<SChapter>,
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        // Manga details and the chapter list both live on the same novel page - fetch it once
-        // regardless of which flag(s) are set, rather than issuing the request twice.
-        val response = client.get(absoluteUrl(mangaPath.resolve(manga.url)), headers)
-        val doc = response.asJsoup()
-        checkCloudflare(doc)
-
-        val updatedManga = if (fetchDetails) mangaDetailsParse(doc) else manga
-        val updatedChapters = if (fetchChapters) fetchNovelFireChapterList(doc, response, chapters) else chapters
+        @Suppress("DEPRECATION")
+        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(mangaDetailsRequest(manga)).execute()) else manga
+        val updatedChapters = if (fetchChapters) fetchNovelFireChapterList(manga, chapters) else chapters
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private suspend fun fetchNovelFireChapterList(doc: Document, response: Response, existingChapters: List<SChapter>): List<SChapter> {
+    private suspend fun fetchNovelFireChapterList(manga: SManga, existingChapters: List<SChapter>): List<SChapter> {
+        val response = client.newCall(GET(absoluteUrl(manga.url), headers)).execute()
+        val body = response.body.string()
+        val doc = Jsoup.parse(body)
+        checkCloudflare(doc)
+
         val novelPath = response.request.url.encodedPath.trimStart('/')
 
         val totalChapters = doc.selectFirst("#gotochapno")?.attr("max")?.toIntOrNull()
             ?: Regex("""A total of (\d+) chapters""").find(doc.text())?.groupValues?.get(1)?.toIntOrNull()
-            ?: doc.selectFirst(".header-stats .icon-book-open")?.parent()?.text()
+            ?: doc.selectFirst(".header-stats .icon-book-open")?.parent()?.text()?.trim()
                 ?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
             ?: 0
 
         val existingCount = existingChapters.size
-        Log.d(TAG, "fetchMangaUpdate: novelPath=$novelPath existing=$existingCount siteTotal=$totalChapters")
+        Log.d(TAG, "getChapterList: manga=${manga.url} existing=$existingCount siteTotal=$totalChapters")
 
         if (shouldReturnExisting(existingCount, totalChapters)) {
-            Log.d(TAG, "fetchMangaUpdate: count unchanged — returning existing chapters immediately")
+            Log.d(TAG, "getChapterList: count unchanged — returning existing chapters immediately")
             return existingChapters
         }
 
         val postId = extractPostId(doc)
         val fetchMethod = preferences.getString(CHAPTER_FETCH_METHOD_KEY, "auto") ?: "auto"
-        Log.d(TAG, "fetchMangaUpdate: fetch needed (method=$fetchMethod postId=$postId)")
+        Log.d(TAG, "getChapterList: fetch needed (method=$fetchMethod postId=$postId)")
 
         return when (fetchMethod) {
             "ajax" -> {
@@ -492,7 +496,7 @@ abstract class NovelFire :
                             fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
                         ).reversed()
                     } catch (e: Exception) {
-                        Log.d(TAG, "fetchMangaUpdate: HTML incremental failed (${e.message}), falling back to AJAX")
+                        Log.d(TAG, "getChapterList: HTML incremental failed (${e.message}), falling back to AJAX")
                         getAllChaptersFromAjax(novelPath, postId).reversed()
                     }
                 } else {
@@ -502,6 +506,40 @@ abstract class NovelFire :
                         assumedPageSize = CHAPTERS_PER_PAGE,
                         fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
                     ).reversed()
+                }
+            }
+        }
+    }
+
+    override fun chapterListParse(response: Response): List<SChapter> {
+        val body = response.body.string()
+        val doc = Jsoup.parse(body)
+        checkCloudflare(doc)
+
+        val novelPath = response.request.url.encodedPath.trimStart('/')
+
+        val postId = extractPostId(doc)
+
+        val fetchMethod = preferences.getString(CHAPTER_FETCH_METHOD_KEY, "auto") ?: "auto"
+
+        return when (fetchMethod) {
+            "ajax" -> {
+                if (postId != null) {
+                    getAllChaptersFromAjax(novelPath, postId).reversed()
+                } else {
+                    throw Exception("Ajax method selected but post_id not found on page")
+                }
+            }
+            "html" -> getAllChaptersFromHtml(novelPath).reversed()
+            else -> {
+                if (postId != null) {
+                    try {
+                        getAllChaptersFromHtml(novelPath).reversed()
+                    } catch (e: Exception) {
+                        getAllChaptersFromAjax(novelPath, postId).reversed()
+                    }
+                } else {
+                    getAllChaptersFromHtml(novelPath).reversed()
                 }
             }
         }
@@ -525,7 +563,7 @@ abstract class NovelFire :
         return null
     }
 
-    private suspend fun getAllChaptersFromAjax(novelPath: String, postId: String): List<SChapter> {
+    private fun getAllChaptersFromAjax(novelPath: String, postId: String): List<SChapter> {
         val timestamp = System.currentTimeMillis()
         val ajaxUrl = "$baseUrl/listChapterDataAjax".toHttpUrl().newBuilder()
             .addQueryParameter("post_id", postId)
@@ -557,7 +595,7 @@ abstract class NovelFire :
             .addQueryParameter("_", timestamp.toString())
             .build()
 
-        val response = client.get(ajaxUrl.toString(), headers)
+        val response = client.newCall(GET(ajaxUrl.toString(), headers)).execute()
         val responseBody = response.body.string()
 
         // Check for rate limiting
@@ -570,7 +608,7 @@ abstract class NovelFire :
             throw NovelFireAjaxNotFound()
         }
 
-        val ajaxResponse = responseBody.parseAs<ChapterAjaxResponse>()
+        val ajaxResponse = json.decodeFromString<ChapterAjaxResponse>(responseBody)
         Log.d(TAG, "ajax fetch: received ${ajaxResponse.data.size} chapters (recordsTotal=${ajaxResponse.recordsTotal})")
 
         // Build chapter URLs using the novel path and slug
@@ -587,10 +625,10 @@ abstract class NovelFire :
     }
 
     /** Fetches and parses a single chapter-list page. Returns chapters (unsorted) and whether a next page exists. */
-    private suspend fun fetchSingleHtmlPage(novelPath: String, page: Int): Pair<List<SChapter>, Boolean> {
+    private fun fetchSingleHtmlPage(novelPath: String, page: Int): Pair<List<SChapter>, Boolean> {
         val pageUrl = "$baseUrl/$novelPath/chapters?page=$page"
         Log.d(TAG, "html fetch: GET $pageUrl")
-        val response = client.get(pageUrl, headers)
+        val response = client.newCall(GET(pageUrl, headers)).execute()
         val body = response.body.string()
         if (body.contains("You are being rate limited")) throw NovelFireThrottlingError()
         val doc = Jsoup.parse(body)
@@ -599,7 +637,7 @@ abstract class NovelFire :
             val linkElement = element.selectFirst("a") ?: return@mapNotNull null
             val chapterName = linkElement.attr("title").ifEmpty { linkElement.text() }
             val chapterUrl = linkElement.absUrl("href").ifEmpty { linkElement.attr("href") }
-            val chapterDate: Long = dateFormat.tryParseDateTime(
+            val chapterDate: Long = dateFormat.tryParse(
                 linkElement.selectFirst(".chapter-update[datetime]")?.attr("datetime"),
             )
             chapterUrl.takeIf { it.isNotEmpty() }?.let {
@@ -615,10 +653,27 @@ abstract class NovelFire :
         return Pair(chapters, hasNextPage)
     }
 
+    private fun getAllChaptersFromHtml(novelPath: String, startPage: Int = 1): List<SChapter> {
+        val allChapters = mutableListOf<SChapter>()
+        var page = startPage
+        while (true) {
+            val (pageChapters, hasNextPage) = fetchSingleHtmlPage(novelPath, page)
+            allChapters += pageChapters
+            if (!hasNextPage) break
+            page++
+        }
+        return sortByChapterNumber(allChapters)
+    }
+
     // ======================== Chapter Content ========================
 
+    override fun pageListParse(response: Response): List<Page> {
+        val url = response.request.url.encodedPath
+        return listOf(Page(0, url))
+    }
+
     private fun parseChapterContent(response: Response): String {
-        val doc = response.asJsoup()
+        val doc = Jsoup.parse(response.body.string())
         checkCloudflare(doc)
 
         // Remove bloat elements
@@ -640,7 +695,7 @@ abstract class NovelFire :
 
     // ======================== Filters ========================
 
-    override fun getFilterList(data: JsonElement?): FilterList {
+    override fun getFilterList(): FilterList {
         val cachedTags = loadCachedTags()
         val tagList = cachedTags.sortedBy { it.name.lowercase() }.map { TagTriState(it.name, it.id) }
         val tagNote = if (cachedTags.isEmpty()) {
