@@ -166,6 +166,6 @@ with REPO_DIR.joinpath("index.html").open("w", encoding="utf-8") as f:
     )
     for ext in all_extensions:
         apk_escaped = html.escape(ext.resources.apkUrl)
-        name_escaped = html.escape(f"Tachiyomi: {ext.name}")
+        name_escaped = html.escape(f"Tsundoku: {ext.name}")
         f.write(f'<a href="{apk_escaped}">{name_escaped}</a>\n')
     f.write("</pre>\n</body>\n</html>\n")

@@ -49,3 +49,11 @@
 
 -if @kotlinx.serialization.Serializable class **
 -keep,allowshrinking,allowoptimization,allowobfuscation class <1>
+
+# NovelSource's members have no caller inside a single extension module - the host app calls
+# them virtually through its own Source interface after the module is built, so R8 sees them as
+# unreachable and strips them, silently defaulting isNovelSource to false / breaking fetchPageText.
+-keepclassmembers class * implements eu.kanade.tachiyomi.source.NovelSource {
+    public boolean isNovelSource();
+    public java.lang.Object fetchPageText(eu.kanade.tachiyomi.source.model.Page, kotlin.coroutines.Continuation);
+}

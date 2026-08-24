@@ -83,9 +83,10 @@ abstract class GenerateManifestTask : DefaultTask() {
             |        android:icon="@mipmap/ic_launcher"
             |        android:label="Tsundoku: $name"
             |        tools:replace="android:label">
-            |        <meta-data android:name="tachiyomix.name" android:value="$name" tools:replace="android:value" />
             |        <meta-data android:name="tachiyomi.novelextension.class" android:value=".$cls" tools:replace="android:value" />
             |        <meta-data android:name="tachiyomi.novelextension.nsfw" android:value="$nsfw" tools:replace="android:value" />
+            |        <meta-data android:name="tachiyomi.novelextension.novel" android:value="1" tools:replace="android:value" />
+            |        <meta-data android:name="tachiyomix.name" android:value="$name" tools:replace="android:value" />
             |        <meta-data android:name="tachiyomix.contentWarning" android:value="$cwValue" tools:replace="android:value" />
             |        <meta-data android:name="tachiyomix.extensionLib" android:value="$lib" tools:replace="android:value" />$activitySection
             |    </application>
