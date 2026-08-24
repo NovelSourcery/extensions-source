@@ -8,7 +8,7 @@ keiyoushi {
     contentWarning = ContentWarning.NSFW
 
     name = "ムーンライト (R18)"
-    versionCode = 2
+    versionCode = 3
     theme = "syosetu"
 
     source {

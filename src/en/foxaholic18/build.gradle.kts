@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "Foxaholic 18+"
-    versionCode = 2
+    versionCode = 3
     contentWarning = ContentWarning.NSFW
     theme = "madaranovel"
 

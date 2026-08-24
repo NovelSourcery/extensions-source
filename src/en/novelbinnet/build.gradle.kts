@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "Novel-Bin (net)"
-    versionCode = 2
+    versionCode = 3
     contentWarning = ContentWarning.NSFW
     theme = "readnovelfull"
 

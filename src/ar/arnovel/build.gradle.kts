@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "ArNovel"
-    versionCode = 3
+    versionCode = 4
     contentWarning = ContentWarning.SAFE
     theme = "madaranovel"
 
