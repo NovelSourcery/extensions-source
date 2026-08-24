@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "Scribble Hub"
-    versionCode = 6
+    versionCode = 7
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

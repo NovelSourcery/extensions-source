@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "LazyGirlTranslations"
-    versionCode = 2
+    versionCode = 3
     contentWarning = ContentWarning.SAFE
     theme = "lightnovelwpnovel"
 

@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "BacaLightNovel"
-    versionCode = 2
+    versionCode = 3
     contentWarning = ContentWarning.SAFE
     theme = "lightnovelwpnovel"
 
