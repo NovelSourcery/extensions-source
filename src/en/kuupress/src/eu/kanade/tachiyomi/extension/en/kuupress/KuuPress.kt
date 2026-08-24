@@ -15,11 +15,16 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.stripChapterNumberPrefix
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
@@ -27,25 +32,29 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.Headers
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Request
-import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.parser.Parser
 
-class KuuPress :
-    HttpSource(),
+@Source
+abstract class KuuPress :
+    KeiSource(),
     NovelSource,
     ConfigurableSource,
     SourceTracker {
 
-    override val name = "KuuPress"
-    override val baseUrl = "https://kuupress.com"
-    override val lang = "en"
-    override val supportsLatest = true
-
     private val apiBase = "https://api-kp.kuupress.com/api/public"
     private val mediaProxyBase = "https://api-kp.kuupress.com"
+
+    // SManga.url is already stored bare (see extractSlug below, used instead of SlugPath.slug()
+    // since it must also recognize two legacy prefixes ("novels/", "novel/") besides "read/" for
+    // old deep links); this template only covers resolving the canonical detail path back out.
+    private val mangaPathTemplate: SlugPath = SlugPath("/read/")
+
+    // Current site chapter path is "/read/chapter/<id>/<slug>"; only the id/slug tail is stored.
+    private val chapterPath = SlugPath("/read/chapter/")
 
     private val preferences: SharedPreferences by getPreferencesLazy()
 
@@ -57,35 +66,23 @@ class KuuPress :
         isLenient = true
     }
 
-    override val client = network.cloudflareClient
-
-    override fun headersBuilder() = super.headersBuilder()
-        .add("Referer", "$baseUrl/")
-        .add("Origin", baseUrl)
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = this
         .add("Accept", "application/json, text/plain, */*")
 
-    override fun popularMangaRequest(page: Int): Request {
+    override suspend fun getPopularManga(page: Int): MangasPage {
         val url = "$apiBase/novels_trending".toHttpUrl().newBuilder()
             .addQueryParameter("limit", "10")
             .build()
-        return GET(url, headers)
-    }
-
-    override fun popularMangaParse(response: Response): MangasPage {
-        val body = response.body.string()
+        val body = client.get(url, headers).body.string()
         return parseNovelArrayResponse(body, key = "data", hasMore = false)
     }
 
-    override fun latestUpdatesRequest(page: Int): Request {
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
         val url = "$apiBase/latest-updates".toHttpUrl().newBuilder()
             .addQueryParameter("per_page", "15")
             .addQueryParameter("page", page.toString())
             .build()
-        return GET(url, headers)
-    }
-
-    override fun latestUpdatesParse(response: Response): MangasPage {
-        val body = response.body.string()
+        val body = client.get(url, headers).body.string()
         return try {
             val root = json.parseToJsonElement(body).jsonObject
             val data = root["data"]?.jsonArray ?: JsonArray(emptyList())
@@ -98,66 +95,44 @@ class KuuPress :
         }
     }
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val slug = extractSlug(url.toString())
+        if (slug.isBlank()) return null
+        val requestUrl = "$apiBase/novels/$slug".toHttpUrl().newBuilder()
+            .addQueryParameter("page", "1")
+            .addQueryParameter("per_page", "1")
+            .build()
+        val body = client.get(requestUrl, headers).body.string()
+        return try {
+            val root = json.parseToJsonElement(body).jsonObject
+            val data = root["data"]?.jsonObject ?: return null
+            val resolvedSlug = data.str("slug").orEmpty()
+            if (resolvedSlug.isBlank()) return null
+            SManga.create().apply {
+                title = cleanHtml(data.str("title").orEmpty())
+                this.url = resolvedSlug
+                thumbnail_url = coverUrlFrom(data)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val filterQuery = (filters.find { it is SearchQueryFilter } as? SearchQueryFilter)
             ?.state?.trim()
             .orEmpty()
         val term = query.trim().ifBlank { filterQuery }
 
-        if (term.startsWith("http")) {
-            val slug = extractSlug(term)
-            if (slug.isNotBlank()) {
-                val url = "$apiBase/novels/$slug".toHttpUrl().newBuilder()
-                    .addQueryParameter("page", "1")
-                    .addQueryParameter("per_page", "1")
-                    .build()
-                return GET(url, headers)
-            }
-        }
-
         if (term.isNotBlank()) {
             val url = "$apiBase/search".toHttpUrl().newBuilder()
                 .addQueryParameter("q", term)
                 .build()
-            return GET(url, headers)
+            val body = client.get(url, headers).body.string()
+            return parseNovelArrayResponse(body, key = "results", hasMore = false)
         }
 
-        return latestUpdatesRequest(page)
-    }
-
-    override fun searchMangaParse(response: Response): MangasPage {
-        val body = response.body.string()
-        val path = response.request.url.encodedPath
-        return if (path.contains("/novels/")) {
-            // Single-novel lookup from a URL search
-            try {
-                val root = json.parseToJsonElement(body).jsonObject
-                val data = root["data"]?.jsonObject ?: return MangasPage(emptyList(), false)
-                val slug = data.str("slug").orEmpty()
-                if (slug.isBlank()) return MangasPage(emptyList(), false)
-                val manga = SManga.create().apply {
-                    title = cleanHtml(data.str("title").orEmpty())
-                    url = "/read/$slug"
-                    thumbnail_url = coverUrlFrom(data)
-                }
-                MangasPage(listOf(manga), false)
-            } catch (_: Exception) {
-                MangasPage(emptyList(), false)
-            }
-        } else if (path.contains("/search")) {
-            parseNovelArrayResponse(body, key = "results", hasMore = false)
-        } else {
-            try {
-                val root = json.parseToJsonElement(body).jsonObject
-                val data = root["data"]?.jsonArray ?: JsonArray(emptyList())
-                val meta = root["meta"]?.jsonObject
-                val currentPage = meta?.int("current_page") ?: 1
-                val lastPage = meta?.int("last_page") ?: 1
-                parseNovelArray(data, currentPage < lastPage)
-            } catch (_: Exception) {
-                MangasPage(emptyList(), false)
-            }
-        }
+        return getLatestUpdates(page)
     }
 
     /**
@@ -173,90 +148,78 @@ class KuuPress :
         .removePrefix("read/")
         .trim('/')
 
-    override fun mangaDetailsRequest(manga: SManga): Request {
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
         val slug = extractSlug(manga.url)
-        val url = "$apiBase/novels/$slug".toHttpUrl().newBuilder()
-            .addQueryParameter("page", "1")
-            .addQueryParameter("per_page", "100")
-            .build()
-        return GET(url, headers)
+        // Details and the first page of chapters both live on this same endpoint - fetch it once.
+        val firstData = fetchNovelData(slug, page = 1, perPage = 100)
+
+        val updatedManga = if (fetchDetails) parseMangaDetails(firstData) else manga
+        val updatedChapters = if (fetchChapters) fetchAllChapters(slug, firstData) else chapters
+        return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        val body = response.body.string()
-        return try {
-            val root = json.parseToJsonElement(body).jsonObject
-            val data = root["data"]?.jsonObject ?: JsonObject(emptyMap())
-            val slug = data.str("slug").orEmpty()
-            val authorName = data.str("author_name")?.takeIf { it.isNotBlank() }
-                ?: data.str("author_user_name")?.takeIf { it.isNotBlank() }
-                ?: data["author"]?.jsonObject?.str("name")?.takeIf { it.isNotBlank() }
+    private fun parseMangaDetails(firstData: JsonObject?): SManga = try {
+        val data = firstData ?: JsonObject(emptyMap())
+        val authorName = data.str("author_name")?.takeIf { it.isNotBlank() }
+            ?: data.str("author_user_name")?.takeIf { it.isNotBlank() }
+            ?: data["author"]?.jsonObject?.str("name")?.takeIf { it.isNotBlank() }
 
-            val genres = data["genres"]?.jsonArray
-                ?.mapNotNull { it.jsonObject.str("name") }
-                ?.filter { it.isNotBlank() }
-                .orEmpty()
+        val genres = data["genres"]?.jsonArray
+            ?.mapNotNull { it.jsonObject.str("name") }
+            ?.filter { it.isNotBlank() }
+            .orEmpty()
 
-            val tags = data["tags"]?.jsonArray
-                ?.mapNotNull { it.jsonObject.str("name") }
-                ?.filter { it.isNotBlank() }
-                .orEmpty()
+        val tags = data["tags"]?.jsonArray
+            ?.mapNotNull { it.jsonObject.str("name") }
+            ?.filter { it.isNotBlank() }
+            .orEmpty()
 
-            val infoLines = mutableListOf<String>()
-            data.str("tagline")?.takeIf { it.isNotBlank() && !it.equals("null", true) }
-                ?.let { infoLines.add(cleanHtml(it)) }
-            authorName?.let { infoLines.add("Author: $it") }
-            data.str("novel_status")?.takeIf { it.isNotBlank() }?.let { infoLines.add("Status: $it") }
-            data.int("total_views")?.let { infoLines.add("Views: $it") }
-            data.int("bookmarks_count")?.let { infoLines.add("Bookmarks: $it") }
-            data.int("reviews_count")?.let { infoLines.add("Reviews: $it") }
-            data["chapters_pagination"]?.jsonObject?.int("total")?.let { infoLines.add("Chapters: $it") }
+        val infoLines = mutableListOf<String>()
+        data.str("tagline")?.takeIf { it.isNotBlank() && !it.equals("null", true) }
+            ?.let { infoLines.add(cleanHtml(it)) }
+        authorName?.let { infoLines.add("Author: $it") }
+        data.str("novel_status")?.takeIf { it.isNotBlank() }?.let { infoLines.add("Status: $it") }
+        data.int("total_views")?.let { infoLines.add("Views: $it") }
+        data.int("bookmarks_count")?.let { infoLines.add("Bookmarks: $it") }
+        data.int("reviews_count")?.let { infoLines.add("Reviews: $it") }
+        data["chapters_pagination"]?.jsonObject?.int("total")?.let { infoLines.add("Chapters: $it") }
 
-            val descriptionText = formatDescription(data.str("description").orEmpty())
+        val descriptionText = formatDescription(data.str("description").orEmpty())
 
-            cacheBookmarkState(slug, root)
+        // Bookmark state for this slug is already cached by fetchNovelData above.
 
-            SManga.create().apply {
-                title = cleanHtml(data.str("title").orEmpty())
-                url = "/read/$slug"
-                author = authorName
-                thumbnail_url = coverUrlFrom(data)
-                status = when (data.str("novel_status")?.lowercase()) {
-                    "ongoing" -> SManga.ONGOING
-                    "completed" -> SManga.COMPLETED
-                    "hiatus" -> SManga.ON_HIATUS
-                    "dropped" -> SManga.CANCELLED
-                    else -> SManga.UNKNOWN
-                }
-                genre = (genres + tags).distinctBy { it.lowercase() }.joinToString(", ")
-                description = buildString {
-                    if (infoLines.isNotEmpty()) {
-                        append(infoLines.joinToString("\n"))
-                        append("\n\n")
-                    }
-                    append(descriptionText)
-                }.trim()
+        SManga.create().apply {
+            title = cleanHtml(data.str("title").orEmpty())
+            this.url = data.str("slug").orEmpty()
+            author = authorName
+            thumbnail_url = coverUrlFrom(data)
+            status = when (data.str("novel_status")?.lowercase()) {
+                "ongoing" -> SManga.ONGOING
+                "completed" -> SManga.COMPLETED
+                "hiatus" -> SManga.ON_HIATUS
+                "dropped" -> SManga.CANCELLED
+                else -> SManga.UNKNOWN
             }
-        } catch (_: Exception) {
-            SManga.create()
+            genre = (genres + tags).distinctBy { it.lowercase() }.joinToString()
+            description = buildString {
+                if (infoLines.isNotEmpty()) {
+                    append(infoLines.joinToString("\n"))
+                    append("\n\n")
+                }
+                append(descriptionText)
+            }.trim()
         }
+    } catch (_: Exception) {
+        SManga.create()
     }
 
-    override fun chapterListRequest(manga: SManga): Request = mangaDetailsRequest(manga)
-
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val body = response.body.string()
-        val root = json.parseToJsonElement(body).jsonObject
-        val data = root["data"]?.jsonObject ?: JsonObject(emptyMap())
-        cacheBookmarkState(data.str("slug").orEmpty(), root)
-        return parseChaptersFromNovelData(data)
-            .sortedByDescending { it.sortKey }
-            .map { it.chapter }
-    }
-
-    override fun fetchChapterList(manga: SManga): rx.Observable<List<SChapter>> = rx.Observable.fromCallable {
-        val slug = extractSlug(manga.url)
-        if (slug.isBlank()) return@fromCallable emptyList<SChapter>()
+    private suspend fun fetchAllChapters(slug: String, firstData: JsonObject?): List<SChapter> {
+        if (slug.isBlank() || firstData == null) return emptyList()
 
         val chapterMap = linkedMapOf<String, ChapterRecord>()
 
@@ -269,7 +232,6 @@ class KuuPress :
             }
         }
 
-        val firstData = fetchNovelData(slug, page = 1, perPage = 100) ?: return@fromCallable emptyList<SChapter>()
         val volumeSequenceById = buildVolumeSequenceMap(firstData)
         merge(parseChaptersFromNovelData(firstData, volumeSequenceById = volumeSequenceById))
 
@@ -309,27 +271,34 @@ class KuuPress :
             }
         }
 
-        chapterMap.values
+        return chapterMap.values
             .sortedByDescending { it.sortKey }
             .map { it.chapter }
     }
 
-    override fun pageListRequest(chapter: SChapter): Request {
-        // "/read/chapter/<id>/<slug>" (current) or "/chapter/<id>" (legacy)
-        val chapterId = chapter.url.substringBefore('?').trim('/').split('/')
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val chapterId = extractChapterId(chapter.url)
+        return listOf(Page(0, "$apiBase/chapters/$chapterId"))
+    }
+
+    /** "<id>/<slug>" (current, bare) or "/read/chapter/<id>/<slug>" or "/chapter/<id>" (legacy full paths). */
+    private fun extractChapterId(raw: String): String {
+        val path = chapterPath.resolve(raw)
+        return path.substringBefore('?').trim('/').split('/')
             .firstOrNull { seg -> seg.isNotEmpty() && seg.all(Char::isDigit) }
-            ?: chapter.url.substringAfterLast('/')
-        return GET("$apiBase/chapters/$chapterId", headers)
+            ?: path.substringAfterLast('/')
     }
 
-    // chapter.url is the site path; route legacy "/chapter/<id>" entries through /read
-    override fun getChapterUrl(chapter: SChapter): String = if (chapter.url.startsWith("/read/")) {
-        baseUrl + chapter.url
-    } else {
-        "$baseUrl/read${chapter.url}"
+    // chapter.url may be a bare "<id>/<slug>" slug, a full "/read/chapter/..." path, or a
+    // super-legacy "/chapter/<id>" path that needs routing through /read.
+    override fun getChapterUrl(chapter: SChapter): String {
+        val stored = chapter.url
+        return when {
+            stored.startsWith("/read/") -> baseUrl + stored
+            stored.startsWith("/") -> "$baseUrl/read$stored"
+            else -> baseUrl + chapterPath.resolve(stored)
+        }
     }
-
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
 
     override suspend fun fetchPageText(page: Page): String {
         // page.url may be the API stub (.../chapters/<id>) or the site chapter path;
@@ -337,12 +306,9 @@ class KuuPress :
         val contentUrl = if (page.url.contains("/api/public/chapters/")) {
             page.url
         } else {
-            val chapterId = page.url.substringBefore('?').trim('/').split('/')
-                .firstOrNull { seg -> seg.isNotEmpty() && seg.all(Char::isDigit) }
-                ?: page.url.substringAfterLast('/')
-            "$apiBase/chapters/$chapterId"
+            "$apiBase/chapters/${extractChapterId(page.url)}"
         }
-        val response = client.newCall(GET(contentUrl, headers)).execute()
+        val response = client.get(contentUrl, headers)
         val body = response.body.string()
 
         return try {
@@ -370,14 +336,9 @@ class KuuPress :
         }
     }
 
-    override fun getMangaUrl(manga: SManga): String {
-        val slug = extractSlug(manga.url)
-        return "$baseUrl/read/$slug"
-    }
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(extractSlug(manga.url))
 
-    override fun imageUrlParse(response: Response): String = ""
-
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         Filter.Header("Search"),
         SearchQueryFilter(),
     )
@@ -404,7 +365,7 @@ class KuuPress :
      * (cached from the details/chapter list responses, or fetched fresh) and
      * only POST when it differs from the desired one.
      */
-    private fun syncBookmark(manga: SManga, desired: Boolean) {
+    private suspend fun syncBookmark(manga: SManga, desired: Boolean) {
         if (!supportsFavoritesTracking) return
         val slug = extractSlug(manga.url)
         if (slug.isBlank()) return
@@ -419,12 +380,12 @@ class KuuPress :
     }
 
     /** Reads meta.is_bookmarked from the novel details endpoint. Null when not logged in. */
-    private fun fetchBookmarkState(slug: String): Boolean? = try {
+    private suspend fun fetchBookmarkState(slug: String): Boolean? = try {
         val url = "$apiBase/novels/$slug".toHttpUrl().newBuilder()
             .addQueryParameter("page", "1")
             .addQueryParameter("per_page", "1")
             .build()
-        val response = client.newCall(GET(url, headers)).execute()
+        val response = client.get(url, headers)
         val root = json.parseToJsonElement(response.use { it.body.string() }).jsonObject
         val state = root["meta"]?.jsonObject?.bool("is_bookmarked")
         state?.also { synchronized(bookmarkStateCache) { bookmarkStateCache[slug] = it } }
@@ -498,7 +459,7 @@ class KuuPress :
 
             SManga.create().apply {
                 this.title = title
-                this.url = "/read/$slug"
+                this.url = slug
                 this.thumbnail_url = coverUrlFrom(obj)
                 this.author = obj.str("author_name")?.takeIf { it.isNotBlank() }
                     ?: obj["author"]?.jsonObject?.str("name")
@@ -565,7 +526,7 @@ class KuuPress :
                             .replace(Regex("[^a-z0-9]+"), "-")
                             .trim('-')
                     }
-                    url = "/read/chapter/$chapterId/$chapterSlug"
+                    url = "$chapterId/$chapterSlug"
                     name = visibleTitle.stripChapterNumberPrefix().ifBlank { "Chapter $sortOrder" }
                     chapter_number = chapterNumber
                     date_upload = parseDate(chapter.str("scheduled_for") ?: chapter.str("created_at"))
@@ -579,14 +540,14 @@ class KuuPress :
             .sortedBy { it.sortKey }
     }
 
-    private fun fetchNovelData(slug: String, page: Int, perPage: Int, volumeId: Int? = null): JsonObject? {
+    private suspend fun fetchNovelData(slug: String, page: Int, perPage: Int, volumeId: Int? = null): JsonObject? {
         return try {
             val builder = "$apiBase/novels/$slug".toHttpUrl().newBuilder()
                 .addQueryParameter("page", page.toString())
                 .addQueryParameter("per_page", perPage.toString())
             volumeId?.let { builder.addQueryParameter("volume_id", it.toString()) }
 
-            val response = client.newCall(GET(builder.build().toString(), headers)).execute()
+            val response = client.get(builder.build().toString(), headers, ensureSuccess = false)
             if (!response.isSuccessful) return null
             val root = json.parseToJsonElement(response.body.string()).jsonObject
             cacheBookmarkState(slug, root)
@@ -693,7 +654,7 @@ class KuuPress :
 
     private fun cleanHtml(text: String): String {
         val decoded = Parser.unescapeEntities(text, false)
-        return Jsoup.parse(decoded).text().trim().replace(Regex("\\s+"), " ")
+        return Jsoup.parse(decoded).text().replace(Regex("\\s+"), " ")
     }
 
     private fun formatDescription(rawHtml: String): String {

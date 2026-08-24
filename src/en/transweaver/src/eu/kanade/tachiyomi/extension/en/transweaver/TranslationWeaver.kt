@@ -1,12 +1,7 @@
-﻿package eu.kanade.tachiyomi.novelextension.en.transweaver
+package eu.kanade.tachiyomi.novelextension.en.transweaver
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
+import keiyoushi.annotation.Source
 
-class TranslationWeaver :
-    LightNovelWPNovel(
-        baseUrl = "https://transweaver.com",
-        name = "TranslationWeaver",
-        lang = "en",
-    ) {
-    override val reverseChapters = true
-}
+@Source
+abstract class TranslationWeaver : LightNovelWPNovel()

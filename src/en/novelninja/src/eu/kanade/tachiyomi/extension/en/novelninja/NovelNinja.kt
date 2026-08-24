@@ -1,12 +1,9 @@
-﻿package eu.kanade.tachiyomi.novelextension.en.novelninja
+package eu.kanade.tachiyomi.novelextension.en.novelninja
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
+import keiyoushi.annotation.Source
 
-class NovelNinja :
-    MadaraNovel(
-        baseUrl = "https://novelninja.xyz",
-        name = "NovelNinja",
-        lang = "en",
-    ) {
+@Source
+abstract class NovelNinja : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
 }

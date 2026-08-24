@@ -1,12 +1,9 @@
-﻿package eu.kanade.tachiyomi.novelextension.ko.fortuneeternal
+package eu.kanade.tachiyomi.novelextension.ko.fortuneeternal
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
+import keiyoushi.annotation.Source
 
-class FortuneEternal :
-    MadaraNovel(
-        baseUrl = "https://www.fortuneeternal.com",
-        name = "FortuneEternal",
-        lang = "ko",
-    ) {
+@Source
+abstract class FortuneEternal : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
 }

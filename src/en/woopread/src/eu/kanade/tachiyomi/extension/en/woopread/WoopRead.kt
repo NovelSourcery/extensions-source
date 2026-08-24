@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.woopread
 
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -8,32 +7,30 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
+import keiyoushi.utils.extractNextJs
 import keiyoushi.utils.parseAs
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Request
 import okhttp3.Response
-import java.text.SimpleDateFormat
-import java.util.Locale
-import java.util.TimeZone
+import kotlin.time.Instant
 
-class WoopRead :
-    HttpSource(),
+@Source
+abstract class WoopRead :
+    KeiSource(),
     NovelSource {
 
-    override val name = "WoopRead"
-    override val baseUrl = "https://woopread.com"
-    override val lang = "en"
     override val supportsLatest = true
 
-    override val client = network.client
-
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ROOT).apply {
-        timeZone = TimeZone.getTimeZone("UTC")
-    }
-
-    private fun browseRequest(page: Int, sortBy: String, filters: FilterList): Request {
+    private fun browseUrl(page: Int, sortBy: String, filters: FilterList): HttpUrl {
         val url = "$baseUrl/api/novels".toHttpUrl().newBuilder()
             .addQueryParameter("page", page.toString())
             .addQueryParameter("sortBy", sortBy)
@@ -47,36 +44,37 @@ class WoopRead :
         url.addQueryParameter("language", language)
         url.addQueryParameter("status", status)
         url.addQueryParameter("genres", genres)
-        return GET(url.build(), headers)
+        return url.build()
     }
 
-    override fun popularMangaRequest(page: Int): Request = browseRequest(page, "Popular", FilterList())
-    override fun latestUpdatesRequest(page: Int): Request = browseRequest(page, "Updated", FilterList())
-
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        if (query.isNotBlank()) {
-            val url = "$baseUrl/api/search".toHttpUrl().newBuilder()
-                .addQueryParameter("q", query)
-                .addQueryParameter("page", page.toString())
-                .build()
-            return GET(url, headers)
-        }
-        val sortBy = filters.filterIsInstance<SortFilter>().firstOrNull()?.toUriPart() ?: "Popular"
-        return browseRequest(page, sortBy, filters)
-    }
-
-    override fun popularMangaParse(response: Response): MangasPage {
+    private fun parseMangaListResponse(response: Response): MangasPage {
         val result = response.parseAs<ListResponse>()
         val page = response.request.url.queryParameter("page")?.toIntOrNull() ?: 1
         val mangas = result.novels.map { it.toSManga() }
         return MangasPage(mangas, page * PER_PAGE < result.totalCount)
     }
 
-    override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
-    override fun searchMangaParse(response: Response) = popularMangaParse(response)
+    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.get(browseUrl(page, "Popular", FilterList()), headers))
 
-    // manga.url is now just the slug; strip any wrapping path/id so old stored urls still resolve.
-    private fun extractSlug(url: String): String = url.trim('/').substringAfterLast("/")
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(client.get(browseUrl(page, "Updated", FilterList()), headers))
+
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        if (query.isNotBlank()) {
+            val url = "$baseUrl/api/search".toHttpUrl().newBuilder()
+                .addQueryParameter("q", query)
+                .addQueryParameter("page", page.toString())
+                .build()
+            return parseMangaListResponse(client.get(url, headers))
+        }
+        val sortBy = filters.filterIsInstance<SortFilter>().firstOrNull()?.toUriPart() ?: "Popular"
+        return parseMangaListResponse(client.get(browseUrl(page, sortBy, filters), headers))
+    }
+
+    private val mangaPathTemplate = SlugPath("/series/")
+
+    // manga.url is just the slug; this normalizes both bare-slug (current) and pre-migration
+    // full-path stored values back to the bare slug.
+    private fun SManga.slug(): String = mangaPathTemplate.slug(mangaPathTemplate.resolve(url))
 
     private fun NovelDto.toSManga() = SManga.create().apply {
         title = this@toSManga.title
@@ -87,11 +85,32 @@ class WoopRead :
         status = parseStatus(this@toSManga.status)
     }
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl/series/${extractSlug(manga.url)}"
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET("$baseUrl/series/${extractSlug(manga.url)}", headers)
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val slug = mangaPathTemplate.slug(url.encodedPath)
+        val response = client.get("$baseUrl/series/$slug", headers, ensureSuccess = false)
+        if (!response.isSuccessful) return null
+        return fetchNovelDetails(SManga.create().apply { this.url = slug })
+    }
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate = coroutineScope {
+        val detailsDeferred = if (fetchDetails) async { fetchNovelDetails(manga) } else null
+        val chaptersDeferred = if (fetchChapters) async { fetchNovelChapterList(manga) } else null
+
+        SMangaUpdate(
+            manga = detailsDeferred?.await() ?: manga,
+            chapters = chaptersDeferred?.await() ?: chapters,
+        )
+    }
+
+    private suspend fun fetchNovelDetails(manga: SManga): SManga {
+        val response = client.get("$baseUrl/series/${manga.slug()}", headers)
         val doc = response.asJsoup()
         return SManga.create().apply {
             title = doc.selectFirst("meta[property=og:title]")?.attr("content")
@@ -99,7 +118,7 @@ class WoopRead :
             thumbnail_url = doc.selectFirst("meta[property=og:image]")?.attr("content")
             author = doc.selectFirst("span:matchesOwn(^Author$) ~ a, span:contains(Author) + a")?.text()
             genre = doc.select("a[href*=genres=], a[href*=tags=]")
-                .map { it.text().trim() }
+                .map { it.text() }
                 .filter { it.isNotEmpty() }
                 .distinctBy { it.lowercase() }
                 .joinToString()
@@ -107,9 +126,9 @@ class WoopRead :
                 doc.selectFirst("span:matchesOwn(^Status$) ~ span, span:contains(Status) + span")?.text(),
             )
             description = buildString {
-                val type = doc.selectFirst("span:matchesOwn(^Type$) ~ span, span:contains(Type) + span")?.text()?.trim()
+                val type = doc.selectFirst("span:matchesOwn(^Type$) ~ span, span:contains(Type) + span")?.text()
                 if (!type.isNullOrEmpty()) append("Type: $type\n")
-                val synopsis = doc.selectFirst("#novel-description-content")?.text()?.trim()
+                val synopsis = doc.selectFirst("#novel-description-content")?.text()
                 if (!synopsis.isNullOrEmpty()) {
                     if (isNotEmpty()) append("\n")
                     append(synopsis)
@@ -118,31 +137,33 @@ class WoopRead :
         }
     }
 
-    override suspend fun getChapterList(manga: SManga): List<SChapter> {
-        val seriesSlug = extractSlug(manga.url)
-        val response = client.newCall(GET("$baseUrl/api/novels/$seriesSlug/chapters", headers)).execute()
-        val chapters = response.parseAs<List<ChapterDto>>()
+    private suspend fun fetchNovelChapterList(manga: SManga): List<SChapter> {
+        val seriesSlug = manga.slug()
+        // The old /api/novels/<slug>/chapters REST endpoint now returns an empty array (verified
+        // live) - the real chapter list is embedded in the novel page's own RSC flight data.
+        val doc = client.get("$baseUrl/series/$seriesSlug", headers).asJsoup()
+        val chapters = doc.extractNextJs<ChapterListDto> { it is kotlinx.serialization.json.JsonObject && "chapters" in it }
+            ?.chapters ?: throw Exception("Could not find chapter list in page data")
         return chapters.sortedByDescending { it.number }.map { dto ->
             SChapter.create().apply {
                 name = dto.title
                 url = "$seriesSlug/${dto.slug}"
                 chapter_number = dto.number.toFloat()
-                date_upload = dto.publishDate?.let { runCatching { dateFormat.parse(it)?.time }.getOrNull() } ?: 0L
+                date_upload = dto.publishDate?.let { Instant.parseOrNull(it)?.toEpochMilliseconds() } ?: 0L
             }
         }
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> = throw UnsupportedOperationException()
-
     override fun getChapterUrl(chapter: SChapter): String = "$baseUrl/series/${chapter.url}"
 
-    override fun pageListRequest(chapter: SChapter): Request = GET("$baseUrl/series/${chapter.url}", headers)
-
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.get("$baseUrl/series/${chapter.url}", headers)
+        return listOf(Page(0, response.request.url.toString()))
+    }
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else "$baseUrl/series/${page.url}"
-        val doc = client.newCall(GET(url, headers)).execute().asJsoup()
+        val doc = client.get(url, headers).asJsoup()
         val paragraphs = doc.select("[data-paragraph-index]")
             .sortedBy { it.attr("data-paragraph-index").toIntOrNull() ?: 0 }
         if (paragraphs.isNotEmpty()) {
@@ -150,8 +171,6 @@ class WoopRead :
         }
         return doc.selectFirst("[id^=chapter-] .space-y-4, [id^=chapter-]")?.html().orEmpty()
     }
-
-    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
 
     private fun parseStatus(status: String?) = when (status?.lowercase()?.trim()) {
         "ongoing" -> SManga.ONGOING
@@ -161,7 +180,7 @@ class WoopRead :
         else -> SManga.UNKNOWN
     }
 
-    override fun getFilterList() = FilterList(
+    override fun getFilterList(data: JsonElement?) = FilterList(
         Filter.Header("Filters are ignored during text search"),
         SortFilter(),
         StatusFilter(),

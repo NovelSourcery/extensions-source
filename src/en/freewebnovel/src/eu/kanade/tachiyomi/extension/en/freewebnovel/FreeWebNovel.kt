@@ -3,6 +3,8 @@
 import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.SManga
+import keiyoushi.annotation.Source
+import keiyoushi.utils.SlugPath
 import okhttp3.Request
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -11,12 +13,8 @@ import org.jsoup.nodes.Element
  * FreeWebNovel - ReadNovelFull-based novel site
  * Uses the ReadNovelFull multisrc template which handles all the parsing logic.
  */
-class FreeWebNovel :
-    ReadNovelFull(
-        name = "FreeWebNovel",
-        baseUrl = "https://freewebnovel.com",
-        lang = "en",
-    ) {
+@Source
+abstract class FreeWebNovel : ReadNovelFull() {
     override val popularPage = "sort/most-popular"
 
     // freewebnovel uses "latest-release" for the latest-release listing
@@ -31,9 +29,10 @@ class FreeWebNovel :
     // freewebnovel paginates the chapter list at /novel/<slug>?page=N (page 1 is the novel page);
     // page count and total come from #indexselect (options are "C.1 - C.40" ranges).
     override val chaptersPaginated = true
+    override val mangaPathTemplate = SlugPath("/novel/")
 
     override fun chapterListPageRequest(manga: SManga, page: Int): Request {
-        val base = baseUrl + manga.url.trimEnd('/')
+        val base = baseUrl + mangaPathTemplate.resolve(manga.url).trimEnd('/')
         val url = if (page <= 1) base else "$base?$pageParam=$page"
         return GET(url, headers)
     }
@@ -43,7 +42,7 @@ class FreeWebNovel :
 
     // Chapter urls follow /novel/<slug>/chapter-N, so the fast list can be synthesized.
     override fun chapterUrlFromNumber(manga: SManga, number: Int): String? {
-        val path = manga.url.trimEnd('/')
+        val path = mangaPathTemplate.resolve(manga.url).trimEnd('/')
         if (path.isBlank()) return null
         return "$path/chapter-$number"
     }
@@ -81,11 +80,11 @@ class FreeWebNovel :
         if (titleEl != null) {
             val href = titleEl.attr("abs:href").ifEmpty { titleEl.attr("href") }
             if (href.isNotBlank()) {
-                manga.setUrlWithoutDomain(href)
+                manga.setSlugUrl(href)
             } else {
                 // Fallback: try to find href in parent or sibling elements
                 element.selectFirst("a[href]")?.let {
-                    manga.setUrlWithoutDomain(it.attr("abs:href").ifEmpty { it.attr("href") })
+                    manga.setSlugUrl(it.attr("abs:href").ifEmpty { it.attr("href") })
                 }
             }
             val rawTitle = titleEl.attr("title").ifBlank { titleEl.text() }
@@ -96,8 +95,8 @@ class FreeWebNovel :
         } else {
             // Fallback: find first link with title
             element.selectFirst("a[href]")?.let { link ->
-                manga.setUrlWithoutDomain(link.attr("abs:href").ifEmpty { link.attr("href") })
-                manga.title = link.attr("title").ifEmpty { link.text().trim() }
+                manga.setSlugUrl(link.attr("abs:href").ifEmpty { link.attr("href") })
+                manga.title = link.attr("title").ifEmpty { link.text() }
                     .substringBefore(" - Free Web Novel")
                     .substringBefore(" - FreeWebNovel")
                     .trim()

@@ -1,12 +1,9 @@
-﻿package eu.kanade.tachiyomi.novelextension.id.meionovel
+package eu.kanade.tachiyomi.novelextension.id.meionovel
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
+import keiyoushi.annotation.Source
 
-class MeioNovel :
-    MadaraNovel(
-        baseUrl = "https://meionovels.com",
-        name = "MeioNovel",
-        lang = "id",
-    ) {
+@Source
+abstract class MeioNovel : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
 }

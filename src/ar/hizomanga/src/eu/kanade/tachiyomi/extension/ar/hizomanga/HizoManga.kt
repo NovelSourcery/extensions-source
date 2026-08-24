@@ -5,25 +5,24 @@ import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
-import okhttp3.Response
+import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import okhttp3.Request
 import org.jsoup.nodes.Element
 
-class HizoManga :
-    MadaraNovel(
-        baseUrl = "https://hizomanga.net",
-        name = "HizoManga",
-        lang = "ar",
-    ) {
+@Source
+abstract class HizoManga : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
 
-    override fun popularMangaRequest(page: Int) = GET("$baseUrl/page/$page/?per_page=100&s=&post_type=wp-manga", headers)
+    override fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/page/$page/?per_page=100&s=&post_type=wp-manga", headers)
 
-    override fun latestUpdatesRequest(page: Int) = GET("$baseUrl/page/$page/?per_page=100&s=&post_type=wp-manga&m_orderby=latest", headers)
+    override fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/page/$page/?per_page=100&s=&post_type=wp-manga&m_orderby=latest", headers)
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList) = GET("$baseUrl/page/$page/?per_page=100&s=${query.replace(" ", "+")}&post_type=wp-manga", headers)
+    override fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request = GET("$baseUrl/page/$page/?per_page=100&s=${query.replace(" ", "+")}&post_type=wp-manga", headers)
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        val doc = response.asJsoup()
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val request = buildPopularMangaRequest(page)
+        val doc = client.get(request.url, request.headers).asJsoup()
         val mangas = parseNovels(doc)
         val hasNextPage = doc.selectFirst(".pagination a:contains(next)") != null ||
             doc.selectFirst("a.next.page-numbers") != null ||
@@ -35,10 +34,12 @@ class HizoManga :
     }
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        // page.url is already an absolute URL (see MadaraNovel.getPageList) - baseUrl must not be
+        // prepended again here, or the request resolves against a bogus "site+https" host.
+        val response = client.get(page.url, headers)
         val doc = response.asJsoup()
 
-        checkCaptcha(doc, baseUrl + page.url)
+        checkCaptcha(doc, page.url)
 
         doc.select(
             "div.ads, div.unlock-buttons, sub, script, ins, .adsbygoogle, .code-block, noscript, " +

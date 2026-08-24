@@ -49,3 +49,15 @@
 
 -if @kotlinx.serialization.Serializable class **
 -keep,allowshrinking,allowoptimization,allowobfuscation class <1>
+
+# NovelSource's members have no caller inside a single extension module - the host app calls
+# them virtually through its own Source interface after the module is built, so R8 sees them as
+# unreachable and strips them, silently defaulting isNovelSource to false / breaking fetchPageText.
+-keepclassmembers class * implements eu.kanade.tachiyomi.source.NovelSource {
+    public boolean isNovelSource();
+    public java.lang.Object fetchPageText(eu.kanade.tachiyomi.source.model.Page, kotlin.coroutines.Continuation);
+}
+
+# readability4j (lib/siteparsers) pulls in slf4j-api with no binder on the classpath; slf4j's own
+# LoggerFactory already falls back to a no-op logger when the binder is missing at runtime.
+-dontwarn org.slf4j.**

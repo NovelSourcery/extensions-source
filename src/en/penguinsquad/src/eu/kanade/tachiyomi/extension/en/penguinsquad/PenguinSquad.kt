@@ -12,47 +12,62 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.extractNextJs
 import keiyoushi.utils.getPreferencesLazy
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Element
-import java.text.SimpleDateFormat
+import java.time.LocalDateTime
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.util.Locale
-import java.util.TimeZone
 
-class PenguinSquad :
-    HttpSource(),
+@Source
+abstract class PenguinSquad :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
-    override val name = "PenguinSquad"
-    override val baseUrl = "https://penguin-squad.com"
-    override val lang = "en"
     override val supportsLatest = true
-
-    override val client = network.cloudflareClient
 
     private val preferences: SharedPreferences by getPreferencesLazy()
 
     private val showPremium: Boolean
         get() = preferences.getBoolean(PREF_SHOW_PREMIUM, false)
 
+    /**
+     * The site's novel detail URL shape, as `/novels/<slug>`. [SManga.url] is stored as the
+     * bare slug (see [SlugPath]); a stored value starting with "/" is a pre-existing full-path
+     * entry from before this source adopted slug storage, and is resolved unchanged regardless
+     * of this template.
+     */
+    protected open val mangaPathTemplate: SlugPath = SlugPath("/novels/")
+
     // ---- Browse ----
 
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/novels", headers)
+    protected open fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/novels", headers)
 
-    override fun popularMangaParse(response: Response): MangasPage = MangasPage(response.asJsoup().parseNovelCards(), false)
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val popularRequest = buildPopularMangaRequest(page)
+        return MangasPage(client.get(popularRequest.url, popularRequest.headers).asJsoup().parseNovelCards(), false)
+    }
 
-    override fun latestUpdatesRequest(page: Int): Request = GET(baseUrl, headers)
+    protected open fun buildLatestUpdatesRequest(page: Int): Request = GET(baseUrl, headers)
 
-    override fun latestUpdatesParse(response: Response): MangasPage {
-        val doc = response.asJsoup()
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val latestRequest = buildLatestUpdatesRequest(page)
+        val doc = client.get(latestRequest.url, latestRequest.headers).asJsoup()
         val section = doc.select("section")
             .firstOrNull { it.selectFirst("h2")?.ownText() == "Newly Added" }
             ?: doc
@@ -61,8 +76,8 @@ class PenguinSquad :
 
     // The site has no server-side text search; ?genre= is the only server filter.
     // The query is carried in the URL fragment (never sent to the server) and
-    // applied client-side in searchMangaParse.
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    // applied client-side in getSearchMangaList.
+    protected open fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val url = "$baseUrl/novels".toHttpUrl().newBuilder().apply {
             filters.filterIsInstance<GenreFilter>().firstOrNull()
                 ?.selectedGenre()
@@ -74,8 +89,9 @@ class PenguinSquad :
         return GET(url, headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage {
-        val query = response.request.url.fragment.orEmpty()
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val searchRequest = buildSearchMangaRequest(page, query, filters)
+        val response = client.get(searchRequest.url, searchRequest.headers)
         val cards = response.asJsoup().parseNovelCards()
             .filter { query.isBlank() || it.title.contains(query, ignoreCase = true) }
         return MangasPage(cards, false)
@@ -85,7 +101,7 @@ class PenguinSquad :
         .distinctBy { it.attr("href") }
         .map { card ->
             SManga.create().apply {
-                url = card.attr("href")
+                url = mangaPathTemplate.slug(card.attr("href"))
                 title = card.selectFirst("h3")!!.text()
                 thumbnail_url = card.selectFirst("img")?.absUrl("src")
             }
@@ -93,49 +109,72 @@ class PenguinSquad :
 
     // ---- Details ----
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
+
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        // Details and the chapter list both live on the same novel page - fetch it once.
+        val mangaDetailsRequest = buildMangaDetailsRequest(manga)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers)
         val doc = response.asJsoup()
 
-        return SManga.create().apply {
-            url = "/novels/${response.request.url.pathSegments.last()}"
-            title = doc.selectFirst("h1")?.text().orEmpty()
-            thumbnail_url = doc.selectFirst("img[src*=/covers/]")?.absUrl("src")
-            description = doc.selectFirst("p[class*=line-clamp-3]")?.text()
-            genre = doc.select("span[data-slot=badge][data-variant=outline]")
+        val updatedManga = if (fetchDetails) parseMangaDetails(doc, response) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    private fun parseMangaDetails(doc: org.jsoup.nodes.Document, response: Response): SManga = SManga.create().apply {
+        url = mangaPathTemplate.slug("/novels/${response.request.url.pathSegments.last()}")
+        title = doc.selectFirst("h1")?.text().orEmpty()
+        thumbnail_url = doc.selectFirst("img[src*=/covers/]")?.absUrl("src")
+        description = doc.selectFirst("p[class*=line-clamp-3]")?.text()
+        genre = doc.select("span[data-slot=badge][data-variant=outline]")
+            .eachText()
+            .distinct()
+            .joinToString()
+        author = doc.selectFirst("span:containsOwn(Translated by)")
+            ?.text()
+            ?.removePrefix("Translated by")
+            ?.trim()
+        status = when (
+            doc.select("span[data-slot=badge][data-variant=default]")
                 .eachText()
-                .distinct()
-                .joinToString(", ")
-            author = doc.selectFirst("span:containsOwn(Translated by)")
-                ?.text()
-                ?.removePrefix("Translated by")
-                ?.trim()
-            status = when (
-                doc.select("span[data-slot=badge][data-variant=default]")
-                    .eachText()
-                    .firstOrNull { it.lowercase() in STATUS_VALUES }
-                    ?.lowercase()
-            ) {
-                "ongoing" -> SManga.ONGOING
-                "completed" -> SManga.COMPLETED
-                "hiatus" -> SManga.ON_HIATUS
-                "dropped" -> SManga.CANCELLED
-                else -> SManga.UNKNOWN
-            }
+                .firstOrNull { it.lowercase() in STATUS_VALUES }
+                ?.lowercase()
+        ) {
+            "ongoing" -> SManga.ONGOING
+            "completed" -> SManga.COMPLETED
+            "hiatus" -> SManga.ON_HIATUS
+            "dropped" -> SManga.CANCELLED
+            else -> SManga.UNKNOWN
         }
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + manga.url
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
+        val mangaDetailsRequest = buildMangaDetailsRequest(manga)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, ensureSuccess = false)
+        if (!response.isSuccessful) return null
+        return parseMangaDetails(response.asJsoup(), response)
+    }
 
     // ---- Chapters ----
 
     @Serializable
-    private data class ChapterListDto(
+    private class ChapterListDto(
         val novelSlug: String,
         val chapters: List<ChapterDto>,
     )
 
     @Serializable
-    private data class ChapterDto(
+    private class ChapterDto(
         val title: String,
         val slug: String,
         @SerialName("chapter_number") val chapterNumber: Float,
@@ -143,10 +182,10 @@ class PenguinSquad :
         val premium: Boolean = false,
     )
 
-    override fun chapterListParse(response: Response): List<SChapter> {
+    private fun parseChapterList(doc: org.jsoup.nodes.Document): List<SChapter> {
         // The full chapter list (free + premium) is embedded in the page's
         // RSC flight data as {"novelSlug": ..., "chapters": [...]}.
-        val dto = response.asJsoup().extractNextJs<ChapterListDto>()
+        val dto = doc.extractNextJs<ChapterListDto>()
             ?: throw Exception("Could not find chapter list in page data")
 
         return dto.chapters
@@ -165,33 +204,28 @@ class PenguinSquad :
             .sortedByDescending { it.chapter_number }
     }
 
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).apply {
-        timeZone = TimeZone.getTimeZone("UTC")
-    }
+    private val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
 
     // published_at looks like "2024-10-06T00:00:00+00:00", sometimes with millis.
     // Offsets are always +00:00, so parse the date-time part as UTC.
     private fun parseDate(date: String?): Long {
         if (date.isNullOrBlank()) return 0L
         val normalized = date.substringBefore('+').substringBefore('.')
-        return runCatching { dateFormat.parse(normalized)?.time }.getOrNull() ?: 0L
+        return runCatching {
+            LocalDateTime.parse(normalized, dateFormatter).atZone(ZoneOffset.UTC).toInstant().toEpochMilli()
+        }.getOrDefault(0L)
     }
 
     // ---- Chapter content ----
 
-    override fun pageListParse(response: Response): List<Page> {
-        val chapterUrl = response.request.url.toString().removePrefix(baseUrl)
-        return listOf(Page(0, chapterUrl))
-    }
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        val response = client.get(baseUrl + page.url, headers)
         val content = response.asJsoup().selectFirst("div.reader-content")
             ?: throw Exception("Chapter content not found – this may be a premium chapter")
         return content.html()
     }
-
-    override fun imageUrlParse(response: Response): String = ""
 
     // ---- Preferences ----
 
@@ -206,7 +240,7 @@ class PenguinSquad :
 
     // ---- Filters ----
 
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         Filter.Header("Text search is applied client-side"),
         GenreFilter(),
     )

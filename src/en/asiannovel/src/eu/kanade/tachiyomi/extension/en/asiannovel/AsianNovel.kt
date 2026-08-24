@@ -1,4 +1,4 @@
-﻿package eu.kanade.tachiyomi.novelextension.en.asiannovel
+package eu.kanade.tachiyomi.novelextension.en.asiannovel
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
@@ -8,193 +8,211 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import uy.kohesive.injekt.injectLazy
 
-class AsianNovel :
-    HttpSource(),
+@Source
+abstract class AsianNovel :
+    KeiSource(),
     NovelSource {
 
-    override val name = "AsianNovel"
-    override val baseUrl = "https://www.asianovel.net"
-    override val lang = "en"
     override val supportsLatest = true
-    override val isNovelSource = true
 
     private val json: Json by injectLazy()
 
-    override val client = network.cloudflareClient
+    /** [SManga.url] stored as bare slug under "/story/"; a stored value starting with "/" is a
+     * pre-existing full-path entry and is resolved unchanged. */
+    private val mangaPath = SlugPath("/story/")
+
     // ======================== Popular ========================
 
-    override fun popularMangaRequest(page: Int): Request {
+    override suspend fun getPopularManga(page: Int): MangasPage {
         val pageStr = if (page > 1) "page/$page/" else ""
-        return GET("$baseUrl/$pageStr?s=&post_type=fcn_story&orderby=comment_count&order=desc", headers)
+        val response = client.get("$baseUrl/$pageStr?s=&post_type=fcn_story&orderby=comment_count&order=desc", headers)
+        return parseSearchResults(response.asJsoup())
     }
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        val document = Jsoup.parse(response.body.string())
-        return parseSearchResults(document)
-    }
     // ======================== Latest ========================
 
-    override fun latestUpdatesRequest(page: Int): Request {
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
         val pageStr = if (page > 1) "page/$page/" else ""
-        return GET("$baseUrl/$pageStr?s=&post_type=fcn_story&orderby=modified&order=desc", headers)
+        val response = client.get("$baseUrl/$pageStr?s=&post_type=fcn_story&orderby=modified&order=desc", headers)
+        return parseSearchResults(response.asJsoup())
     }
 
-    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
     // ======================== Search ========================
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val url = StringBuilder()
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val url = buildString {
+            if (page > 1) {
+                append("$baseUrl/page/$page/?")
+            } else {
+                append("$baseUrl/?")
+            }
 
-        if (page > 1) {
-            url.append("$baseUrl/page/$page/?")
-        } else {
-            url.append("$baseUrl/?")
-        }
+            append("s=${java.net.URLEncoder.encode(query, "UTF-8")}")
+            append("&post_type=fcn_story") // Search only stories
 
-        url.append("s=${java.net.URLEncoder.encode(query, "UTF-8")}")
-        url.append("&post_type=fcn_story") // Search only stories
+            var sortBy = "modified"
+            var sortOrder = "desc"
+            val genres = mutableListOf<Int>()
+            val excludeGenres = mutableListOf<Int>()
+            val tags = mutableListOf<Int>()
+            val excludeTags = mutableListOf<Int>()
 
-        var sortBy = "modified"
-        var sortOrder = "desc"
-        val genres = mutableListOf<Int>()
-        val excludeGenres = mutableListOf<Int>()
-        val tags = mutableListOf<Int>()
-        val excludeTags = mutableListOf<Int>()
-
-        filters.forEach { filter ->
-            when (filter) {
-                is SortFilter -> {
-                    sortBy = sortOptions[filter.state].second
-                }
-
-                is OrderFilter -> {
-                    sortOrder = orderOptions[filter.state].second
-                }
-
-                is AgeRatingFilter -> {
-                    if (filter.state > 0) {
-                        url.append("&age_rating=${ageRatingOptions[filter.state].second}")
+            filters.forEach { filter ->
+                when (filter) {
+                    is SortFilter -> {
+                        sortBy = sortOptions[filter.state].second
                     }
-                }
 
-                is StatusFilter -> {
-                    if (filter.state > 0) {
-                        url.append("&story_status=${statusOptions[filter.state].second}")
+                    is OrderFilter -> {
+                        sortOrder = orderOptions[filter.state].second
                     }
-                }
 
-                is MinWordsFilter -> {
-                    if (filter.state > 0) {
-                        url.append("&miw=${minWordOptions[filter.state].second}")
-                    }
-                }
-
-                is MaxWordsFilter -> {
-                    if (filter.state > 0) {
-                        url.append("&maw=${maxWordOptions[filter.state].second}")
-                    }
-                }
-
-                is GenreFilter -> {
-                    filter.state.forEachIndexed { index, triState ->
-                        when (triState.state) {
-                            Filter.TriState.STATE_INCLUDE -> genres.add(genreList[index].second)
-                            Filter.TriState.STATE_EXCLUDE -> excludeGenres.add(genreList[index].second)
+                    is AgeRatingFilter -> {
+                        if (filter.state > 0) {
+                            append("&age_rating=${ageRatingOptions[filter.state].second}")
                         }
                     }
-                }
 
-                is TagFilter -> {
-                    filter.state.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { tagName ->
-                        tagList.find { it.first.equals(tagName, ignoreCase = true) }?.let { tag ->
-                            tags.add(tag.second)
+                    is StatusFilter -> {
+                        if (filter.state > 0) {
+                            append("&story_status=${statusOptions[filter.state].second}")
                         }
                     }
-                }
 
-                is ExcludeTagFilter -> {
-                    filter.state.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { tagName ->
-                        tagList.find { it.first.equals(tagName, ignoreCase = true) }?.let { tag ->
-                            excludeTags.add(tag.second)
+                    is MinWordsFilter -> {
+                        if (filter.state > 0) {
+                            append("&miw=${minWordOptions[filter.state].second}")
                         }
                     }
-                }
 
-                is AuthorFilter -> {
-                    if (filter.state.isNotBlank()) {
-                        url.append("&author_name=${java.net.URLEncoder.encode(filter.state, "UTF-8")}")
+                    is MaxWordsFilter -> {
+                        if (filter.state > 0) {
+                            append("&maw=${maxWordOptions[filter.state].second}")
+                        }
                     }
-                }
 
-                else -> {}
+                    is GenreFilter -> {
+                        filter.state.forEachIndexed { index, triState ->
+                            when (triState.state) {
+                                Filter.TriState.STATE_INCLUDE -> genres.add(genreList[index].second)
+                                Filter.TriState.STATE_EXCLUDE -> excludeGenres.add(genreList[index].second)
+                            }
+                        }
+                    }
+
+                    is TagFilter -> {
+                        filter.state.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { tagName ->
+                            tagList.find { it.first.equals(tagName, ignoreCase = true) }?.let { tag ->
+                                tags.add(tag.second)
+                            }
+                        }
+                    }
+
+                    is ExcludeTagFilter -> {
+                        filter.state.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { tagName ->
+                            tagList.find { it.first.equals(tagName, ignoreCase = true) }?.let { tag ->
+                                excludeTags.add(tag.second)
+                            }
+                        }
+                    }
+
+                    is AuthorFilter -> {
+                        if (filter.state.isNotBlank()) {
+                            append("&author_name=${java.net.URLEncoder.encode(filter.state, "UTF-8")}")
+                        }
+                    }
+
+                    else -> {}
+                }
+            }
+
+            append("&orderby=$sortBy&order=$sortOrder")
+
+            if (genres.isNotEmpty()) {
+                append("&genres=${genres.joinToString(",")}")
+            } else {
+                append("&genres=")
+            }
+
+            if (tags.isNotEmpty()) {
+                append("&tags=${tags.joinToString(",")}")
+            } else {
+                append("&tags=")
+            }
+
+            if (excludeGenres.isNotEmpty()) {
+                append("&ex_genres=${excludeGenres.joinToString(",")}")
+            } else {
+                append("&ex_genres=")
+            }
+
+            if (excludeTags.isNotEmpty()) {
+                append("&ex_tags=${excludeTags.joinToString(",")}")
+            } else {
+                append("&ex_tags=")
             }
         }
 
-        url.append("&orderby=$sortBy&order=$sortOrder")
-
-        if (genres.isNotEmpty()) {
-            url.append("&genres=${genres.joinToString(",")}")
-        } else {
-            url.append("&genres=")
-        }
-
-        if (tags.isNotEmpty()) {
-            url.append("&tags=${tags.joinToString(",")}")
-        } else {
-            url.append("&tags=")
-        }
-
-        if (excludeGenres.isNotEmpty()) {
-            url.append("&ex_genres=${excludeGenres.joinToString(",")}")
-        } else {
-            url.append("&ex_genres=")
-        }
-
-        if (excludeTags.isNotEmpty()) {
-            url.append("&ex_tags=${excludeTags.joinToString(",")}")
-        } else {
-            url.append("&ex_tags=")
-        }
-
-        return GET(url.toString(), headers)
+        val response = client.get(url, headers)
+        return parseSearchResults(response.asJsoup())
     }
 
-    override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
-    // ======================== Details ========================
+    // ======================== Details + Chapters ========================
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPath.resolve(manga.url), headers)
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        val document = Jsoup.parse(response.body.string())
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        // Details and the chapter list both live on the same story page - fetch it once.
+        val request = buildMangaDetailsRequest(manga)
+        val response = client.get(request.url, request.headers)
+        val document = response.asJsoup()
 
+        val updatedManga = if (fetchDetails) parseMangaDetails(document, response) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(document) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    private fun parseMangaDetails(document: Document, response: Response): SManga {
         val jsonLd = document.selectFirst("script[type=application/ld+json]:contains(Book)")?.data()
         if (jsonLd != null) {
             try {
                 val schema = json.decodeFromString<SchemaBook>(jsonLd)
                 return SManga.create().apply {
-                    url = response.request.url.encodedPath
+                    url = mangaPath.slug(response.request.url.encodedPath)
                     title = schema.name
                     thumbnail_url = schema.image?.firstOrNull()
                     author = schema.author?.name
                     description = schema.description
-                    genre = schema.genre?.joinToString(", ")
+                    genre = schema.genre?.joinToString()
                     status = SManga.UNKNOWN
                 }
             } catch (_: Exception) {}
         }
 
         return SManga.create().apply {
-            url = response.request.url.encodedPath
+            url = mangaPath.slug(response.request.url.encodedPath)
 
             title = document.selectFirst("h1.story__identity-title")?.text()
                 ?: document.selectFirst("meta[property=og:title]")?.attr("content")
@@ -206,7 +224,7 @@ class AsianNovel :
 
             description = document.selectFirst(".story__summary p")?.text()
 
-            genre = document.select(".story__taxonomies .tag-pill").map { it.text() }.joinToString(", ")
+            genre = document.select(".story__taxonomies .tag-pill").map { it.text() }.joinToString()
 
             val statusText = document.selectFirst(".story__meta .story__status")?.text()?.lowercase() ?: ""
             status = when {
@@ -218,32 +236,15 @@ class AsianNovel :
             }
         }
     }
-    // ======================== Chapters ========================
 
-    override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
-
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val document = Jsoup.parse(response.body.string())
-
-        val jsonLd = document.selectFirst("script[type=application/ld+json]:contains(ItemList)")?.data()
-        val chapterUrls = mutableListOf<String>()
-
-        if (jsonLd != null) {
-            try {
-                val urlPattern = Regex(""""url":\s*"([^"]+/chapter/[^"]+)"""")
-                urlPattern.findAll(jsonLd).forEach { match ->
-                    match.groupValues.getOrNull(1)?.let { chapterUrls.add(it) }
-                }
-            } catch (_: Exception) {}
-        }
-
+    private fun parseChapterList(document: Document): List<SChapter> {
         val chapters = document.select(".chapter-group__list-item a").mapNotNull { element ->
             val href = element.attr("href")
             if (href.isBlank() || !href.contains("/chapter/")) return@mapNotNull null
 
             SChapter.create().apply {
                 url = java.net.URL(href).path
-                name = element.text().trim()
+                name = element.text()
 
                 val dateText = element.parent()?.selectFirst("time")?.text() ?: ""
                 date_upload = parseDateString(dateText)
@@ -252,62 +253,72 @@ class AsianNovel :
 
         return chapters.reversed()
     }
+
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val manga = SManga.create().apply { this.url = mangaPath.slug(url.encodedPath) }
+        val request = buildMangaDetailsRequest(manga)
+        val response = client.get(request.url, request.headers, ensureSuccess = false)
+        if (!response.isSuccessful) return null
+        val document = response.asJsoup()
+        return parseMangaDetails(document, response)
+    }
+
     // ======================== Pages ========================
 
-    override fun pageListRequest(chapter: SChapter): Request = GET(baseUrl + chapter.url, headers)
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.get(baseUrl + chapter.url, headers)
+        return listOf(Page(0, response.request.url.toString()))
+    }
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val request = GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
-        val response = client.newCall(request).execute()
-        val document = Jsoup.parse(response.body.string())
-
-        val content = StringBuilder()
+        val response = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
+        val document = response.asJsoup()
 
         val contentSection = document.selectFirst("#chapter-content, .chapter__content")
 
-        contentSection?.let { section ->
-            val wrapper = section.selectFirst(".resize-font, .chapter-formatting") ?: section
+        return buildString {
+            contentSection?.let { section ->
+                val wrapper = section.selectFirst(".resize-font, .chapter-formatting") ?: section
 
-            wrapper.children().forEach { element ->
-                if (element.hasClass("adsbygoogle") || element.attr("id").contains("ad", ignoreCase = true) ||
-                    element.tagName() == "script" ||
-                    element.tagName() == "ins"
-                ) {
-                    return@forEach
-                }
+                wrapper.children().forEach { element ->
+                    if (element.hasClass("adsbygoogle") || element.attr("id").contains("ad", ignoreCase = true) ||
+                        element.tagName() == "script" ||
+                        element.tagName() == "ins"
+                    ) {
+                        return@forEach
+                    }
 
-                when (element.tagName()) {
-                    "p" -> {
-                        val text = element.text()?.trim()
-                        if (!text.isNullOrEmpty()) {
-                            content.append("<p>$text</p>\n")
+                    when (element.tagName()) {
+                        "p" -> {
+                            val text = element.text()
+                            if (!text.isNullOrEmpty()) {
+                                append("<p>$text</p>\n")
+                            }
                         }
-                    }
 
-                    "h1", "h2", "h3" -> {
-                        content.append("<h3>${element.text()}</h3>\n")
-                    }
+                        "h1", "h2", "h3" -> {
+                            append("<h3>${element.text()}</h3>\n")
+                        }
 
-                    "img" -> {
-                        val src = element.absUrl("src")
-                        if (src.isNotEmpty()) {
-                            content.append("<img src=\"$src\">\n")
+                        "img" -> {
+                            val src = element.absUrl("src")
+                            if (src.isNotEmpty()) {
+                                append("<img src=\"$src\">\n")
+                            }
                         }
                     }
                 }
             }
         }
-
-        return content.toString()
     }
 
-    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
     // ======================== Filters ========================
 
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         SortFilter("Sort By", sortOptions.map { it.first }.toTypedArray()),
         OrderFilter("Order", orderOptions.map { it.first }.toTypedArray()),
         Filter.Separator(),
@@ -468,7 +479,7 @@ class AsianNovel :
             val titleElement = card.selectFirst(".card__title a") ?: return@mapNotNull null
 
             SManga.create().apply {
-                url = java.net.URL(titleElement.absUrl("href")).path
+                url = mangaPath.slug(java.net.URL(titleElement.absUrl("href")).path)
                 title = titleElement.text()
                 thumbnail_url = card.selectFirst(".card__image img")?.absUrl("src")
                 author = card.selectFirst(".author")?.text()
@@ -480,7 +491,7 @@ class AsianNovel :
                     else -> SManga.UNKNOWN
                 }
 
-                genre = card.select(".card__tag-list .tag-pill").map { it.text() }.joinToString(", ")
+                genre = card.select(".card__tag-list .tag-pill").map { it.text() }.joinToString()
             }
         }
 
@@ -511,7 +522,7 @@ class AsianNovel :
     // ======================== Data Classes ========================
 
     @Serializable
-    data class SchemaBook(
+    class SchemaBook(
         val name: String,
         val description: String? = null,
         val author: SchemaAuthor? = null,
@@ -520,7 +531,7 @@ class AsianNovel :
     )
 
     @Serializable
-    data class SchemaAuthor(
+    class SchemaAuthor(
         val name: String,
     )
 }

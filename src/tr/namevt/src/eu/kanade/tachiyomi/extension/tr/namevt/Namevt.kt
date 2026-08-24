@@ -1,13 +1,10 @@
-﻿package eu.kanade.tachiyomi.novelextension.tr.namevt
+package eu.kanade.tachiyomi.novelextension.tr.namevt
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
+import keiyoushi.annotation.Source
 
-class Namevt :
-    LightNovelWPNovel(
-        baseUrl = "https://namevt.com",
-        name = "Namevt",
-        lang = "tr",
-    ) {
+@Source
+abstract class Namevt : LightNovelWPNovel() {
     override val reverseChapters = true
     override val seriesPath = "seri"
 }

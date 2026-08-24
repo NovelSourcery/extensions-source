@@ -12,63 +12,73 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.extractNextJs
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.jsonInstance
+import keiyoushi.utils.parseAs
+import keiyoushi.utils.toJsonElement
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.put
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Request
 import okhttp3.Response
-import java.text.SimpleDateFormat
+import java.time.LocalDateTime
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.util.Locale
-import java.util.TimeZone
 
-class MTLWuxia :
-    HttpSource(),
+@Source
+abstract class MTLWuxia :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
-    override val name = "MTL Wuxia"
-    override val baseUrl = "https://mtlwuxia.com"
-    override val lang = "en"
     override val supportsLatest = true
-
-    override val client = network.cloudflareClient
 
     private val preferences: SharedPreferences by getPreferencesLazy()
 
+    /**
+     * The site's novel detail URL shape, as `/novel/<slug>`. [SManga.url] is stored as the bare
+     * slug (see [SlugPath]); a stored value starting with "/" is a pre-existing full-path entry
+     * from before this source adopted slug storage, and is resolved unchanged regardless of
+     * this template.
+     */
+    private val mangaPathTemplate: SlugPath = SlugPath("/novel/")
+
+    // tRPC input schemas treat an omitted optional field differently from an explicit null
+    // (e.g. a zod .optional() cursor), so this overrides the shared instance's null handling
+    // just for encoding request inputs.
+    private val requestJson = Json(jsonInstance) { explicitNulls = false }
+
     // ---- tRPC helpers ----
 
-    private fun trpcRequest(procedure: String, input: JsonElement?, fragment: String? = null): Request {
-        val batchInput = buildJsonObject {
-            put(
-                "0",
-                buildJsonObject {
-                    put("json", input ?: JsonNull)
-                },
-            )
-        }
-        val url = "$baseUrl/api/trpc/$procedure".toHttpUrl().newBuilder()
+    private fun trpcUrl(procedure: String, input: JsonElement?, fragment: String? = null): HttpUrl {
+        val batchInput = mapOf("0" to TrpcJsonWrapper(input ?: JsonNull))
+        return "$baseUrl/api/trpc/$procedure".toHttpUrl().newBuilder()
             .addQueryParameter("batch", "1")
-            .addQueryParameter("input", batchInput.toString())
+            .addQueryParameter("input", jsonInstance.encodeToString(batchInput))
             .fragment(fragment)
             .build()
-        return GET(url, headers)
     }
+
+    @Serializable
+    private class TrpcJsonWrapper(val json: JsonElement)
 
     // Unwraps [{"result":{"data":{"json":<payload>}}}]
     private fun Response.trpcJson(): JsonElement = jsonInstance.parseToJsonElement(body.string())
@@ -83,7 +93,7 @@ class MTLWuxia :
     // listing (keyed via the request URL fragment) so page N+1 can resume.
     private val listingCursors = mutableMapOf<String, String>()
 
-    private fun novelListRequest(page: Int, baseInput: JsonObject): Request {
+    private fun novelListUrl(page: Int, baseInput: JsonObject): HttpUrl {
         val key = baseInput.toString().hashCode().toString()
         val input = if (page > 1) {
             val cursor = listingCursors[key]
@@ -92,7 +102,7 @@ class MTLWuxia :
         } else {
             baseInput
         }
-        return trpcRequest("novel.getAll", input, fragment = key)
+        return trpcUrl("novel.getAll", input, fragment = key)
     }
 
     private fun novelListParse(response: Response): MangasPage {
@@ -102,7 +112,7 @@ class MTLWuxia :
         response.request.url.fragment?.let { key ->
             data.nextCursor?.let { listingCursors[key] = it } ?: listingCursors.remove(key)
         }
-        return MangasPage(data.novels.map { it.toSManga() }, data.nextCursor != null)
+        return MangasPage(data.novels.map { it.toSManga(mangaPathTemplate) }, data.nextCursor != null)
     }
 
     private fun baseListInput(sortBy: String, block: (MutableMap<String, JsonElement>.() -> Unit)? = null): JsonObject {
@@ -114,15 +124,11 @@ class MTLWuxia :
         return JsonObject(map)
     }
 
-    override fun popularMangaRequest(page: Int): Request = novelListRequest(page, baseListInput("views"))
+    override suspend fun getPopularManga(page: Int): MangasPage = novelListParse(client.get(novelListUrl(page, baseListInput("views")), headers))
 
-    override fun popularMangaParse(response: Response): MangasPage = novelListParse(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = novelListParse(client.get(novelListUrl(page, baseListInput("latest")), headers))
 
-    override fun latestUpdatesRequest(page: Int): Request = novelListRequest(page, baseListInput("latest"))
-
-    override fun latestUpdatesParse(response: Response): MangasPage = novelListParse(response)
-
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         var sortBy = "latest"
         filters.filterIsInstance<SortFilter>().firstOrNull()?.let { sortBy = it.toUriPart() }
 
@@ -139,48 +145,51 @@ class MTLWuxia :
                 }
             }
         }
-        return novelListRequest(page, input)
+        return novelListParse(client.get(novelListUrl(page, input), headers))
     }
-
-    override fun searchMangaParse(response: Response): MangasPage = novelListParse(response)
 
     // ---- Details ----
 
-    override fun mangaDetailsRequest(manga: SManga): Request = trpcRequest("novel.getBySlug", buildJsonObject { put("slug", manga.slug()) })
+    private fun buildMangaDetailsUrl(manga: SManga): HttpUrl = trpcUrl("novel.getBySlug", SlugInput(manga.slug()).toJsonElement())
 
-    override fun mangaDetailsParse(response: Response): SManga = jsonInstance.decodeFromJsonElement<NovelDto>(response.trpcJson()).toSManga()
+    @Serializable
+    private class SlugInput(val slug: String)
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + manga.url
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
 
-    private fun SManga.slug(): String = url
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
+        val response = client.get(buildMangaDetailsUrl(manga), headers, ensureSuccess = false)
+        if (!response.isSuccessful) return null
+        // toSManga() already sets .url from the DTO's own slug field.
+        return jsonInstance.decodeFromJsonElement<NovelDto>(response.trpcJson()).toSManga(mangaPathTemplate)
+    }
+
+    private fun SManga.slug(): String = mangaPathTemplate.resolve(url)
         .substringAfter("/novel/")
         .substringBefore('/')
         .substringBefore('?')
 
     // ---- Chapters ----
 
-    override fun chapterListRequest(manga: SManga): Request = chapterPageRequest(manga.slug(), cursor = null)
-
-    private fun chapterPageRequest(slug: String, cursor: String?): Request = trpcRequest(
+    private fun chapterPageUrl(slug: String, cursor: String?): HttpUrl = trpcUrl(
         "chapter.getListByNovel",
-        buildJsonObject {
-            put("novelSlug", slug)
-            put("limit", 100)
-            cursor?.let { put("cursor", it) }
-        },
+        ChapterListInput(novelSlug = slug, cursor = cursor).toJsonElement(requestJson),
         fragment = slug,
     )
 
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val slug = response.request.url.fragment!!
+    @Serializable
+    private class ChapterListInput(val novelSlug: String, val limit: Int = 100, val cursor: String? = null)
+
+    private suspend fun fetchAllChapters(slug: String): List<SChapter> {
         val chapters = mutableListOf<ChapterDto>()
 
-        var data = jsonInstance.decodeFromJsonElement<ChapterListJson>(response.trpcJson())
+        var data = jsonInstance.decodeFromJsonElement<ChapterListJson>(client.get(chapterPageUrl(slug, null), headers).trpcJson())
         chapters += data.chapters
 
         // Follow the cursor until the whole list is fetched (limit is capped at 100).
         while (data.nextCursor != null) {
-            val next = client.newCall(chapterPageRequest(slug, data.nextCursor)).execute()
+            val next = client.get(chapterPageUrl(slug, data.nextCursor), headers)
             data = jsonInstance.decodeFromJsonElement<ChapterListJson>(next.trpcJson())
             chapters += data.chapters
         }
@@ -200,32 +209,45 @@ class MTLWuxia :
             .sortedByDescending { it.chapter_number }
     }
 
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).apply {
-        timeZone = TimeZone.getTimeZone("UTC")
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val updatedManga = if (fetchDetails) {
+            jsonInstance.decodeFromJsonElement<NovelDto>(client.get(buildMangaDetailsUrl(manga), headers).trpcJson()).toSManga(mangaPathTemplate)
+        } else {
+            manga
+        }
+        val updatedChapters = if (fetchChapters) fetchAllChapters(manga.slug()) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
     }
+
+    private val dateFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
 
     // Dates look like "2026-05-28T00:26:38.819Z"
     private fun parseDate(date: String?): Long {
         if (date.isNullOrBlank()) return 0L
         val normalized = date.substringBefore('.').removeSuffix("Z")
-        return runCatching { dateFormat.parse(normalized)?.time }.getOrNull() ?: 0L
+        return runCatching {
+            LocalDateTime.parse(normalized, dateFormatter).atZone(ZoneOffset.UTC).toInstant().toEpochMilli()
+        }.getOrDefault(0L)
     }
 
     // ---- Chapter content ----
 
-    override fun pageListParse(response: Response): List<Page> {
-        val chapterUrl = response.request.url.toString().removePrefix(baseUrl)
-        return listOf(Page(0, chapterUrl))
-    }
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     @Serializable
-    private data class PageChapterDto(
+    private class PageChapterDto(
         val content: String,
         val translatorNote: String? = null,
     )
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        val response = client.get(baseUrl + page.url, headers)
         val chapter = response.asJsoup().extractNextJs<PageChapterDto>()
             ?: throw Exception("Chapter content not found")
 
@@ -239,12 +261,10 @@ class MTLWuxia :
         }
     }
 
-    override fun imageUrlParse(response: Response): String = ""
-
     // ---- Filter metadata (fetched once, cached in preferences) ----
 
     @Serializable
-    private data class FilterOption(val name: String, val slug: String)
+    private class FilterOption(val name: String, val slug: String)
 
     private fun loadCachedOptions(key: String): List<FilterOption> {
         val raw = preferences.getString(key, null) ?: return emptyList()
@@ -262,17 +282,15 @@ class MTLWuxia :
 
         runCatching {
             // Single batched call: search.getGenres,search.getTags
-            val batchInput = buildJsonObject {
-                put("0", buildJsonObject { put("json", JsonNull) })
-                put("1", buildJsonObject { put("json", JsonNull) })
-            }
+            val batchInput = mapOf(
+                "0" to TrpcJsonWrapper(JsonNull),
+                "1" to TrpcJsonWrapper(JsonNull),
+            )
             val url = "$baseUrl/api/trpc/search.getGenres,search.getTags".toHttpUrl().newBuilder()
                 .addQueryParameter("batch", "1")
-                .addQueryParameter("input", batchInput.toString())
+                .addQueryParameter("input", jsonInstance.encodeToString(batchInput))
                 .build()
-            val results = jsonInstance.parseToJsonElement(
-                client.newCall(GET(url, headers)).execute().body.string(),
-            ).jsonArray
+            val results = client.newCall(GET(url, headers)).execute().parseAs<JsonElement>().jsonArray
 
             fun parseOptions(element: JsonElement): List<FilterOption> = element
                 .jsonObject["result"]!!
@@ -293,7 +311,7 @@ class MTLWuxia :
 
     // ---- Filters ----
 
-    override fun getFilterList(): FilterList {
+    override fun getFilterList(data: JsonElement?): FilterList {
         // getFilterList can be called on the main thread, so the fetch must not
         // run inline – kick it off in the background and ask the user to reopen.
         if (!filterOptionsCached()) {
@@ -374,28 +392,28 @@ class MTLWuxia :
     // ---- DTOs ----
 
     @Serializable
-    private data class NovelListJson(
+    private class NovelListJson(
         val novels: List<NovelDto>,
         val nextCursor: String? = null,
     )
 
     @Serializable
-    private data class NovelDto(
-        val title: String,
-        val slug: String,
-        val author: String? = null,
-        val synopsis: String? = null,
-        val coverImage: String? = null,
-        val status: String? = null,
-        val totalChapters: Int? = null,
-        val views: Int? = null,
-        val rating: Double? = null,
-        @SerialName("_count") val count: CountDto? = null,
-        val genres: List<GenreWrapper> = emptyList(),
-        val tags: List<TagWrapper> = emptyList(),
+    private class NovelDto(
+        private val title: String,
+        private val slug: String,
+        private val author: String? = null,
+        private val synopsis: String? = null,
+        private val coverImage: String? = null,
+        private val status: String? = null,
+        private val totalChapters: Int? = null,
+        private val views: Int? = null,
+        private val rating: Double? = null,
+        @SerialName("_count") private val count: CountDto? = null,
+        private val genres: List<GenreWrapper> = emptyList(),
+        private val tags: List<TagWrapper> = emptyList(),
     ) {
-        fun toSManga(): SManga = SManga.create().apply {
-            url = "/novel/${this@NovelDto.slug}"
+        fun toSManga(mangaPathTemplate: SlugPath): SManga = SManga.create().apply {
+            url = mangaPathTemplate.slug("/novel/${this@NovelDto.slug}")
             title = this@NovelDto.title
             author = this@NovelDto.author
             description = buildString {
@@ -416,7 +434,7 @@ class MTLWuxia :
             thumbnail_url = coverImage
             genre = (genres.mapNotNull { it.genre?.name } + tags.mapNotNull { it.tag?.name })
                 .distinct()
-                .joinToString(", ")
+                .joinToString()
             status = when (this@NovelDto.status?.uppercase()) {
                 "ONGOING" -> SManga.ONGOING
                 "COMPLETED" -> SManga.COMPLETED
@@ -428,26 +446,26 @@ class MTLWuxia :
     }
 
     @Serializable
-    private data class CountDto(
+    private class CountDto(
         val bookmarks: Int? = null,
         val comments: Int? = null,
         val ratings: Int? = null,
     )
 
     @Serializable
-    private data class GenreWrapper(val genre: FilterOption? = null)
+    private class GenreWrapper(val genre: FilterOption? = null)
 
     @Serializable
-    private data class TagWrapper(val tag: FilterOption? = null)
+    private class TagWrapper(val tag: FilterOption? = null)
 
     @Serializable
-    private data class ChapterListJson(
+    private class ChapterListJson(
         val chapters: List<ChapterDto>,
         val nextCursor: String? = null,
     )
 
     @Serializable
-    private data class ChapterDto(
+    private class ChapterDto(
         val number: Float,
         val title: String? = null,
         val publishedAt: String? = null,
