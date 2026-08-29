@@ -15,7 +15,6 @@ import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.JsonElement
 import okhttp3.FormBody
-import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -39,9 +38,6 @@ abstract class ReadWN :
     NovelSource {
 
     override val supportsLatest = true
-
-    override fun Headers.Builder.configureHeaders(): Headers.Builder = this
-        .add("Referer", "$baseUrl/")
 
     /**
      * The site's novel detail URL shape, as `/novel/<slug>.html`. [SManga.url] is stored as
