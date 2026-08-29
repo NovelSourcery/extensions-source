@@ -288,9 +288,6 @@ abstract class SyosetuBase(
         thumbnail_url = cover?.attr("abs:data-src")?.takeIf { it.isNotBlank() }
             ?: cover?.attr("abs:src")?.takeIf { it.isNotBlank() }
 
-        genre = doc.selectFirst("meta[property='og:description']")?.attr("content")
-            ?.split(" ")?.joinToString() ?: ""
-
         val statusText = doc.selectFirst(".c-announce, .novel_status")?.text()?.trim() ?: ""
         status = when {
             statusText.contains("完結") -> SManga.COMPLETED
