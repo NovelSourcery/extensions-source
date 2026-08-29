@@ -809,15 +809,25 @@ abstract class TomatoMTL :
 
     private fun buildMangaDetailsUrl(manga: SManga): String = "$baseUrl${manga.resolvedUrl()}"
 
-    // Garden novels aren't real browsable pages on the site (require login), so only regular
-    // /book/ pages can be resolved directly from a pasted URL.
+    // Garden novel pages require login and can't be scraped directly, so /garden/ links are
+    // resolved through the same garden-API path used for existing library entries instead.
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
-        if (!path.startsWith("/book/")) return null
-        val response = client.get(url.toString(), headers, ensureSuccess = false)
-        if (!response.isSuccessful) return null
-        val bookId = path.removePrefix("/book/").trim('/')
-        return parseMangaDetailsHtml(response).apply { this.url = bookId }
+        return when {
+            path.startsWith("/book/") -> {
+                val response = client.get(url.toString(), headers, ensureSuccess = false)
+                if (!response.isSuccessful) return null
+                val bookId = path.removePrefix("/book/").trim('/')
+                parseMangaDetailsHtml(response).apply { this.url = bookId }
+            }
+            path.startsWith("/garden/") -> {
+                val stored = path.removePrefix("/garden/").trim('/')
+                if (stored.split("/").size < 2) return null
+                val manga = SManga.create().apply { this.url = stored }
+                runCatching { ensureGardenTitle(fetchGardenMangaDetailsInternal(manga)) }.getOrNull()
+            }
+            else -> null
+        }
     }
 
     /**
