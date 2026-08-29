@@ -627,7 +627,7 @@ abstract class FictionZone :
         doc.select("p, div, li").forEach { it.after(paragraphToken) }
 
         return doc.text()
-            .replace(' ', ' ')
+            .replace(' ', ' ')
             .replace(Regex("\\s*$paragraphToken\\s*"), "\n\n")
             .replace(Regex("\\s*$breakToken\\s*"), "\n")
             .replace(Regex("\n{3,}"), "\n\n")

@@ -914,7 +914,7 @@ fun Element.formattedDescription(): String {
         .filter { it !== node }
         .forEach { it.after(paragraphToken) }
     return node.text()
-        .replace(' ', ' ')
+        .replace(' ', ' ')
         .replace(Regex("""\s*$paragraphToken\s*"""), "\n\n")
         .replace(Regex("""\s*$breakToken\s*"""), "\n")
         .replace(Regex("\n{3,}"), "\n\n")
