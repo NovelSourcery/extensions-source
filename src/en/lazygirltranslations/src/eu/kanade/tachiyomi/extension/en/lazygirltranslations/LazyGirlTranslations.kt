@@ -1,12 +1,9 @@
-﻿package eu.kanade.tachiyomi.novelextension.en.lazygirltranslations
+package eu.kanade.tachiyomi.novelextension.en.lazygirltranslations
 
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
+import keiyoushi.annotation.Source
 
-class LazyGirlTranslations :
-    LightNovelWPNovel(
-        baseUrl = "https://lazygirltranslations.com",
-        name = "LazyGirlTranslations",
-        lang = "en",
-    ) {
+@Source
+abstract class LazyGirlTranslations : LightNovelWPNovel() {
     override val reverseChapters = true
 }

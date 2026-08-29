@@ -55,7 +55,7 @@ class ExtensionPlugin : Plugin<Project> {
         val applicationIdSuffix = "${project.parent?.name}.${project.name}"
 
         android {
-            namespace = "eu.kanade.tachiyomi.extension"
+            namespace = "eu.kanade.tachiyomi.novelextension"
 
             defaultConfig {
                 this.applicationIdSuffix = applicationIdSuffix
@@ -275,7 +275,7 @@ class ExtensionPlugin : Plugin<Project> {
                 inputs.file(translationsFile)
             }
 
-            val packageName = "eu.kanade.tachiyomi.extension.$applicationIdSuffix"
+            val packageName = "eu.kanade.tachiyomi.novelextension.$applicationIdSuffix"
             val sourceInfos = resolvedSources.map { source ->
                 SourceMetadata(
                     id = source.id,

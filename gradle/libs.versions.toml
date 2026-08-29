@@ -1,13 +1,18 @@
 [versions]
 android-gradle = "9.3.1"
 coroutines = "1.11.0"
-# NOT pinned to 1.7.3 here despite the "1.8+ all-compatibility mode" compile-only APK bug
-# (https://github.com/keiyoushi/extensions-source/pull/12962#issuecomment-3828458599) our fork
-# previously carried this pin for: with kotlin-gradle 2.4.10 (bumped in this same sync), 1.7.3
-# fails to compile build-logic outright (Json.encodeToString<T> reified extension unresolved,
-# falls back to the 2-arg SerializationStrategy overload). Unverified whether the original APK
-# bug still reproduces on this newer toolchain - couldn't test, see PR description/handoff notes.
-serialization = "1.11.0"
+# Pinned to 1.7.3 (see keiyoushi#12962) for kotlin-json/kotlin-protobuf/kotlin-json-okio below,
+# which are compileOnly for every extension/theme/lib (libs.bundles.common) - the host app only
+# ships pre-1.8 kotlinx.serialization, so compiling against 1.8+'s "all-compatibility mode"
+# generates calls to GeneratedSerializer$-CC default-method dispatch classes the app's runtime
+# classpath doesn't have, crashing with NoClassDefFoundError for any @Serializable DTO actually
+# exercised at runtime (confirmed live: eu.kanade.tachiyomi.novelextension.en.wetriedtls.Meta).
+# gradle/build-logic needs a newer API (Json.encodeToString<T> reified extension) than 1.7.3
+# provides, so it depends on serialization-buildtools (kotlin-json-buildtools) instead - it's a
+# plain-JVM Gradle plugin, not shipped to devices, so it isn't subject to the app-runtime
+# constraint above.
+serialization = "1.7.3"
+serialization-buildtools = "1.11.0"
 junit = "4.13.2"
 kotlin-gradle = "2.4.10"
 ksp = "2.3.9"
@@ -37,6 +42,7 @@ jsoup = { module = "org.jsoup:jsoup", version = "1.22.2" }
 kotlin-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
 kotlin-protobuf = { module = "org.jetbrains.kotlinx:kotlinx-serialization-protobuf", version.ref = "serialization" }
 kotlin-json-okio = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json-okio", version.ref = "serialization" }
+kotlin-json-buildtools = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization-buildtools" }
 kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib-jdk8", version.ref = "kotlin-gradle" }
 okhttp-core = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 okhttp-brotli = { module = "com.squareup.okhttp3:okhttp-brotli", version.ref = "okhttp" }

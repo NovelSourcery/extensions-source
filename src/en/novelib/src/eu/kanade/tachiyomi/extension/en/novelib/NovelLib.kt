@@ -1,12 +1,9 @@
-﻿package eu.kanade.tachiyomi.novelextension.en.novelib
+package eu.kanade.tachiyomi.novelextension.en.novelib
 
 import eu.kanade.tachiyomi.multisrc.fictioneer.Fictioneer
+import keiyoushi.annotation.Source
 
-class NovelLib :
-    Fictioneer(
-        name = "NovelLib",
-        baseUrl = "https://novelib.com",
-        lang = "en",
-    ) {
+@Source
+abstract class NovelLib : Fictioneer() {
     override val browsePage = "browse"
 }

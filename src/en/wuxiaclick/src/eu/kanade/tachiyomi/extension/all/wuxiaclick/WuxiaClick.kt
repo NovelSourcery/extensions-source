@@ -13,39 +13,34 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.source.KeiSource
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
-class WuxiaClick :
-    HttpSource(),
+@Source
+abstract class WuxiaClick :
+    KeiSource(),
     NovelSource,
     ConfigurableSource {
 
-    override val name = "WuxiaClick"
-    override val baseUrl = "https://wuxia.click"
     private val apiUrl = "https://wuxiaworld.eu/api"
-    override val lang = "en"
-    override val supportsLatest = true
-    override val isNovelSource = true
-
-    override val id: Long = 4007327599712723254
-
-    override val client = network.cloudflareClient
 
     private val json: Json = Json {
         ignoreUnknownKeys = true
@@ -57,38 +52,27 @@ class WuxiaClick :
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
 
-    private fun getSearchCache(): JsonArray = try {
-        val raw = preferences.getString(SEARCH_CACHE_KEY, null) ?: return JsonArray(emptyList())
-        json.parseToJsonElement(raw).jsonArray
+    @Serializable
+    private class SearchCacheEntry(val slug: String, val title: String)
+
+    private fun getSearchCache(): List<SearchCacheEntry> = try {
+        val raw = preferences.getString(SEARCH_CACHE_KEY, null) ?: return emptyList()
+        json.decodeFromString<List<SearchCacheEntry>>(raw)
     } catch (e: Exception) {
-        JsonArray(emptyList())
+        emptyList()
     }
 
     private fun appendToSearchCache(items: List<Pair<String, String>>) {
         try {
             val current = getSearchCache().toMutableList()
-            val existingSlugs = current.mapNotNull {
-                it.jsonObject["slug"]?.let { s ->
-                    try {
-                        s.jsonPrimitive.content
-                    } catch (_: Exception) {
-                        null
-                    }
-                }
-            }.toMutableSet()
+            val existingSlugs = current.map { it.slug }.toMutableSet()
             for ((slug, title) in items) {
                 if (!existingSlugs.contains(slug)) {
-                    current.add(
-                        buildJsonObject {
-                            put("slug", JsonPrimitive(slug))
-                            put("title", JsonPrimitive(title))
-                        },
-                    )
+                    current.add(SearchCacheEntry(slug, title))
                     existingSlugs.add(slug)
                 }
             }
-            val arr = JsonArray(current)
-            preferences.edit().putString(SEARCH_CACHE_KEY, arr.toString()).apply()
+            preferences.edit().putString(SEARCH_CACHE_KEY, json.encodeToString(current)).apply()
         } catch (_: Exception) {
         }
     }
@@ -103,6 +87,8 @@ class WuxiaClick :
         null
     }
 
+    // manga.url is now just the slug; any historical wrapping (full API/site path) still
+    // resolves correctly since this already reduces to the trailing segment either way.
     private fun extractNovelSlug(rawUrl: String): String {
         val trimmed = rawUrl.trim()
         return when {
@@ -116,17 +102,14 @@ class WuxiaClick :
         }
     }
 
-    // Track the Next.js build ID for data fetching
-    private var buildId: String? = null
-
     // ======================== Popular ========================
 
-    override fun popularMangaRequest(page: Int): Request {
+    private fun buildPopularMangaRequest(page: Int): Request {
         val offset = (page - 1) * 12
         return GET("$apiUrl/search/?search=&offset=$offset&limit=12&order=-rating", headers)
     }
 
-    override fun popularMangaParse(response: Response): MangasPage {
+    private fun parseMangaListResponse(response: Response): MangasPage {
         val body = response.body.string()
         // Try to parse Next.js dehydrated data first
         val doc = org.jsoup.Jsoup.parse(body)
@@ -157,12 +140,12 @@ class WuxiaClick :
                             } ?: emptyList()
 
                             SManga.create().apply {
-                                url = "/novel/$slug"
+                                url = slug
                                 title = name.trim()
                                 thumbnail_url = if (img.startsWith("http")) img else img
                                 author = categories.firstOrNull()
                                 description = obj["description"]?.asStringOrNull() ?: ""
-                                genre = categories.joinToString(", ")
+                                genre = categories.joinToString()
                                 status = when (obj["status"]?.asStringOrNull()) {
                                     "CP", "completed", "cp" -> SManga.COMPLETED
                                     "OG", "ongoing", "og" -> SManga.ONGOING
@@ -177,7 +160,7 @@ class WuxiaClick :
                     // Append to persistent search cache (slug,title)
                     appendToSearchCache(
                         mangas.mapNotNull { m ->
-                            val slug = m.url.removePrefix("/novel/")
+                            val slug = m.url
                             val t = m.title
                             if (slug.isNotBlank()) Pair(slug, t) else null
                         },
@@ -197,12 +180,12 @@ class WuxiaClick :
 
         val novels = searchResponse.results.map { novel ->
             SManga.create().apply {
-                url = "/novel/${novel.slug}"
+                url = novel.slug
                 title = novel.name
                 thumbnail_url = novel.image ?: ""
                 author = novel.categories?.firstOrNull()?.name
                 description = novel.description
-                genre = novel.categories?.joinToString(", ") { it.name } ?: ""
+                genre = novel.categories?.joinToString { it.name } ?: ""
                 status = when {
                     novel.chapters >= (novel.numOfChaps ?: 0) -> SManga.COMPLETED
                     else -> SManga.ONGOING
@@ -214,7 +197,7 @@ class WuxiaClick :
         // Append fallback results to cache
         appendToSearchCache(
             novels.mapNotNull { m ->
-                val slug = m.url.removePrefix("/novel/")
+                val slug = m.url
                 if (slug.isNotBlank()) Pair(slug, m.title) else null
             },
         )
@@ -222,19 +205,27 @@ class WuxiaClick :
         return MangasPage(novels, hasNextPage)
     }
 
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val request = buildPopularMangaRequest(page)
+        return parseMangaListResponse(client.get(request.url, request.headers))
+    }
+
     // ======================== Latest ========================
 
-    override fun latestUpdatesRequest(page: Int): Request {
+    private fun buildLatestUpdatesRequest(page: Int): Request {
         val offset = (page - 1) * 12
         // Using -last_chapter since -updated_at is not a valid choice
         return GET("$apiUrl/search/?search=&offset=$offset&limit=12&order=-last_chapter", headers)
     }
 
-    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val request = buildLatestUpdatesRequest(page)
+        return parseMangaListResponse(client.get(request.url, request.headers))
+    }
 
     // ======================== Search ========================
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         var order = "-weekly_views"
         val statuses = mutableListOf<String>()
         val includeCategories = mutableListOf<String>()
@@ -333,23 +324,47 @@ class WuxiaClick :
         return GET(url, headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val request = buildSearchMangaRequest(page, query, filters)
+        return parseMangaListResponse(client.get(request.url, request.headers))
+    }
 
     override fun getMangaUrl(manga: SManga): String {
         val slug = extractNovelSlug(manga.url)
         return "$baseUrl/novel/$slug"
     }
 
-    override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapter.url
-
-    // ======================== Details ========================
-
-    override fun mangaDetailsRequest(manga: SManga): Request {
-        val slug = extractNovelSlug(manga.url)
-        return GET("$apiUrl/novels/$slug/", headers)
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val slug = extractNovelSlug(url.encodedPath)
+        return try {
+            fetchMangaDetails(slug)
+        } catch (e: Exception) {
+            null
+        }
     }
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapter.url
+
+    // ======================== Details + Chapters ========================
+
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate = coroutineScope {
+        val slug = extractNovelSlug(manga.url)
+        val detailsDeferred = if (fetchDetails) async { fetchMangaDetails(slug) } else null
+        val chaptersDeferred = if (fetchChapters) async { fetchChapterList(slug) } else null
+
+        SMangaUpdate(
+            manga = detailsDeferred?.await() ?: manga,
+            chapters = chaptersDeferred?.await() ?: chapters,
+        )
+    }
+
+    private suspend fun fetchMangaDetails(slug: String): SManga {
+        val response = client.get("$apiUrl/novels/$slug/", headers)
         val body = response.body.string()
         // Prefer parsing __NEXT_DATA__ if present
         val doc = org.jsoup.Jsoup.parse(body)
@@ -371,12 +386,12 @@ class WuxiaClick :
                     val statusStr = dataObj["status"]?.asStringOrNull()?.lowercase() ?: ""
 
                     return SManga.create().apply {
-                        url = if (localSlug.isNotBlank()) "/novel/$localSlug" else ""
+                        url = localSlug
                         title = localTitle
                         thumbnail_url = localImg
                         author = localAuthor
                         this.description = localDescription
-                        genre = localCategories.joinToString(", ")
+                        genre = localCategories.joinToString()
                         status = when {
                             statusStr.contains("completed") || statusStr.contains("cp") -> SManga.COMPLETED
                             statusStr.contains("ongoing") || statusStr.contains("og") -> SManga.ONGOING
@@ -392,7 +407,7 @@ class WuxiaClick :
         val novel = json.decodeFromString<NovelDetail>(body)
 
         return SManga.create().apply {
-            url = "/novel/${novel.slug}"
+            url = novel.slug
             title = novel.name
             thumbnail_url = novel.image ?: novel.originalImage
             author = novel.author?.name
@@ -400,7 +415,7 @@ class WuxiaClick :
                 append(novel.description)
                 val otherNamesList = novel.getOtherNamesList()
                 if (otherNamesList.isNotEmpty()) {
-                    append("\n\nAlternative Names: ${otherNamesList.joinToString(", ")}")
+                    append("\n\nAlternative Names: ${otherNamesList.joinToString()}")
                 }
                 novel.rating?.let { rating ->
                     append("\n\nRating: $rating")
@@ -411,12 +426,12 @@ class WuxiaClick :
             }
             genre = buildString {
                 novel.categories?.let { cats ->
-                    append(cats.joinToString(", ") { it.name })
+                    append(cats.joinToString { it.name })
                 }
                 novel.tags?.let { tags ->
                     if (tags.isNotEmpty()) {
                         if (isNotEmpty()) append(", ")
-                        append(tags.take(10).joinToString(", ") { it.name })
+                        append(tags.take(10).joinToString { it.name })
                     }
                 }
             }
@@ -428,14 +443,8 @@ class WuxiaClick :
         }
     }
 
-    // ======================== Chapters ========================
-
-    override fun chapterListRequest(manga: SManga): Request {
-        val slug = extractNovelSlug(manga.url)
-        return GET("$apiUrl/chapters/$slug/", headers)
-    }
-
-    override fun chapterListParse(response: Response): List<SChapter> {
+    private suspend fun fetchChapterList(slug: String): List<SChapter> {
+        val response = client.get("$apiUrl/chapters/$slug/", headers)
         val chapters = json.decodeFromString<List<ChapterInfo>>(response.body.string())
 
         return chapters.map { chapter ->
@@ -450,42 +459,37 @@ class WuxiaClick :
 
     // ======================== Pages ========================
 
-    override fun pageListRequest(chapter: SChapter): Request {
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
         val slug = chapter.url.removePrefix("/chapter/")
-        return GET("$apiUrl/getchapter/$slug/", headers)
+        val response = client.get("$apiUrl/getchapter/$slug/", headers)
+        return listOf(Page(0, response.request.url.toString()))
     }
-
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
 
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val request = GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
-        val response = client.newCall(request).execute()
+        val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
+        val response = client.get(url, headers)
         val chapter = json.decodeFromString<ChapterContent>(response.body.string())
-
-        val content = StringBuilder()
-
-        content.append("<h2>${chapter.title}</h2>\n")
 
         val text = chapter.text
 
-        // Split by lines and wrap in paragraphs
-        text.split("\n").forEach { line ->
-            val trimmed = line.trim()
-            if (trimmed.isNotEmpty()) {
-                content.append("<p>$trimmed</p>\n")
+        return buildString {
+            append("<h2>${chapter.title}</h2>\n")
+
+            // Split by lines and wrap in paragraphs
+            text.split("\n").forEach { line ->
+                val trimmed = line.trim()
+                if (trimmed.isNotEmpty()) {
+                    append("<p>$trimmed</p>\n")
+                }
             }
         }
-
-        return content.toString()
     }
-
-    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
 
     // ======================== Filters ========================
 
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         SortFilter("Sort By", sortOptions),
         Filter.Separator(),
         StatusFilter(),
@@ -657,7 +661,7 @@ class WuxiaClick :
     // ======================== Data Classes ========================
 
     @Serializable
-    data class SearchResponse(
+    class SearchResponse(
         val count: Int,
         val next: String? = null,
         val previous: String? = null,
@@ -665,7 +669,7 @@ class WuxiaClick :
     )
 
     @Serializable
-    data class NovelSearchResult(
+    class NovelSearchResult(
         val name: String,
         val image: String? = null,
         val slug: String,
@@ -680,7 +684,7 @@ class WuxiaClick :
     )
 
     @Serializable
-    data class NovelDetail(
+    class NovelDetail(
         val slug: String,
         val name: String,
         val description: String? = null,
@@ -705,20 +709,20 @@ class WuxiaClick :
     }
 
     @Serializable
-    data class Author(
+    class Author(
         val name: String,
         val slug: String? = null,
     )
 
     @Serializable
-    data class Category(
+    class Category(
         val name: String,
         val slug: String,
         val title: String? = null,
     )
 
     @Serializable
-    data class Tag(
+    class Tag(
         val id: Int? = null,
         val name: String,
         val slug: String,
@@ -726,7 +730,7 @@ class WuxiaClick :
     )
 
     @Serializable
-    data class ChapterInfo(
+    class ChapterInfo(
         val id: Int,
         val index: Int,
         val title: String,
@@ -735,7 +739,7 @@ class WuxiaClick :
     )
 
     @Serializable
-    data class ChapterContent(
+    class ChapterContent(
         val index: Int? = null,
         val title: String,
         val text: String,

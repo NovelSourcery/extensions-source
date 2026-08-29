@@ -8,36 +8,40 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
+import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.Request
-import okhttp3.Response
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.text.SimpleDateFormat
 import java.util.Locale
 
-class FUCKNOVELPIA :
-    HttpSource(),
+@Source
+abstract class FUCKNOVELPIA :
+    KeiSource(),
     NovelSource {
 
-    override val name = "FUCKNOVELPIA"
-    override val id: Long = 4776466639710929174
-    override val baseUrl = "https://fucknovelpia.com"
-    override val lang = "en"
-    override val supportsLatest = true
-    override val isNovelSource = true
-
-    override val client = network.cloudflareClient
+    override val supportsLatest = false
 
     private var cachedTotalPages: Int = 0
 
+    /** [SManga.url] is stored as the bare slug under `/novel/`; a stored value starting with
+     * "/" is a pre-existing full-path entry and is resolved unchanged. */
+    private val mangaPath = SlugPath("/novel/")
+
     // ======================== Popular ========================
 
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/?page=$page", headers)
+    private fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/?page=$page", headers)
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        val document = Jsoup.parse(response.body.string())
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val popularRequest = buildPopularMangaRequest(page)
+        val document = client.get(popularRequest.url, popularRequest.headers).asJsoup()
 
         parseTotalPages(document)
 
@@ -47,105 +51,113 @@ class FUCKNOVELPIA :
         return MangasPage(novels, hasNextPage)
     }
 
-    // ======================== Latest ========================
-
-    override fun latestUpdatesRequest(page: Int): Request = popularMangaRequest(page)
-
-    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = getPopularManga(page)
 
     // ======================== Search ========================
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val url = StringBuilder("$baseUrl/?page=$page")
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        var request: Request? = null
 
-        if (query.isNotBlank()) {
-            url.append("&q=${java.net.URLEncoder.encode(query, "UTF-8")}")
-        }
+        val url = buildString {
+            append("$baseUrl/?page=$page")
 
-        filters.forEach { filter ->
-            when (filter) {
-                is TagFilter -> {
-                    val tags = filter.state.split(",")
-                        .map { it.trim().lowercase() }
-                        .filter { it.isNotEmpty() }
-                    tags.forEach { tag ->
-                        url.append("&tags[]=$tag")
-                    }
-                }
+            if (query.isNotBlank()) {
+                append("&q=${java.net.URLEncoder.encode(query, "UTF-8")}")
+            }
 
-                is InversePaginationFilter -> {
-                    if (filter.state && cachedTotalPages > 0) {
-                        // Calculate inverse page
-                        val inversePage = cachedTotalPages - page + 1
-                        if (inversePage > 0) {
-                            return GET(url.toString().replace("page=$page", "page=$inversePage"), headers)
+            filters.forEach { filter ->
+                when (filter) {
+                    is TagFilter -> {
+                        val tags = filter.state.split(",")
+                            .map { it.trim().lowercase() }
+                            .filter { it.isNotEmpty() }
+                        tags.forEach { tag ->
+                            append("&tags[]=$tag")
                         }
                     }
-                }
 
-                else -> {}
+                    is InversePaginationFilter -> {
+                        if (filter.state && cachedTotalPages > 0) {
+                            // Calculate inverse page
+                            val inversePage = cachedTotalPages - page + 1
+                            if (inversePage > 0) {
+                                request = GET(toString().replace("page=$page", "page=$inversePage"), headers)
+                            }
+                        }
+                    }
+
+                    else -> {}
+                }
             }
         }
 
-        return GET(url.toString(), headers)
+        val effectiveRequest = request ?: GET(url, headers)
+        val document = client.get(effectiveRequest.url, effectiveRequest.headers).asJsoup()
+        parseTotalPages(document)
+        val novels = document.select("div.card").mapNotNull { parseNovelCard(it) }
+        return MangasPage(novels, hasNextPage(document))
     }
 
-    override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
+    // ======================== Details + Chapters ========================
 
-    // ======================== Details ========================
+    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPath.resolve(manga.url), headers)
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val detailsRequest = buildMangaDetailsRequest(manga)
+        val document = client.get(detailsRequest.url, detailsRequest.headers).asJsoup()
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        val document = Jsoup.parse(response.body.string())
+        val updatedManga = if (fetchDetails) parseMangaDetails(document) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(document) else chapters
 
-        return SManga.create().apply {
-            // Title - Try multiple selectors
-            title = document.selectFirst("h1")?.text()?.trim()
-                ?: document.selectFirst("strong.book-title")?.text()?.trim()
-                ?: ""
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
 
-            // Cover image
-            thumbnail_url = document.selectFirst("div.cover")?.let { cover ->
-                // Check for img tag first
-                cover.selectFirst("img")?.attr("src")?.let { imgSrc ->
-                    if (imgSrc.startsWith("http")) imgSrc else "$baseUrl$imgSrc"
-                } ?: cover.attr("style")?.let { style ->
-                    extractCoverUrl(style)
-                }
+    private fun parseMangaDetails(document: Document): SManga = SManga.create().apply {
+        // Title - Try multiple selectors
+        title = document.selectFirst("h1")?.text()
+            ?: document.selectFirst("strong.book-title")?.text()
+            ?: ""
+
+        // Cover image
+        thumbnail_url = document.selectFirst("div.cover")?.let { cover ->
+            // Check for img tag first
+            cover.selectFirst("img")?.attr("src")?.let { imgSrc ->
+                if (imgSrc.startsWith("http")) imgSrc else "$baseUrl$imgSrc"
+            } ?: cover.attr("style")?.let { style ->
+                extractCoverUrl(style)
             }
+        }
 
-            // Description
-            description = document.select("section.description-box .description, section.box.description-box .description, div.description")
-                .firstOrNull()?.text()?.trim() ?: ""
+        // Description
+        description = document.select("section.description-box .description, section.box.description-box .description, div.description")
+            .firstOrNull()?.text() ?: ""
 
-            // Tags/Genres
-            genre = document.select("div.tags a, .tags-box a")
-                .mapNotNull { it.text()?.trim() }
-                .filter { it.isNotEmpty() }
-                .joinToString(", ")
+        // Tags/Genres
+        genre = document.select("div.tags a, .tags-box a")
+            .mapNotNull { it.text() }
+            .filter { it.isNotEmpty() }
+            .joinToString()
 
-            // Author
-            author = document.selectFirst("ul.info-list li:contains(Author)")?.let {
-                it.text().replace("Author:", "").trim()
-            }
+        // Author
+        author = document.selectFirst("ul.info-list li:contains(Author)")?.let {
+            it.text().replace("Author:", "").trim()
+        }
 
-            // Status
-            val statusText = document.selectFirst("ul.info-list li:contains(Status)")?.text()?.lowercase() ?: ""
-            status = when {
-                statusText.contains("completed") -> SManga.COMPLETED
-                statusText.contains("ongoing") -> SManga.ONGOING
-                else -> SManga.UNKNOWN
-            }
+        // Status
+        val statusText = document.selectFirst("ul.info-list li:contains(Status)")?.text()?.lowercase() ?: ""
+        status = when {
+            statusText.contains("completed") -> SManga.COMPLETED
+            statusText.contains("ongoing") -> SManga.ONGOING
+            else -> SManga.UNKNOWN
         }
     }
 
-    // ======================== Chapters ========================
-
-    override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
-
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val document = Jsoup.parse(response.body.string())
+    private fun parseChapterList(document: Document): List<SChapter> {
         val chapters = mutableListOf<SChapter>()
 
         // Try multiple chapter list selectors
@@ -159,7 +171,7 @@ class FUCKNOVELPIA :
                 ?: chapters.size + 1
 
             // Get chapter title/name
-            val chapterName = link.text()?.trim() ?: "Chapter $chapterNum"
+            val chapterName = link.text() ?: "Chapter $chapterNum"
 
             // Get chapter URL
             val chapterUrl = link.attr("href").let { href ->
@@ -187,22 +199,29 @@ class FUCKNOVELPIA :
         return chapters.reversed()
     }
 
-    // ======================== Pages ========================
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
-    override fun pageListRequest(chapter: SChapter): Request {
-        val url = if (chapter.url.startsWith("http")) chapter.url else baseUrl + chapter.url
-        return GET(url, headers)
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val path = url.encodedPath
+        val response = client.get(baseUrl + path, headers, ensureSuccess = false)
+        if (!response.isSuccessful) return null
+        val document = response.asJsoup()
+        return parseMangaDetails(document).apply { this.url = mangaPath.slug(path) }
     }
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
+    // ======================== Pages ========================
 
-    override fun fetchPageList(chapter: SChapter): rx.Observable<List<Page>> = rx.Observable.just(listOf(Page(0, if (chapter.url.startsWith("http")) chapter.url else baseUrl + chapter.url)))
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val url = if (chapter.url.startsWith("http")) chapter.url else baseUrl + chapter.url
+        val response = client.get(url, headers)
+        return listOf(Page(0, response.request.url.toString()))
+    }
 
     // ======================== Page Text (Novel) ========================
     override suspend fun fetchPageText(page: Page): String {
-        val request = GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
-        val response = client.newCall(request).execute()
-        val document = Jsoup.parse(response.body.string())
+        val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
+        val response = client.get(url, headers)
+        val document = response.asJsoup()
 
         // Try multiple content selectors (adjust based on actual site structure)
         val contentContainer = document.selectFirst(
@@ -229,11 +248,10 @@ class FUCKNOVELPIA :
         // Return the cleaned inner HTML (preserves all tags, including images)
         return contentContainer.html()
     }
-    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException("Not used")
 
     // ======================== Filters ========================
 
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         Filter.Header("Enter tags separated by commas"),
         TagFilter("Tags"),
         Filter.Separator(),
@@ -250,14 +268,15 @@ class FUCKNOVELPIA :
         val href = link.attr("href")
 
         return SManga.create().apply {
-            url = when {
+            val relativeUrl = when {
                 href.startsWith("http") -> href.replace(baseUrl, "")
                 href.startsWith("/") -> href
                 else -> "/$href"
             }
+            url = mangaPath.slug(relativeUrl)
 
             // Title from strong.book-title
-            title = card.selectFirst("strong.book-title")?.text()?.trim() ?: ""
+            title = card.selectFirst("strong.book-title")?.text() ?: ""
 
             // Cover handling
             val coverDiv = card.selectFirst("div.cover")
@@ -272,9 +291,9 @@ class FUCKNOVELPIA :
 
             // Tags
             genre = card.select("div.tags a")
-                .mapNotNull { it.text()?.trim() }
+                .mapNotNull { it.text() }
                 .filter { it.isNotEmpty() }
-                .joinToString(", ")
+                .joinToString()
 
             // Check if it has image chapters
             val hasImageChapters = card.select("span.book-flag.image-chapters").isNotEmpty()

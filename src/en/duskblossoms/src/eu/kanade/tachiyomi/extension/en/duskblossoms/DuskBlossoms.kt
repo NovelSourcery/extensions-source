@@ -1,12 +1,9 @@
 ﻿package eu.kanade.tachiyomi.novelextension.en.duskblossoms
 
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
+import keiyoushi.annotation.Source
 
-class DuskBlossoms :
-    MadaraNovel(
-        baseUrl = "https://duskblossoms.com",
-        name = "DuskBlossoms",
-        lang = "en",
-    ) {
+@Source
+abstract class DuskBlossoms : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
 }

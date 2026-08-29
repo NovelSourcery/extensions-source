@@ -7,40 +7,48 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
-import keiyoushi.utils.tryParse
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.tryParseDate
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.Jsoup
-import java.text.SimpleDateFormat
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-class Markazriwayat :
-    HttpSource(),
+@Source
+abstract class Markazriwayat :
+    KeiSource(),
     NovelSource {
 
-    override val name = "Markazriwayat"
-    override val baseUrl = "https://markazriwayat.com"
-    override val lang = "ar"
     override val supportsLatest = true
-    override val isNovelSource = true
-    override val client = network.client
 
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
     }
 
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/wp-json/theam/v1/library?page=$page&per_page=$PER_PAGE&sort=popular", headers)
+    private fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/wp-json/theam/v1/library?page=$page&per_page=$PER_PAGE&sort=popular", headers)
 
-    override fun popularMangaParse(response: Response): MangasPage = parseLibraryResponse(response)
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val request = buildPopularMangaRequest(page)
+        return parseLibraryResponse(client.get(request.url, request.headers))
+    }
 
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/wp-json/theam/v1/library?page=$page&per_page=$PER_PAGE&sort=new", headers)
+    private fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/wp-json/theam/v1/library?page=$page&per_page=$PER_PAGE&sort=new", headers)
 
-    override fun latestUpdatesParse(response: Response): MangasPage = parseLibraryResponse(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val request = buildLatestUpdatesRequest(page)
+        return parseLibraryResponse(client.get(request.url, request.headers))
+    }
 
     private fun parseLibraryResponse(response: Response): MangasPage {
         val body = json.decodeFromString<LibraryResponse>(response.body.string())
@@ -61,12 +69,14 @@ class Markazriwayat :
         return MangasPage(novels, hasNextPage = body.page < body.totalPages)
     }
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val term = java.net.URLEncoder.encode(query, "UTF-8")
         return GET("$baseUrl/wp-json/theam/v1/novel-search?term=$term&page=$page&per_page=$PER_PAGE", headers)
     }
 
-    override fun searchMangaParse(response: Response): MangasPage {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val request = buildSearchMangaRequest(page, query, filters)
+        val response = client.get(request.url, request.headers)
         val body = json.decodeFromString<SearchResponse>(response.body.string())
         val novels = body.items.mapNotNull { item ->
             val link = item.link.ifBlank { return@mapNotNull null }
@@ -80,42 +90,59 @@ class Markazriwayat :
         return MangasPage(novels, hasNextPage = body.hasMore)
     }
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
 
-    override fun mangaDetailsParse(response: Response): SManga {
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val path = url.encodedPath
+        val response = client.get(url, headers)
+        if (!response.isSuccessful) return null
         val doc = response.asJsoup()
-        checkCaptcha(doc)
-        return SManga.create().apply {
-            title = doc.selectFirst("h1.manga-title")?.text()?.trim().orEmpty()
-            thumbnail_url = doc.selectFirst(".manga-cover-wrap > img")?.absCover()
-            val authors = doc.select(".manga-author")
-            author = if (authors.size >= 2) {
-                authors[1].text().trim()
-            } else {
-                authors.firstOrNull()?.text()?.trim() ?: ""
+        return parseMangaDetails(doc).apply { this.url = path }
+    }
+
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val request = buildMangaDetailsRequest(manga)
+        val doc = client.get(request.url, request.headers).asJsoup()
+
+        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
+        val updatedChapters = if (fetchChapters) fetchChapterList(doc) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
+        title = doc.selectFirst("h1.manga-title")?.text().orEmpty()
+        thumbnail_url = doc.selectFirst(".manga-cover-wrap > img")?.absCover()
+        val authors = doc.select(".manga-author")
+        author = if (authors.size >= 2) {
+            authors[1].text()
+        } else {
+            authors.firstOrNull()?.text() ?: ""
+        }
+        if (authors.size >= 2) {
+            description = buildString {
+                append("مترجم الرواية : ${authors[0].text()}\n")
+                append("مؤلف الرواية : ${authors[1].text()}")
             }
-            if (authors.size >= 2) {
-                description = buildString {
-                    append("مترجم الرواية : ${authors[0].text().trim()}\n")
-                    append("مؤلف الرواية : ${authors[1].text().trim()}")
-                }
-            } else {
-                description = authors.joinToString("\n") { it.text().trim() }
-            }
-            genre = (doc.select(".pill-list .pill").map { it.text().trim() }).joinToString()
-            val statusText = doc.selectFirst(".status-pill")?.text().orEmpty().lowercase()
-            status = when {
-                "مكتملة" in statusText || "complete" in statusText -> SManga.COMPLETED
-                "مستمرة" in statusText || "ongoing" in statusText -> SManga.ONGOING
-                "متوقفة" in statusText || "stop" in statusText -> SManga.ON_HIATUS
-                else -> SManga.UNKNOWN
-            }
+        } else {
+            description = authors.joinToString("\n") { it.text() }
+        }
+        genre = (doc.select(".pill-list .pill").map { it.text() }).joinToString()
+        val statusText = doc.selectFirst(".status-pill")?.text().orEmpty().lowercase()
+        status = when {
+            "مكتملة" in statusText || "complete" in statusText -> SManga.COMPLETED
+            "مستمرة" in statusText || "ongoing" in statusText -> SManga.ONGOING
+            "متوقفة" in statusText || "stop" in statusText -> SManga.ON_HIATUS
+            else -> SManga.UNKNOWN
         }
     }
 
-    override suspend fun getChapterList(manga: SManga): List<SChapter> {
-        val doc = client.newCall(GET(baseUrl + manga.url, headers)).execute().asJsoup()
-        checkCaptcha(doc)
+    private suspend fun fetchChapterList(doc: Document): List<SChapter> {
         val mangaId = doc.selectFirst("#manga-chapters-list")?.attr("data-manga-id")?.takeIf { it.isNotBlank() }
         if (mangaId != null) {
             val apiChapters = fetchChaptersViaApi(mangaId)
@@ -124,13 +151,13 @@ class Markazriwayat :
         return parseChaptersFromHtml(doc).sortedByDescending { it.chapter_number }
     }
 
-    private fun fetchChaptersViaApi(mangaId: String): List<SChapter> {
+    private suspend fun fetchChaptersViaApi(mangaId: String): List<SChapter> {
         val chapters = mutableListOf<SChapter>()
         var page = 1
         while (true) {
             val url = "$baseUrl/wp-json/theam/v1/manga-chapters?manga_id=$mangaId&order=DESC&page=$page&per_page=100"
             val body = try {
-                val resp = client.newCall(GET(url, headers)).execute()
+                val resp = client.get(url, headers)
                 val parsed = json.decodeFromString<ChaptersResponse>(resp.body.string())
                 resp.close()
                 parsed
@@ -144,7 +171,7 @@ class Markazriwayat :
                         name = item.label
                         this.url = item.url.toRelative()
                         chapter_number = item.num.toChapterNumber()
-                        date_upload = DATE_FORMAT.tryParse(item.date)
+                        date_upload = DATE_FORMAT.tryParseDate(item.date)
                     },
                 )
             }
@@ -154,23 +181,23 @@ class Markazriwayat :
         return chapters.sortedByDescending { it.chapter_number }
     }
 
-    private fun parseChaptersFromHtml(doc: org.jsoup.nodes.Document): List<SChapter> = doc.select(".ch-row").mapNotNull { row ->
+    private fun parseChaptersFromHtml(doc: Document): List<SChapter> = doc.select(".ch-row").mapNotNull { row ->
         val link = row.selectFirst("a")?.attr("href")?.ifBlank { null } ?: return@mapNotNull null
         SChapter.create().apply {
-            name = row.selectFirst(".ch-title")?.text()?.trim() ?: link
+            name = row.selectFirst(".ch-title")?.text() ?: link
             url = link.toRelative()
             chapter_number = (row.selectFirst(".ch-num")?.text() ?: name).toChapterNumber()
-            date_upload = DATE_FORMAT.tryParse(row.selectFirst(".ch-date")?.text())
+            date_upload = DATE_FORMAT.tryParseDate(row.selectFirst(".ch-date")?.text())
         }
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> = parseChaptersFromHtml(response.asJsoup()).sortedByDescending { it.chapter_number }
-
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.get(baseUrl + chapter.url, headers)
+        return listOf(Page(0, response.request.url.encodedPath))
+    }
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.newCall(GET(baseUrl + page.url, headers)).execute().asJsoup()
-        checkCaptcha(doc)
+        val doc = client.get(baseUrl + page.url, headers).asJsoup()
         val content = doc.selectFirst(".reading-content .text-right")
             ?: doc.selectFirst(".reading-content")
             ?: return ""
@@ -185,24 +212,13 @@ class Markazriwayat :
         return content.html().trim()
     }
 
-    override fun imageUrlParse(response: Response): String = ""
-
-    private fun Response.asJsoup() = Jsoup.parse(body.string(), request.url.toString())
-
-    private fun checkCaptcha(doc: org.jsoup.nodes.Document) {
-        val title = doc.title().trim()
-        if (title == "Bot Verification" || title == "Just a moment...") {
-            throw Exception("Captcha detected, please open in WebView")
-        }
-    }
-
     private fun String.toRelative(): String = when {
         startsWith(baseUrl) -> removePrefix(baseUrl)
         startsWith("/") -> this
         else -> "/$this"
     }
 
-    private fun org.jsoup.nodes.Element.absCover(): String? {
+    private fun Element.absCover(): String? {
         val raw = attr("data-src").ifBlank { null }
             ?: attr("data-lazy-src").ifBlank { null }
             ?: attr("src").ifBlank { null }
@@ -216,7 +232,7 @@ class Markazriwayat :
     }
 
     @Serializable
-    private data class LibraryResponse(
+    private class LibraryResponse(
         val page: Int = 0,
         @SerialName("per_page") val perPage: Int = 0,
         val total: Int = 0,
@@ -225,7 +241,7 @@ class Markazriwayat :
     )
 
     @Serializable
-    private data class LibraryItem(
+    private class LibraryItem(
         val id: Int = 0,
         val title: String = "",
         val link: String = "",
@@ -236,24 +252,24 @@ class Markazriwayat :
     )
 
     @Serializable
-    private data class StatusInfo(
+    private class StatusInfo(
         val key: String = "",
         val label: String = "",
     )
 
     @Serializable
-    private data class GenreInfo(
+    private class GenreInfo(
         val name: String = "",
     )
 
     @Serializable
-    private data class SearchResponse(
+    private class SearchResponse(
         val items: List<SearchItem> = emptyList(),
         @SerialName("has_more") val hasMore: Boolean = false,
     )
 
     @Serializable
-    private data class SearchItem(
+    private class SearchItem(
         val title: String = "",
         val link: String = "",
         val cover: String = "",
@@ -261,13 +277,13 @@ class Markazriwayat :
     )
 
     @Serializable
-    private data class ChaptersResponse(
+    private class ChaptersResponse(
         val items: List<ChapterItem> = emptyList(),
         @SerialName("has_more") val hasMore: Boolean = false,
     )
 
     @Serializable
-    private data class ChapterItem(
+    private class ChapterItem(
         val label: String = "",
         val url: String = "",
         val num: String = "",
@@ -277,6 +293,6 @@ class Markazriwayat :
     companion object {
         private const val PER_PAGE = 20
         private val CHAPTER_NUM_REGEX = Regex("""\d+(\.\d+)?""")
-        private val DATE_FORMAT = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        private val DATE_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.US)
     }
 }

@@ -13,20 +13,24 @@ import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
-import eu.kanade.tachiyomi.source.model.RefreshContext
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.lib.chapterutils.shouldReturnExisting
+import keiyoushi.source.KeiSource
+import keiyoushi.utils.SlugPath
 import keiyoushi.utils.getPreferencesLazy
+import keiyoushi.utils.jsonInstance
+import keiyoushi.utils.setAltTitles
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import okhttp3.FormBody
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import uy.kohesive.injekt.injectLazy
 import java.util.Calendar
 
 /**
@@ -34,23 +38,25 @@ import java.util.Calendar
  * Handles common parsing and request logic.
  * @see https://github.com/LNReader/lnreader-plugins madara/template.ts
  */
-open class MadaraNovel(
-    override val baseUrl: String,
-    override val name: String,
-    override val lang: String = "en",
-) : HttpSource(),
+abstract class MadaraNovel :
+    KeiSource(),
     NovelSource,
     ConfigurableSource,
     SourceTracker {
 
     override val isNovelSource = true
 
-    override val supportsLatest = true
-    override val client = network.cloudflareClient
-
-    protected val json: Json by injectLazy()
+    protected val json: Json = jsonInstance
 
     private val preferences: SharedPreferences by getPreferencesLazy()
+
+    /**
+     * The site's manga detail URL shape, as `<prefix><slug>`. [SManga.url] is stored as the bare
+     * slug (see [SlugPath]); override when a site doesn't use the common "/novel/" prefix.
+     * A stored value starting with "/" is a pre-existing full-path entry from before this source
+     * adopted slug storage, and is resolved unchanged regardless of this template.
+     */
+    protected open val mangaPathTemplate: SlugPath = SlugPath("/novel/")
 
     /**
      * Override this in subclass to set default value.
@@ -102,12 +108,14 @@ open class MadaraNovel(
         }
     }
 
-    override fun popularMangaRequest(page: Int): Request {
+    protected open fun buildPopularMangaRequest(page: Int): Request {
         val url = "$baseUrl/page/$page/?s=&post_type=wp-manga"
         return GET(url, headers)
     }
 
-    override fun popularMangaParse(response: Response): MangasPage {
+    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.newCall(buildPopularMangaRequest(page)).execute())
+
+    private fun parseMangaListResponse(response: Response): MangasPage {
         val doc = response.asJsoup()
         val mangas = parseNovels(doc)
         // Check multiple pagination selectors for different Madara themes
@@ -119,14 +127,14 @@ open class MadaraNovel(
         return MangasPage(mangas, hasNextPage)
     }
 
-    override fun latestUpdatesRequest(page: Int): Request {
+    protected open fun buildLatestUpdatesRequest(page: Int): Request {
         val url = "$baseUrl/page/$page/?s=&post_type=wp-manga&m_orderby=latest"
         return GET(url, headers)
     }
 
-    override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(client.newCall(buildLatestUpdatesRequest(page)).execute())
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    protected open fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         var url = "$baseUrl/page/$page/?s=${query.replace(" ", "+")}&post_type=wp-manga"
 
         filters.forEach { filter ->
@@ -150,7 +158,7 @@ open class MadaraNovel(
         return GET(url, headers)
     }
 
-    override fun searchMangaParse(response: Response) = popularMangaParse(response)
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseMangaListResponse(client.newCall(buildSearchMangaRequest(page, query, filters)).execute())
 
     protected fun parseNovels(doc: Document): List<SManga> {
         doc.select(".manga-title-badges").remove()
@@ -169,7 +177,7 @@ open class MadaraNovel(
                 "div.hover-details, .badge-pos-2 .page-item-detail",
         ).mapNotNull { element ->
             try {
-                val title = element.selectFirst(".post-title")?.text()?.trim()
+                val title = element.selectFirst(".post-title")?.text()
                     ?: element.selectFirst("a")?.attr("title")?.ifEmpty { null }
                     ?: return@mapNotNull null
                 val url = element.selectFirst(".post-title a")?.attr("href")
@@ -204,7 +212,7 @@ open class MadaraNovel(
 
                 SManga.create().apply {
                     this.title = title
-                    this.url = relativeUrl
+                    this.url = mangaPathTemplate.slug(relativeUrl)
                     thumbnail_url = cover
                 }
             } catch (e: Exception) {
@@ -213,21 +221,16 @@ open class MadaraNovel(
         }
     }
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        val doc = response.asJsoup()
-
-        // LN Reader: Check for captcha before parsing
-        checkCaptcha(doc, response.request.url.toString())
-
+    private fun mangaDetailsParse(doc: Document, mangaUrl: String): SManga {
         doc.select(".manga-title-badges, #manga-title span").remove()
 
         // Cache the WP post id for tracking (bookmark/history) calls later
-        extractPostId(doc)?.let { cachePostId(response.request.url.encodedPath, it) }
+        extractPostId(doc)?.let { cachePostId(mangaUrl, it) }
 
         return SManga.create().apply {
-            title = doc.selectFirst(".post-title h1, #manga-title h1")?.text()?.trim() ?: ""
+            title = doc.selectFirst(".post-title h1, #manga-title h1")?.text() ?: ""
 
             // Get cover from summary image
             val summaryImage = doc.selectFirst(".summary_image img")
@@ -243,14 +246,14 @@ open class MadaraNovel(
                 ?: doc.selectFirst("#tab-manga-about")?.formattedDescription()
                 ?: doc.selectFirst(".manga-excerpt")?.formattedDescription()
                 ?: ""
-            author = doc.selectFirst(".manga-authors")?.text()?.trim()
+            author = doc.selectFirst(".manga-authors")?.text()
                 ?: doc.select(".post-content_item, .post-content")
                     .find { it.selectFirst("h5")?.text() == "Author" }
-                    ?.selectFirst(".summary-content")?.text()?.trim()
+                    ?.selectFirst(".summary-content")?.text()
                 ?: ""
             genre = doc.select(".post-content_item, .post-content")
                 .filter { element ->
-                    val h5Text = element.selectFirst("h5")?.text()?.trim()?.lowercase() ?: ""
+                    val h5Text = element.selectFirst("h5")?.text()?.lowercase() ?: ""
                     // Match various genre/tag label variations (including i18n)
                     h5Text.contains("genre") ||
                         h5Text.contains("tag") ||
@@ -259,8 +262,8 @@ open class MadaraNovel(
                 }
                 .mapNotNull { it.selectFirst(".summary-content")?.select("a") }
                 .flatten()
-                .map { it.text().trim() }
-                .joinToString(", ")
+                .map { it.text() }
+                .joinToString()
             status = if (doc.select(".post-content_item, .post-content")
                     .find { it.selectFirst("h5")?.text() == "Status" }
                     ?.selectFirst(".summary-content")?.text()?.contains("Ongoing", ignoreCase = true) == true
@@ -269,6 +272,17 @@ open class MadaraNovel(
             } else {
                 SManga.COMPLETED
             }
+
+            val altTitles = doc.select(".post-content_item, .post-content")
+                .find { element -> element.selectFirst("h5")?.text()?.lowercase()?.contains("alt") == true }
+                ?.selectFirst(".summary-content")
+                ?.text()
+                ?.split(",", ";", "|", "\n")
+                ?.map { it.trim() }
+                ?.filter { it.isNotEmpty() && !it.equals(title, ignoreCase = true) }
+                ?.distinct()
+                .orEmpty()
+            if (altTitles.isNotEmpty()) setAltTitles(altTitles)
         }
     }
 
@@ -291,34 +305,60 @@ open class MadaraNovel(
     // merely start with a number aren't eaten)
     private val numberSeparatorRegex = Regex("""^(\d+(?:\.\d+)?)\s*[-–—:]\s*""")
 
-    override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+    protected open fun buildChapterListRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
 
-    override suspend fun getChapterList(manga: SManga, context: RefreshContext): List<SChapter> {
-        val response = client.newCall(chapterListRequest(manga)).execute()
-        val doc = response.asJsoup()
-        val mangaUrl = response.request.url.encodedPath
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        if (!fetchChapters) {
+            val updatedManga = if (fetchDetails) {
+                val request = buildMangaDetailsRequest(manga)
+                val doc = client.newCall(request).execute().asJsoup()
+                checkCaptcha(doc, request.url.toString())
+                mangaDetailsParse(doc, request.url.encodedPath)
+            } else {
+                manga
+            }
+            return SMangaUpdate(updatedManga, chapters)
+        }
+
+        // mangaDetailsParse and the chapter list both need the exact same novel page
+        // (baseUrl + manga.url) — fetch it once here instead of twice.
+        val request = buildChapterListRequest(manga)
+        val mangaUrl = request.url.encodedPath
+        val doc = client.newCall(request).execute().asJsoup()
+        checkCaptcha(doc, request.url.toString())
+
+        val updatedManga = if (fetchDetails) mangaDetailsParse(doc, mangaUrl) else manga
 
         val postId = extractPostId(doc)
         postId?.let { cachePostId(mangaUrl, it) }
 
         val siteTotal = extractChapterCount(doc)
-        Log.d(TAG, "getChapterList: url=$mangaUrl existing=${context.existingChapters.size} siteTotal=$siteTotal")
 
-        if (shouldReturnExisting(context.existingChapters.size, siteTotal)) {
-            Log.d(TAG, "getChapterList: count unchanged — returning existing")
-            return context.existingChapters
+        val updatedChapters = if (shouldReturnExisting(chapters.size, siteTotal)) {
+            Log.d(TAG, "getMangaUpdate: count unchanged — returning existing")
+            chapters
+        } else {
+            val html = fetchChaptersHtml(mangaUrl, postId, request.url.toString())
+            val parsed = parseChaptersFromHtml(html)
+            if (reverseChapterList) parsed else parsed.reversed()
         }
 
-        val html = fetchChaptersHtml(mangaUrl, postId, response.request.url.toString())
-        val chapters = parseChaptersFromHtml(html)
-        return if (reverseChapterList) chapters else chapters.reversed()
+        return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> {
+    // Kept as a protected open helper (renamed from the old chapterListParse override, which
+    // KeiSource now makes final) so subclasses that post-process the legacy path (e.g.
+    // ZetroTranslation's locked-chapter filter) can still call super.parseChapterListResponse.
+    // fetchMangaUpdate above is the real entry point and does not call this.
+    protected open fun parseChapterListResponse(response: Response): List<SChapter> {
         val doc = response.asJsoup()
         val mangaUrl = response.request.url.encodedPath
 
-        // Cache the WP post id for tracking (bookmark/history) calls later
         val postId = extractPostId(doc)
         postId?.let { cachePostId(mangaUrl, it) }
 
@@ -335,43 +375,63 @@ open class MadaraNovel(
         // Primary: look for a post-content_item whose h5 label is "Chapters" (or "Chapter")
         val labeled = doc.select(".post-content_item")
             .find { item ->
-                val h5 = item.selectFirst("h5")?.text()?.trim() ?: return@find false
+                val h5 = item.selectFirst("h5")?.text() ?: return@find false
                 h5.equals("Chapters", ignoreCase = true) || h5.equals("Chapter", ignoreCase = true)
             }
             ?.selectFirst(".summary-content")
-            ?.text()?.trim()?.toIntOrNull()
+            ?.text()?.toIntOrNull()
         if (labeled != null && labeled > 0) return labeled
 
         // Fallback: any summary-content whose trimmed text is a pure integer (works for
         // non-English sites where the label differs)
         return doc.select(".post-content_item .summary-content")
-            .mapNotNull { it.text().trim().toIntOrNull() }
+            .mapNotNull { it.text().toIntOrNull() }
             .firstOrNull { it > 0 } ?: 0
     }
 
-    private fun fetchChaptersHtml(mangaUrl: String, postId: String?, referer: String): String = if (useNewChapterEndpoint) {
-        val emptyBody = FormBody.Builder().build()
+    private fun fetchChaptersHtml(mangaUrl: String, postId: String?, referer: String): String {
         val newHeaders = headersBuilder().set("Referer", referer).build()
-        client.newCall(POST("$baseUrl${mangaUrl}ajax/chapters/", newHeaders, emptyBody))
-            .execute().body.string()
-    } else {
-        val formBody = FormBody.Builder()
-            .add("action", "manga_get_chapters")
-            .add("manga", postId ?: "")
-            .build()
-        client.newCall(POST("$baseUrl/wp-admin/admin-ajax.php", headers, formBody))
-            .execute().body.string()
+        if (!useNewChapterEndpoint) {
+            val formBody = FormBody.Builder()
+                .add("action", "manga_get_chapters")
+                .add("manga", postId ?: "")
+                .build()
+            return client.newCall(POST("$baseUrl/wp-admin/admin-ajax.php", newHeaders, formBody))
+                .execute().body.string()
+        }
+
+        val ajaxUrl = "$baseUrl${mangaUrl}ajax/chapters/"
+        val firstHtml = client.newCall(POST(ajaxUrl, newHeaders, FormBody.Builder().build())).execute().body.string()
+        if (firstHtml == "0") return firstHtml
+
+        // Some Madara sites (e.g. novelnice/BoxNovel) paginate this endpoint at a fixed
+        // per-page count instead of returning the full chapter list in one call - follow the
+        // rest of the ".pagination" pages and merge their chapters in.
+        val pageLinks = Jsoup.parse(firstHtml).select(".pagination a[data-page]")
+        val maxPage = pageLinks.mapNotNull { it.attr("data-page").toIntOrNull() }.maxOrNull() ?: 1
+        if (maxPage <= 1) return firstHtml
+
+        return buildString {
+            append(firstHtml)
+            for (page in 2..maxPage) {
+                val query = pageLinks.firstOrNull { it.attr("data-page") == page.toString() }
+                    ?.attr("href")?.substringAfter('?', "") ?: continue
+                val pageUrl = if (query.isEmpty()) ajaxUrl else "$ajaxUrl?$query"
+                append(client.newCall(POST(pageUrl, newHeaders, FormBody.Builder().build())).execute().body.string())
+            }
+        }
     }
 
     private fun parseChaptersFromHtml(html: String): List<SChapter> {
         if (html == "0") return emptyList()
         val chapDoc = Jsoup.parse(html)
+        checkCaptcha(chapDoc, baseUrl)
         val totalChaps = chapDoc.select(".wp-manga-chapter").size
         val chapters = mutableListOf<SChapter>()
 
         chapDoc.select(".wp-manga-chapter").forEachIndexed { index, element ->
             try {
-                val rawName = element.selectFirst("a")?.text()?.trim() ?: return@forEachIndexed
+                val rawName = element.selectFirst("a")?.text() ?: return@forEachIndexed
                 val isLocked = element.className().contains("premium-block")
 
                 // The app shows the chapter number separately from the title,
@@ -385,7 +445,7 @@ open class MadaraNovel(
 
                 if (isLocked) chapterName = "🔒 $chapterName"
 
-                val releaseDate = element.selectFirst(".chapter-release-date")?.text()?.trim() ?: ""
+                val releaseDate = element.selectFirst(".chapter-release-date")?.text() ?: ""
                 val chapterUrl = element.selectFirst("a")?.attr("href") ?: return@forEachIndexed
 
                 if (chapterUrl != "#") {
@@ -420,24 +480,29 @@ open class MadaraNovel(
         return if (reverseChapterList) chapters else chapters.reversed()
     }
 
+    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga {
+        val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
+        val request = buildMangaDetailsRequest(manga)
+        val doc = client.newCall(request).execute().asJsoup()
+        checkCaptcha(doc, request.url.toString())
+        return mangaDetailsParse(doc, request.url.encodedPath).apply { this.url = manga.url }
+    }
+
     /**
      * For novel sources, we return a single Page containing the chapter URL.
      * The actual content is fetched via fetchPageText() which is called for NovelSource.
      */
-    override fun pageListParse(response: Response): List<Page> {
-        // Return a page with the chapter URL - the content will be fetched via fetchPageText
-        val url = response.request.url.encodedPath
-        return listOf(Page(0, url))
-    }
-
-    override fun imageUrlParse(response: Response): String = ""
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, baseUrl + chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(baseUrl + page.url, headers)).execute()
+        val pageUrl = if (page.url.startsWith("http")) page.url else baseUrl + page.url
+        val response = client.newCall(GET(pageUrl, headers)).execute()
         val doc = response.asJsoup()
 
         // LN Reader: Check for captcha before parsing
-        checkCaptcha(doc, baseUrl + page.url)
+        checkCaptcha(doc, pageUrl)
 
         // Remove ads and unwanted elements FIRST (comprehensive list from LN Reader)
         doc.select(
@@ -489,7 +554,7 @@ open class MadaraNovel(
         return content.trim()
     }
 
-    override fun getFilterList(): FilterList = FilterList(
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         StatusFilter(),
         SortFilter(),
     )
@@ -568,7 +633,7 @@ open class MadaraNovel(
         // The history endpoint requires a fresh wp-manga nonce. It lives in the
         // `var manga = {...}` JS object on the chapter reading page, so scrape it
         // from there (with the novel page as fallback).
-        val nonce = fetchNonce(target.url) ?: fetchNonce(manga.url) ?: return
+        val nonce = fetchNonce(target.url) ?: fetchNonce(mangaPathTemplate.resolve(manga.url)) ?: return
 
         val historyBody = FormBody.Builder()
             .add("action", "manga-user-history")
@@ -629,12 +694,13 @@ open class MadaraNovel(
 
     /** Returns the cached post id, or scrapes the novel page when missing. */
     private fun resolvePostId(manga: SManga): String? {
-        cachedPostId(cacheKey(manga.url))?.let { return it }
+        val mangaUrl = mangaPathTemplate.resolve(manga.url)
+        cachedPostId(cacheKey(mangaUrl))?.let { return it }
         return try {
-            val url = baseUrl + manga.url
+            val url = baseUrl + mangaUrl
             val response = client.newCall(GET(url, headers)).execute()
             val doc = Jsoup.parse(response.use { it.body.string() }, url)
-            extractPostId(doc)?.also { cachePostId(manga.url, it) }
+            extractPostId(doc)?.also { cachePostId(mangaUrl, it) }
         } catch (e: Exception) {
             null
         }
@@ -700,21 +766,22 @@ open class MadaraNovel(
 
     private fun recordHighestTracked(mangaUrl: String, value: Float) {
         val raw = preferences.getString(PREF_HIGHEST_CACHE, "") ?: ""
-        val rebuilt = StringBuilder()
         var replaced = false
-        raw.split('\n').filter { it.isNotEmpty() }.forEach { line ->
-            val sep = line.indexOf('|')
-            if (sep > 0 && line.substring(0, sep) == mangaUrl) {
-                if (!replaced) {
-                    rebuilt.append(mangaUrl).append('|').append(value).append('\n')
-                    replaced = true
+        val rebuilt = buildString {
+            raw.split('\n').filter { it.isNotEmpty() }.forEach { line ->
+                val sep = line.indexOf('|')
+                if (sep > 0 && line.substring(0, sep) == mangaUrl) {
+                    if (!replaced) {
+                        append(mangaUrl).append('|').append(value).append('\n')
+                        replaced = true
+                    }
+                } else {
+                    append(line).append('\n')
                 }
-            } else {
-                rebuilt.append(line).append('\n')
             }
+            if (!replaced) append(mangaUrl).append('|').append(value).append('\n')
         }
-        if (!replaced) rebuilt.append(mangaUrl).append('|').append(value).append('\n')
-        preferences.edit().putString(PREF_HIGHEST_CACHE, rebuilt.toString()).apply()
+        preferences.edit().putString(PREF_HIGHEST_CACHE, rebuilt).apply()
     }
 
     // ======================== Settings ========================
