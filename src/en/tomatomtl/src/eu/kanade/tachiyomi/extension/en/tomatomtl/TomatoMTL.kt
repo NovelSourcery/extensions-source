@@ -813,6 +813,7 @@ abstract class TomatoMTL :
     // /book/ pages can be resolved directly from a pasted URL.
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
+        if (!path.startsWith("/book/")) return null
         val response = client.get(url.toString(), headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val bookId = path.removePrefix("/book/").trim('/')
