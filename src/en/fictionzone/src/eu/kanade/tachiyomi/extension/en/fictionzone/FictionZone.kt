@@ -292,13 +292,19 @@ abstract class FictionZone :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
-        // Omniportal entries are proxied external sources with no direct site page to paste.
-        if (!path.startsWith("/novel/")) return null
-        val slug = path.removePrefix("/novel/").trim('/')
-        val request = buildMangaDetailsRequest(SManga.create().apply { this.url = slug })
+        val stored = when {
+            path.startsWith("/novel/") -> path.removePrefix("/novel/").trim('/')
+            path.startsWith("/omniportal/") -> {
+                val parts = path.removePrefix("/omniportal/").trim('/')
+                if (parts.split("/").size < 2) return null
+                parts
+            }
+            else -> return null
+        }
+        val request = buildMangaDetailsRequest(SManga.create().apply { this.url = stored })
         val response = client.post(request.url, request.headers, request.body!!, ensureSuccess = false)
         if (!response.isSuccessful) return null
-        return parseMangaDetails(response).apply { this.url = slug }
+        return parseMangaDetails(response).apply { this.url = stored }
     }
 
     private fun buildMangaDetailsRequest(manga: SManga): Request {
