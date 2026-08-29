@@ -53,7 +53,7 @@ abstract class WebNovelTranslation :
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
 
-    private val dateFormat = DateTimeFormatter.ofPattern("MMM dd, yyyy", Locale.US)
+    private val dateFormat = DateTimeFormatter.ofPattern("MMM d, yyyy", Locale.US)
 
     // Popular / Latest
 
