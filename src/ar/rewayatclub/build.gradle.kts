@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "Rewayat Club"
-    versionCode = 8
+    versionCode = 9
     contentWarning = ContentWarning.SAFE
 
     source {

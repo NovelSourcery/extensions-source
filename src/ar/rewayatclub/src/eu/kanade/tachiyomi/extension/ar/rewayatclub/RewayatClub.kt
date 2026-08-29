@@ -178,10 +178,7 @@ abstract class RewayatClub :
         }.sortedByDescending { it.chapter_number }
     }
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val url = "$baseUrl${chapter.url}"
-        return listOf(Page(0, url))
-    }
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
         val parts = page.url.trim('/').split("/")
