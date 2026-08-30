@@ -19,16 +19,6 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 
-/**
- * Quotev serves an empty 1-byte body to requests missing standard browser fetch metadata
- * (confirmed live: identical request without Sec-Fetch and Accept-Language headers returns " ");
- * [configureHeaders] adds them.
- *
- * Stories are split into numbered "pages" (`/story/<id>/<slug>/<n>`), a finer unit than the
- * author-named "chapters" shown in the page's own chapter picker - one chapter can span several
- * pages. [SChapter] is modelled on the named chapters, with the start/end page range encoded as a
- * URL fragment, and [fetchPageText] concatenates every page in that range.
- */
 @Source
 abstract class Quotev :
     KeiSource(),
@@ -43,8 +33,6 @@ abstract class Quotev :
         .add("Sec-Fetch-Mode", "navigate")
         .add("Sec-Fetch-Site", "none")
         .add("Upgrade-Insecure-Requests", "1")
-
-    // ======================== Popular / Search ========================
 
     override suspend fun getPopularManga(page: Int): MangasPage = browse(page, BrowseOptions(sort = "users"))
 
@@ -79,22 +67,6 @@ abstract class Quotev :
         return browse(page, opts)
     }
 
-    /**
-     * Genre (`/c/<genre>`) only makes sense nested under a section, and media (`/m/<media>`) is a
-     * Fanfiction-only facet - both are silently dropped otherwise instead of producing a malformed
-     * path (this is what caused `/stories/c/Fiction/c/Harem`, a section hardcoded onto a category
-     * filter value that wasn't actually a subcategory of it, to 404 into an empty result set).
-     *
-     * Everything else here (exclude genre, crossover, real people, complete, featured, profanity/
-     * violence/mature toggles, exclude text, min length, language) comes straight from the site's
-     * own filter-dialog JS (`BrowseFilter`/its `G()` request builder) rather than guesswork, and
-     * `complete`/`pf` were spot-checked live to actually change results when appended as extra query
-     * params onto these pretty paths. `mature` mirrors the dialog's `mf` flag, which the site itself
-     * only honors for a logged-in session (anonymous clicks show a login prompt) - this extension
-     * has no login flow, so it may be a no-op here. The bitmask *include* category (`cat`) still
-     * isn't exposed since combining values wasn't confirmed to work; `xcat` (exclude) is a single
-     * value, not a combination, so it's used as-is for the Exclude Genre filter below.
-     */
     private suspend fun browse(page: Int, opts: BrowseOptions): MangasPage {
         var path = if (opts.section.isBlank()) "/stories" else "/stories/c/${opts.section}"
         if (opts.section.isNotBlank() && opts.genre.isNotBlank()) path += "/c/${opts.genre}"
@@ -156,8 +128,6 @@ abstract class Quotev :
         return MangasPage(mangas, hasNextPage)
     }
 
-    // ======================== Details + Chapters ========================
-
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/story/${manga.url}"
 
     override suspend fun fetchMangaUpdate(
@@ -191,16 +161,11 @@ abstract class Quotev :
         genre = doc.select("div.quizBoxTags a").eachText().distinct().joinToString()
     }
 
-    /** Description paragraphs are separated by `<br>` rather than `<p>`; mark them before
-     * Jsoup.text() collapses whitespace, then restore as real newlines. */
     private fun formatDescription(html: String): String {
-        val marked = html.replace(Regex("""<br\s*/?>"""), LINE_BREAK_MARKER)
-        return Jsoup.parseBodyFragment(marked).text().replace(LINE_BREAK_MARKER, "\n").trim()
+        val marked = html.replace(lineBreakRegex, LINE_BREAK_MARKER)
+        return Jsoup.parseBodyFragment(marked, baseUrl).text().replace(LINE_BREAK_MARKER, "\n").trim()
     }
 
-    /** The chapter picker is a `<select name=rid>` with one `<option value=page>` per named
-     * chapter; the last chapter's end page isn't known up front, so it's left open-ended and
-     * [fetchPageText] instead walks pages until the site stops offering a "next page" link. */
     private fun parseChapterList(doc: Document, storyPath: String): List<SChapter> {
         val entries = doc.select("select[name=rid] option[value]").mapNotNull { option ->
             val startPage = option.attr("value").toIntOrNull() ?: return@mapNotNull null
@@ -219,8 +184,6 @@ abstract class Quotev :
             }
         }.reversed()
     }
-
-    // ======================== Pages ========================
 
     override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapter.url.substringBefore("#")
 
@@ -241,8 +204,6 @@ abstract class Quotev :
             }
         }
     }
-
-    // ======================== Filters ========================
 
     override fun getFilterList(data: JsonElement?) = FilterList(
         SectionFilter(),
@@ -356,8 +317,6 @@ abstract class Quotev :
             ),
         )
 
-    /** Bitmask ids pulled from the same `storyCat` list as [GenreFilter]; used as a single `xcat`
-     * value (exclude), never combined - the dialog's category selects are single-choice each. */
     private class ExcludeGenreFilter :
         UriPartFilter(
             "Exclude genre",
@@ -408,7 +367,6 @@ abstract class Quotev :
 
     private class ExcludeTextFilter : Filter.Text("Exclude (words to avoid)")
 
-    /** `lid` values pulled from the site's own filter dialog config (`BrowseFilter({"lang":[...]})`). */
     private class LanguageFilter :
         UriPartFilter(
             "Language",
@@ -464,5 +422,6 @@ abstract class Quotev :
     companion object {
         private const val LINE_BREAK_MARKER = "␈"
         private const val OPEN_ENDED = -1
+        private val lineBreakRegex = Regex("""<br\s*/?>""")
     }
 }
