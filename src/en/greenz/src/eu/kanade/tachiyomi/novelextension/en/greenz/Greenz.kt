@@ -25,12 +25,6 @@ import okhttp3.Response
 import org.jsoup.Jsoup
 import kotlin.time.Instant
 
-/**
- * Frontend (greenz.com) is a client-rendered Next.js app with no server-rendered story data; all
- * content comes from the open, unauthenticated `admin.greenz.com` REST API it calls internally.
- * [SManga.url]/[SChapter.url] store the public "/novels/..." path with the numeric API id appended
- * as a URL fragment (never sent to the server) since the API needs the id but the site needs the slug.
- */
 @Source
 abstract class Greenz :
     KeiSource(),
@@ -40,8 +34,6 @@ abstract class Greenz :
     override val supportsLatest = true
 
     private val preferences by getPreferencesLazy()
-
-    // ======================== Popular / Latest / Search ========================
 
     override suspend fun getPopularManga(page: Int): MangasPage = parseNovelList(client.get("$API_URL/novels/trending?page=$page&limit=$PAGE_SIZE", headers))
 
@@ -62,8 +54,6 @@ abstract class Greenz :
         val page = response.parseAs<PageResponse<NovelDto>>().data
         return MangasPage(page.items.map { it.toSManga() }, page.meta.hasNextPage)
     }
-
-    // ======================== Details + Chapters ========================
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + manga.url.substringBefore("#")
 
@@ -108,8 +98,6 @@ abstract class Greenz :
         return response.parseAs<PageResponse<NovelDto>>().data.items.firstOrNull()?.toSManga()
     }
 
-    // ======================== Pages ========================
-
     override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapter.url.substringBefore("#")
 
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
@@ -120,9 +108,6 @@ abstract class Greenz :
             .parseAs<SingleResponse<ChapterContentDto>>().data.content
             ?: throw Exception("This chapter is locked. Unlock it on the website, or disable \"Show locked chapters\".")
 
-        // Chapter text is exported from Google Docs with heavy inline styling (explicit
-        // black text/colors) that would fight the reader's own theme - strip it down to bare
-        // paragraphs, keeping blank <p> as <br> to preserve the original line spacing.
         return Jsoup.parseBodyFragment(html).select("p").joinToString("") { p ->
             val text = p.text()
             if (text.isEmpty()) "<br>" else "<p>${escapeHtml(text)}</p>"
@@ -140,8 +125,6 @@ abstract class Greenz :
         }
     }
 
-    // ======================== Filters ========================
-
     override fun getFilterList(data: JsonElement?) = FilterList(StatusFilter())
 
     private class StatusFilter : Filter.Select<String>("Status", arrayOf("All", "Ongoing", "Completed")) {
@@ -152,8 +135,6 @@ abstract class Greenz :
         }
     }
 
-    // ======================== Preferences ========================
-
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         SwitchPreferenceCompat(screen.context).apply {
             key = PREF_SHOW_LOCKED
@@ -162,8 +143,6 @@ abstract class Greenz :
             setDefaultValue(false)
         }.also(screen::addPreference)
     }
-
-    // ======================== DTOs ========================
 
     @Serializable
     private class PageResponse<T>(val data: PageData<T>)
@@ -185,16 +164,16 @@ abstract class Greenz :
 
     @Serializable
     private class NovelDto(
-        val id: Int,
-        val name: String,
-        val slug: String,
-        val status: String,
-        val author: String? = null,
-        val description: String? = null,
-        val alternativeNames: String? = null,
-        val genres: List<NameDto> = emptyList(),
-        val tags: List<NameDto> = emptyList(),
-        val cover: CoverDto? = null,
+        private val id: Int,
+        private val name: String,
+        private val slug: String,
+        private val status: String,
+        private val author: String? = null,
+        private val description: String? = null,
+        private val alternativeNames: String? = null,
+        private val genres: List<NameDto> = emptyList(),
+        private val tags: List<NameDto> = emptyList(),
+        private val cover: CoverDto? = null,
     ) {
         fun toSManga(): SManga = SManga.create().apply {
             val novelName = this@NovelDto.name
@@ -229,12 +208,12 @@ abstract class Greenz :
 
     @Serializable
     private class ChapterDto(
-        val id: Int,
-        val name: String,
-        val slug: String,
-        val isPremium: Boolean,
-        val chapterNumber: String,
-        val publishedAt: String,
+        private val id: Int,
+        private val name: String,
+        private val slug: String,
+        private val isPremium: Boolean,
+        private val chapterNumber: String,
+        private val publishedAt: String,
     ) {
         fun toSChapter(novelSlug: String, showLocked: Boolean): SChapter? {
             if (isPremium && !showLocked) return null
