@@ -295,7 +295,7 @@ abstract class Konkon :
         return when {
             stored.startsWith("/read/") -> baseUrl + stored
             stored.startsWith("/") -> "$baseUrl/read$stored"
-            else -> baseUrl + chapterPath.resolve(stored)
+            else -> chapterPath.absolute(baseUrl, stored)
         }
     }
 

@@ -641,7 +641,7 @@ abstract class WtrLab :
             "?locale=en&raw_id=$rawId&serie_slug=$slug"
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = mangaPath.slug(url.encodedPath)
@@ -778,7 +778,7 @@ abstract class WtrLab :
         return manga
     }
 
-    private fun buildChapterListUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    private fun buildChapterListUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,

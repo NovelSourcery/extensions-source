@@ -420,7 +420,9 @@ abstract class NovelUpdates :
         return MangasPage(novels, hasNextPage)
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
+
+    override fun getChapterUrl(chapter: SChapter): String = if (chapter.url.startsWith("http://") || chapter.url.startsWith("https://")) chapter.url else baseUrl + chapter.url
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val response = client.get(url, headers, ensureSuccess = false)
@@ -430,7 +432,7 @@ abstract class NovelUpdates :
         return parseMangaDetails(doc, requestPath).apply { this.url = mangaPathTemplate.slug(requestPath) }
     }
 
-    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
+    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(mangaPathTemplate.absolute(baseUrl, manga.url), headers)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,

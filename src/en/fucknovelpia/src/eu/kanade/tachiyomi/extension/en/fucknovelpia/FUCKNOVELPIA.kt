@@ -100,7 +100,7 @@ abstract class FUCKNOVELPIA :
 
     // ======================== Details + Chapters ========================
 
-    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPath.resolve(manga.url), headers)
+    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(mangaPath.absolute(baseUrl, manga.url), headers)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -199,7 +199,7 @@ abstract class FUCKNOVELPIA :
         return chapters.reversed()
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath

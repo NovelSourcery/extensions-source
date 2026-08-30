@@ -126,7 +126,7 @@ abstract class WebNovelTranslation :
         )
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.novelId())
+    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.novelId())
 
     // The API returns the full catalogue in one call, so resolving a pasted /series/<id> URL
     // just means matching the id against that catalogue - same as fetchMangaUpdate's details path.

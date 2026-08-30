@@ -93,7 +93,7 @@ abstract class Wattpad :
 
     // Details/chapters come from the api/v3 endpoint, but "open in browser" must point at the
     // human story/part page, not the API URL that getMangaUrl/getChapterUrl default to.
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath

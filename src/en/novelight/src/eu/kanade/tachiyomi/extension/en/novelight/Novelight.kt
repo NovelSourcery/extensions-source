@@ -124,7 +124,7 @@ abstract class Novelight :
         }
 
         // fetchChapters is true: one fetch of the details page serves both outputs.
-        val rawBody = client.get(baseUrl + mangaPath.resolve(manga.url), headers).body.string()
+        val rawBody = client.get(mangaPath.absolute(baseUrl, manga.url), headers).body.string()
         val detailDoc = Jsoup.parse(rawBody, baseUrl)
         val updatedManga = if (fetchDetails) parseMangaDetails(detailDoc) else manga
 
@@ -151,7 +151,7 @@ abstract class Novelight :
             val req = GET(
                 ajaxUrl,
                 headers.newBuilder()
-                    .add("Referer", baseUrl + mangaPath.resolve(manga.url))
+                    .add("Referer", mangaPath.absolute(baseUrl, manga.url))
                     .add("X-Requested-With", "XMLHttpRequest")
                     .build(),
             )
@@ -226,7 +226,7 @@ abstract class Novelight :
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private suspend fun fetchDetailsDoc(manga: SManga): Document = client.get(baseUrl + mangaPath.resolve(manga.url), headers).asJsoup()
+    private suspend fun fetchDetailsDoc(manga: SManga): Document = client.get(mangaPath.absolute(baseUrl, manga.url), headers).asJsoup()
 
     private fun parseDate(date: String?): Long {
         if (date.isNullOrBlank()) return 0L
@@ -235,9 +235,9 @@ abstract class Novelight :
         }.getOrDefault(0L)
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
-    override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapterPath.resolve(chapter.url)
+    override fun getChapterUrl(chapter: SChapter): String = chapterPath.absolute(baseUrl, chapter.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
@@ -247,7 +247,7 @@ abstract class Novelight :
         return parseMangaDetails(doc).apply { this.url = mangaPath.slug(path) }
     }
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, baseUrl + chapterPath.resolve(chapter.url)))
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapterPath.absolute(baseUrl, chapter.url)))
 
     @Serializable
     private class ReadChapter(val content: String = "")

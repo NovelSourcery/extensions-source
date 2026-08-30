@@ -33,4 +33,19 @@ class SlugPathTest {
         assertEquals("https://example.com/novel/legacy-slug", path.resolve("https://example.com/novel/legacy-slug"))
         assertEquals("http://example.com/novel/legacy-slug", path.resolve("http://example.com/novel/legacy-slug"))
     }
+
+    @Test
+    fun `absolute builds full url for a new-style slug`() {
+        val path = SlugPath("/novel/")
+        assertEquals("https://example.com/novel/some-slug", path.absolute("https://example.com", "some-slug"))
+    }
+
+    @Test
+    fun `absolute does not double up a legacy absolute url`() {
+        val path = SlugPath("/novel/")
+        assertEquals(
+            "https://example.com/novel/legacy-slug",
+            path.absolute("https://example.com", "https://example.com/novel/legacy-slug"),
+        )
+    }
 }
