@@ -23,12 +23,6 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Response
 import org.jsoup.Jsoup
 
-/**
- * botitranslation.com is a pure client-side SPA; all content comes from the shared white-label
- * "StoryWave" backend it calls internally (`api.mystorywave.com`), which is open and
- * unauthenticated. [SManga.url]/[SChapter.url] store the bare numeric API id - the site's own
- * pages are id-only too (`/book/{id}`, `/chapter/{id}`), so no slug bookkeeping is needed.
- */
 @Source
 abstract class BotiTranslation :
     KeiSource(),
@@ -38,8 +32,6 @@ abstract class BotiTranslation :
     override val supportsLatest = false
 
     private val preferences by getPreferencesLazy()
-
-    // ======================== Popular / Search ========================
 
     override suspend fun getPopularManga(page: Int): MangasPage = search(page, "", "")
 
@@ -72,8 +64,6 @@ abstract class BotiTranslation :
         val hasNextPage = page * PAGE_SIZE < data.totalCount
         return MangasPage(data.list.map { it.toSManga() }, hasNextPage)
     }
-
-    // ======================== Details + Chapters ========================
 
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/book/${manga.url}"
 
@@ -124,8 +114,6 @@ abstract class BotiTranslation :
         return response.parseAs<SingleResponse<BookDto>>().data.toSManga()
     }
 
-    // ======================== Pages ========================
-
     override fun getChapterUrl(chapter: SChapter): String = "$baseUrl/chapter/${chapter.url}"
 
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
@@ -137,8 +125,6 @@ abstract class BotiTranslation :
         }
         return Jsoup.parseBodyFragment(chapter.content.orEmpty()).body().html()
     }
-
-    // ======================== Filters ========================
 
     override fun getFilterList(data: JsonElement?) = FilterList(GenreFilter())
 
@@ -171,8 +157,6 @@ abstract class BotiTranslation :
         }
     }
 
-    // ======================== Preferences ========================
-
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         SwitchPreferenceCompat(screen.context).apply {
             key = PREF_SHOW_LOCKED
@@ -181,8 +165,6 @@ abstract class BotiTranslation :
             setDefaultValue(false)
         }.also(screen::addPreference)
     }
-
-    // ======================== DTOs ========================
 
     @Serializable
     private class PageResponse<T>(val data: PageData<T>)
@@ -195,13 +177,13 @@ abstract class BotiTranslation :
 
     @Serializable
     private class BookDto(
-        val id: Int,
-        val title: String,
-        val authorPseudonym: String? = null,
-        val genreName: String? = null,
-        val tag: String? = null,
-        val coverImgUrl: String? = null,
-        val synopsis: String? = null,
+        private val id: Int,
+        private val title: String,
+        private val authorPseudonym: String? = null,
+        private val genreName: String? = null,
+        private val tag: String? = null,
+        private val coverImgUrl: String? = null,
+        private val synopsis: String? = null,
     ) {
         fun toSManga(): SManga = SManga.create().apply {
             val bookTitle = this@BookDto.title
@@ -220,11 +202,11 @@ abstract class BotiTranslation :
 
     @Serializable
     private class ChapterDto(
-        val id: Int,
-        val title: String,
-        val chapterOrder: Int,
-        val paywallStatus: String? = null,
-        val publishTime: Long? = null,
+        private val id: Int,
+        private val title: String,
+        private val chapterOrder: Int,
+        private val paywallStatus: String? = null,
+        private val publishTime: Long? = null,
     ) {
         fun toSChapter(showLocked: Boolean): SChapter? {
             val locked = paywallStatus == "charge"
