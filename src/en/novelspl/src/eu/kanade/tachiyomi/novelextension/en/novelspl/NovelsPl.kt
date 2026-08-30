@@ -30,15 +30,6 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.time.Duration.Companion.seconds
 
-/**
- * novels.pl fronts every page with Anubis, a proof-of-work anti-bot challenge (200 OK, but the
- * body is the challenge shell rather than real content). [getBypassingChallenge] mirrors the
- * Cloudflare-challenge pattern used elsewhere in this repo (see Honeyfeed): solve it once in a
- * real WebView with `useOkHttpNetwork` so the clearance cookie it earns lands in this source's own
- * cookie jar, then retry with a plain request. This could not be verified live in this
- * environment - the actual page markup below was provided by the user from a real solved session,
- * not scraped directly here - so the Anubis-solving path itself needs on-device confirmation.
- */
 @Source
 abstract class NovelsPl :
     KeiSource(),
@@ -73,8 +64,6 @@ abstract class NovelsPl :
                             resolved = true
                             resolve(Unit)
                         }
-                        // Otherwise Anubis's own JS is still computing the proof-of-work; it will
-                        // navigate again once solved, firing onPageFinished a second time.
                     }
                 }
                 loadUrl(url)
@@ -84,16 +73,12 @@ abstract class NovelsPl :
         }
     }
 
-    // ======================== Popular / Search ========================
-
     override suspend fun getPopularManga(page: Int): MangasPage = browse(page, "")
 
     override suspend fun getLatestUpdates(page: Int): MangasPage = throw UnsupportedOperationException()
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = browse(page, query)
 
-    /** The site exposes its entire catalog as one large table with no separate paginated listing
-     * endpoint; popular/search both page through a single fetch of it. */
     private suspend fun browse(page: Int, query: String): MangasPage {
         val doc = getBypassingChallenge("$baseUrl/listNovels").asJsoup()
         val all = doc.select("a[data-toggle=tooltip][href*=/novel/]")
@@ -109,7 +94,7 @@ abstract class NovelsPl :
     }
 
     private fun Element.toSManga(): SManga {
-        val tooltip = Jsoup.parseBodyFragment(attr("title"))
+        val tooltip = Jsoup.parseBodyFragment(attr("title"), baseUrl)
         return SManga.create().apply {
             title = text()
             url = attr("abs:href").toHttpUrl().encodedPath.removePrefix("/novel/")
@@ -118,8 +103,6 @@ abstract class NovelsPl :
     }
 
     private fun resolveDataPath(path: String): String = "$baseUrl/${path.removePrefix("../")}"
-
-    // ======================== Details + Chapters ========================
 
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.url}"
 
@@ -144,15 +127,8 @@ abstract class NovelsPl :
         }
     }.getOrNull()
 
-    /**
-     * The site's `p[itemprop=description]` is left empty by its template; the real blurb is the
-     * plain-text sibling `<p>` right after it (HTML5 auto-closes that `<p>` before the following
-     * `<div>`, so its own text stays clean). Rating/votes/views/date-created/update-frequency
-     * selectors below are best-effort schema.org/markup guesses from a single saved sample page -
-     * this site sits behind Anubis so it could not be re-verified live here.
-     */
     private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
-        title = doc.selectFirst(".panel-title")?.text().orEmpty().removeSuffix("(Web Novel)").removeSuffix("(Light Novel)").trim()
+        title = doc.selectFirst(".panel-title")!!.text().removeSuffix("(Web Novel)").removeSuffix("(Light Novel)").trim()
         thumbnail_url = doc.selectFirst(".imageCover img")?.let { resolveDataPath(it.attr("src")) }
         author = doc.selectFirst("a[href^=/author/]")?.text()
         genre = doc.select("div[itemprop=genre] a.label").eachText().distinct().joinToString()
@@ -195,8 +171,6 @@ abstract class NovelsPl :
         }
     }
 
-    /** The chapter list is paginated (50/page) with no "show all" mode; fetch every page the
-     * "Last" pager link reports, concurrently, and merge. */
     private suspend fun parseAllChapters(firstPageDoc: Document, manga: SManga): List<SChapter> {
         val lastPage = firstPageDoc.select(".pagination a").firstOrNull { it.text() == "Last" }
             ?.attr("href")?.toHttpUrl()?.queryParameter("p")?.toIntOrNull() ?: 1
@@ -230,8 +204,6 @@ abstract class NovelsPl :
     private fun parseDate(date: String): Long = runCatching {
         LocalDate.parse(date, dateFormat).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
     }.getOrDefault(0L)
-
-    // ======================== Pages ========================
 
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
