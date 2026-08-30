@@ -19,20 +19,12 @@ import okhttp3.HttpUrl
 import org.jsoup.Jsoup
 import kotlin.time.Instant
 
-/**
- * OpenQuill's browse page is fully client-rendered with no server-side data, but the same-origin
- * `/api/stories` route it calls is open and returns the full catalog (a small site, ~50 stories)
- * in one page - popular/latest/search all filter that single fetch locally rather than relying on
- * unconfirmed server-side query params.
- */
 @Source
 abstract class OpenQuill :
     KeiSource(),
     NovelSource {
 
     override val supportsLatest = true
-
-    // ======================== Popular / Latest / Search ========================
 
     override suspend fun getPopularManga(page: Int): MangasPage = paginate(fetchAllStories().sortedByDescending { it.realViewCount }, page)
 
@@ -50,11 +42,9 @@ abstract class OpenQuill :
 
     private fun paginate(stories: List<StoryDto>, page: Int): MangasPage {
         val from = (page - 1) * PAGE_SIZE
-        val mangas = stories.drop(from).take(PAGE_SIZE).map { it.toSManga() }
+        val mangas = stories.drop(from).take(PAGE_SIZE).map { it.toSManga(baseUrl) }
         return MangasPage(mangas, from + PAGE_SIZE < stories.size)
     }
-
-    // ======================== Details + Chapters ========================
 
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/stories/${manga.url}"
 
@@ -64,10 +54,9 @@ abstract class OpenQuill :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        // Details and the full chapter list both live in the same story API response.
         val story = client.get("$baseUrl/api/stories/${manga.url}", headers).parseAs<StoryDto>()
 
-        val updatedManga = if (fetchDetails) story.toSManga() else manga
+        val updatedManga = if (fetchDetails) story.toSManga(baseUrl) else manga
         val updatedChapters = if (fetchChapters) {
             story.chapters.filter { it.isPublished }
                 .sortedByDescending { it.chapterNumber }
@@ -83,10 +72,8 @@ abstract class OpenQuill :
         val slug = url.pathSegments.getOrNull(1) ?: return null
         val response = client.get("$baseUrl/api/stories/$slug", headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
-        return response.parseAs<StoryDto>().toSManga()
+        return response.parseAs<StoryDto>().toSManga(baseUrl)
     }
-
-    // ======================== Pages ========================
 
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
@@ -96,12 +83,10 @@ abstract class OpenQuill :
 
         val response = client.get("$baseUrl/api/stories/$slug/chapters/$chapterNumber", headers)
             .parseAs<ChapterContentResponse>()
-        val doc = Jsoup.parseBodyFragment(response.chapter.content)
+        val doc = Jsoup.parseBodyFragment(response.chapter.content, baseUrl)
         doc.selectFirst("h1")?.remove()
         return doc.body().html()
     }
-
-    // ======================== Filters ========================
 
     override fun getFilterList(data: JsonElement?) = FilterList(GenreFilter())
 
@@ -117,8 +102,6 @@ abstract class OpenQuill :
         ) {
         fun toUriPart() = if (state == 0) "" else values[state]
     }
-
-    // ======================== DTOs ========================
 
     @Serializable
     private class StoryListResponse(val stories: List<StoryDto> = emptyList())
@@ -144,78 +127,63 @@ abstract class OpenQuill :
     @Serializable
     private class ChapterDto(
         val chapterNumber: Int,
-        val title: String,
+        private val title: String,
         val isPublished: Boolean = true,
-        val createdAt: String? = null,
+        private val createdAt: String? = null,
     ) {
         fun toSChapter(storySlug: String): SChapter = SChapter.create().apply {
-            val chapterTitle = title
             url = "/stories/$storySlug/chapter/$chapterNumber"
-            name = chapterTitle
+            name = title
             chapter_number = chapterNumber.toFloat()
             date_upload = createdAt?.let { Instant.parseOrNull(it)?.toEpochMilliseconds() } ?: 0L
         }
     }
 
-    /**
-     * rating/ratingCount/followerCount/readerCount field names are a best-effort guess mirrored
-     * from the site's rendered story page (rating, votes, follows, readers) - the API itself
-     * returns 403 outside a browser session so the real field names could not be confirmed here.
-     * They default harmlessly to null/0 if the guess is wrong.
-     */
     @Serializable
     private class StoryDto(
         val title: String,
         val slug: String,
-        val description: String? = null,
-        val coverImageUrl: String? = null,
-        val status: String? = null,
-        val author: AuthorDto? = null,
+        private val description: String? = null,
+        private val coverImageUrl: String? = null,
+        private val status: String? = null,
+        private val author: AuthorDto? = null,
         val genres: List<GenreWrapper> = emptyList(),
-        val tags: List<TagWrapper> = emptyList(),
+        private val tags: List<TagWrapper> = emptyList(),
         val chapters: List<ChapterDto> = emptyList(),
         val realViewCount: Int = 0,
-        val averageRating: Double? = null,
-        val ratingCount: Int? = null,
-        val followerCount: Int? = null,
-        val readerCount: Int? = null,
+        private val averageRating: Double? = null,
+        private val ratingCount: Int? = null,
+        private val followerCount: Int? = null,
+        private val readerCount: Int? = null,
         val lastChapterPublishedAt: String? = null,
     ) {
-        fun toSManga(): SManga {
-            val storyTitle = title
-            val storyAuthor = author?.username
-            val storyStatus = status
-            val storyDescription = description
-            val storyGenres = genres.map { it.genre.name } + tags.map { it.tag.name }
-
-            return SManga.create().apply {
-                url = slug
-                title = storyTitle
-                author = storyAuthor
-                thumbnail_url = coverImageUrl
-                genre = storyGenres.distinct().joinToString()
-                description = buildString {
-                    averageRating?.takeIf { it > 0 }?.let {
-                        append("Rating: $it")
-                        ratingCount?.let { c -> append(" ($c ratings)") }
-                        append("\n")
-                    }
-                    if (realViewCount > 0) append("Views: $realViewCount\n")
-                    followerCount?.takeIf { it > 0 }?.let { append("Follows: $it\n") }
-                    readerCount?.takeIf { it > 0 }?.let { append("Readers: $it\n") }
-                    val desc = storyDescription?.let { html -> Jsoup.parseBodyFragment(html).body().formattedText() }?.trim()
-                    if (!desc.isNullOrBlank()) {
-                        if (isNotEmpty()) append("\n")
-                        append(desc)
-                    }
-                }.trim().ifBlank { null }
-                status = when (storyStatus) {
-                    "COMPLETED" -> SManga.COMPLETED
-                    "ONGOING" -> SManga.ONGOING
-                    "HIATUS" -> SManga.ON_HIATUS
-                    "CANCELLED", "DROPPED" -> SManga.CANCELLED
-                    else -> SManga.UNKNOWN
+        fun toSManga(baseUrl: String): SManga = SManga.create().apply {
+            url = slug
+            title = this@StoryDto.title
+            author = this@StoryDto.author?.username
+            thumbnail_url = coverImageUrl
+            genre = (genres.map { it.genre.name } + tags.map { it.tag.name }).distinct().joinToString()
+            description = buildString {
+                averageRating?.takeIf { it > 0 }?.let {
+                    append("Rating: $it")
+                    ratingCount?.let { c -> append(" ($c ratings)") }
+                    append("\n")
                 }
+                if (realViewCount > 0) append("Views: $realViewCount\n")
+                followerCount?.takeIf { it > 0 }?.let { append("Follows: $it\n") }
+                readerCount?.takeIf { it > 0 }?.let { append("Readers: $it\n") }
+                val desc = this@StoryDto.description?.let { html -> Jsoup.parseBodyFragment(html, baseUrl).body().formattedText() }?.trim()
+                if (!desc.isNullOrBlank()) {
+                    if (isNotEmpty()) append("\n")
+                    append(desc)
+                }
+            }.trim().ifBlank { null }
+            status = when (this@StoryDto.status) {
+                "COMPLETED" -> SManga.COMPLETED
+                "ONGOING" -> SManga.ONGOING
+                "HIATUS" -> SManga.ON_HIATUS
+                "CANCELLED", "DROPPED" -> SManga.CANCELLED
+                else -> SManga.UNKNOWN
             }
         }
     }
