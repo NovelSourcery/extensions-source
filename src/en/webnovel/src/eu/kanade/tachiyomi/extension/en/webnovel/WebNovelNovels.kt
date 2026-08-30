@@ -345,12 +345,12 @@ abstract class WebNovelNovels :
     ): SMangaUpdate = coroutineScope {
         // Details and chapters live on different pages - fire both concurrently when both are needed.
         val detailsDeferred = if (fetchDetails) {
-            async { parseMangaDetails(client.get(baseUrl + mangaPath.resolve(manga.url), headers)) }
+            async { parseMangaDetails(client.get(mangaPath.absolute(baseUrl, manga.url), headers)) }
         } else {
             null
         }
         val chaptersDeferred = if (fetchChapters) {
-            async { parseChapterList(client.get(baseUrl + mangaPath.resolve(manga.url) + "/catalog", headers)) }
+            async { parseChapterList(client.get(mangaPath.absolute(baseUrl, manga.url) + "/catalog", headers)) }
         } else {
             null
         }
@@ -414,7 +414,7 @@ abstract class WebNovelNovels :
     }
 
     // Pages - novel content - return single page with chapter URL for text fetching
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val response = client.get(url.toString(), headers, ensureSuccess = false)

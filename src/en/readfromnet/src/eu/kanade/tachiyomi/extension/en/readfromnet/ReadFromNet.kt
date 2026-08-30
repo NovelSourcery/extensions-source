@@ -35,7 +35,7 @@ abstract class ReadFromNet :
     // prefix.
     private val mangaPathTemplate: SlugPath = SlugPath("/")
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
     // ======================== Popular ========================
 
     protected open fun buildPopularMangaRequest(page: Int): Request = GET("$baseUrl/allbooks/page/$page/", headers)
@@ -96,7 +96,7 @@ abstract class ReadFromNet :
     }
     // ======================== Details + Chapters ========================
 
-    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
+    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(mangaPathTemplate.absolute(baseUrl, manga.url), headers)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,

@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "Shanghai Fantasy"
-    versionCode = 6
+    versionCode = 7
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

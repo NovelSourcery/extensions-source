@@ -260,7 +260,7 @@ abstract class Ranobes :
     }
     // ======================== Details ========================
 
-    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
+    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(mangaPathTemplate.absolute(baseUrl, manga.url), headers)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -493,7 +493,7 @@ abstract class Ranobes :
         }
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val response = client.get(url, headers, ensureSuccess = false)

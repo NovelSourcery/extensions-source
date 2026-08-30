@@ -76,7 +76,7 @@ abstract class LightNovelTranslation :
         return MangasPage(mangas, false)
     }
 
-    private fun buildMangaDetailsUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    private fun buildMangaDetailsUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -166,7 +166,7 @@ abstract class LightNovelTranslation :
             .reversed()
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPath.slug(url.encodedPath) }

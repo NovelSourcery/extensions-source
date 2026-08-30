@@ -138,7 +138,7 @@ abstract class ReadNovelMtl :
     }
     // ======================== Details + Chapters ========================
 
-    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPath.resolve(manga.url), headers)
+    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(mangaPath.absolute(baseUrl, manga.url), headers)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -223,7 +223,7 @@ abstract class ReadNovelMtl :
         return chapters.reversed()
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val response = client.get(url, headers, ensureSuccess = false)

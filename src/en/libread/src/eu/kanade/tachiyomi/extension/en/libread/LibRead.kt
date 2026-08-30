@@ -32,7 +32,7 @@ abstract class LibRead : ReadNovelFull() {
     override val mangaPathTemplate = SlugPath("/libread/")
 
     override fun chapterListPageRequest(manga: SManga, page: Int): Request {
-        val base = baseUrl + mangaPathTemplate.resolve(manga.url).trimEnd('/')
+        val base = mangaPathTemplate.absolute(baseUrl, manga.url).trimEnd('/')
         val url = if (page <= 1) base else "$base?$pageParam=$page"
         return GET(url, headers)
     }

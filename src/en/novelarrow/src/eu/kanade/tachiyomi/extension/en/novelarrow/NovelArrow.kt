@@ -113,7 +113,7 @@ abstract class NovelArrow :
 
     // Details
 
-    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), rscHeaders())
+    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(mangaPathTemplate.absolute(baseUrl, manga.url), rscHeaders())
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -213,7 +213,7 @@ abstract class NovelArrow :
         val premium_content: Boolean = false,
     )
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = mangaPathTemplate.slug(url.encodedPath)

@@ -392,7 +392,7 @@ abstract class NovelDex :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and chapters both come from the same detail-page RSC response - fetch it once.
-        val response = client.get("$baseUrl${mangaPath.resolve(manga.url)}", rscHeaders())
+        val response = client.get(mangaPath.absolute(baseUrl, manga.url), rscHeaders())
         val rawBody = response.body.string()
         val requestPath = response.request.url.encodedPath
 
@@ -555,7 +555,7 @@ abstract class NovelDex :
         }
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath

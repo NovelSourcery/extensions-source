@@ -221,7 +221,7 @@ abstract class MadaraNovel :
         }
     }
 
-    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
+    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(mangaPathTemplate.absolute(baseUrl, manga.url), headers)
 
     private fun mangaDetailsParse(doc: Document, mangaUrl: String): SManga {
         doc.select(".manga-title-badges, #manga-title span").remove()
@@ -305,7 +305,7 @@ abstract class MadaraNovel :
     // merely start with a number aren't eaten)
     private val numberSeparatorRegex = Regex("""^(\d+(?:\.\d+)?)\s*[-–—:]\s*""")
 
-    protected open fun buildChapterListRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
+    protected open fun buildChapterListRequest(manga: SManga): Request = GET(mangaPathTemplate.absolute(baseUrl, manga.url), headers)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -480,7 +480,7 @@ abstract class MadaraNovel :
         return if (reverseChapterList) chapters else chapters.reversed()
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
@@ -697,7 +697,7 @@ abstract class MadaraNovel :
         val mangaUrl = mangaPathTemplate.resolve(manga.url)
         cachedPostId(cacheKey(mangaUrl))?.let { return it }
         return try {
-            val url = baseUrl + mangaUrl
+            val url = mangaPathTemplate.absolute(baseUrl, manga.url)
             val response = client.newCall(GET(url, headers)).execute()
             val doc = Jsoup.parse(response.use { it.body.string() }, url)
             extractPostId(doc)?.also { cachePostId(mangaUrl, it) }
@@ -713,8 +713,10 @@ abstract class MadaraNovel :
      * Pages carry several localized script objects with their own nonces
      * (wpMangaLogin, madara, etc.) — only this one is valid for history calls.
      */
+    private fun absoluteUrl(path: String): String = if (path.startsWith("http://") || path.startsWith("https://")) path else baseUrl + path
+
     private fun fetchNonce(path: String): String? = try {
-        val response = client.newCall(GET(baseUrl + path, headers)).execute()
+        val response = client.newCall(GET(absoluteUrl(path), headers)).execute()
         val html = response.use { it.body.string() }
         Regex("""var\s+user_history_params\s*=\s*\{[^}]*?"nonce"\s*:\s*"(\w+)"""").find(html)
             ?.groupValues?.get(1)

@@ -89,7 +89,7 @@ abstract class NovelLive : ReadNovelFull() {
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val updatedManga = if (fetchDetails) mangaDetailsParse(client.get(baseUrl + mangaPathTemplate.resolve(manga.url), headers).asJsoup()) else manga
+        val updatedManga = if (fetchDetails) mangaDetailsParse(client.get(mangaPathTemplate.absolute(baseUrl, manga.url), headers).asJsoup()) else manga
         val updatedChapters = if (fetchChapters) fetchNovelLiveChapterList(manga, chapters) else chapters
         return SMangaUpdate(updatedManga, updatedChapters)
     }

@@ -290,7 +290,7 @@ abstract class LnCrawler :
     }
 
     // Return web URL for the manga (used by app webview)
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPath.slug(url.encodedPath) }

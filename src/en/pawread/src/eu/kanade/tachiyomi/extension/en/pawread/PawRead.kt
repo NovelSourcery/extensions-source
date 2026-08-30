@@ -144,7 +144,8 @@ abstract class PawRead :
 
     protected open fun buildMangaDetailsRequest(manga: SManga): Request {
         val resolved = mangaPathTemplate.resolve(manga.url).let { if (it.endsWith("/")) it else "$it/" }
-        return GET(baseUrl + resolved, headers)
+        val url = if (resolved.startsWith("http://") || resolved.startsWith("https://")) resolved else baseUrl + resolved
+        return GET(url, headers)
     }
 
     override suspend fun fetchMangaUpdate(
@@ -244,7 +245,10 @@ abstract class PawRead :
         }.reversed()
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url).let { if (it.endsWith("/")) it else "$it/" }
+    override fun getMangaUrl(manga: SManga): String {
+        val resolved = mangaPathTemplate.resolve(manga.url).let { if (it.endsWith("/")) it else "$it/" }
+        return if (resolved.startsWith("http://") || resolved.startsWith("https://")) resolved else baseUrl + resolved
+    }
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }

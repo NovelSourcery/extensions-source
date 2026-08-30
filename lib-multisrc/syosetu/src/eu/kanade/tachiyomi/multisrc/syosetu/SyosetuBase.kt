@@ -86,8 +86,8 @@ abstract class SyosetuBase(
         else -> baseUrl
     }
 
-    override fun getMangaUrl(manga: SManga): String = contentBaseUrl + mangaPath.resolve(manga.url)
-    override fun getChapterUrl(chapter: SChapter): String = contentBaseUrl + mangaPath.resolve(chapter.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(contentBaseUrl, manga.url)
+    override fun getChapterUrl(chapter: SChapter): String = mangaPath.absolute(contentBaseUrl, chapter.url)
 
     // ---------- Popular / Latest ----------
     // NOC/MNLT/MID do have their own ranking pages (/rank/list/type/{period}_{modifier}/), just
@@ -304,7 +304,7 @@ abstract class SyosetuBase(
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val response = client.get(contentBaseUrl + mangaPath.resolve(manga.url), headers)
+        val response = client.get(mangaPath.absolute(contentBaseUrl, manga.url), headers)
         val doc = response.asJsoup()
         checkCloudflare(doc)
 
@@ -329,7 +329,7 @@ abstract class SyosetuBase(
             )
         }
 
-        val basePath = mangaPath.resolve(mangaUrl)
+        val basePath = mangaPath.absolute(contentBaseUrl, mangaUrl)
         // Chapter lists are paginated 100-per-page; the "last page" link in the pager (absent
         // entirely when everything already fits on page 1) tells us how many pages to walk.
         val pageCount = doc.selectFirst("a.c-pager__item--last")
@@ -343,7 +343,7 @@ abstract class SyosetuBase(
             val pageDoc = if (page == 1) {
                 doc
             } else {
-                val response = client.get("$contentBaseUrl$basePath?p=$page", headers)
+                val response = client.get("$basePath?p=$page", headers)
                 response.asJsoup()
             }
             checkCloudflare(pageDoc)
@@ -383,7 +383,7 @@ abstract class SyosetuBase(
 
     // ---------- Chapter content ----------
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(contentBaseUrl + mangaPath.resolve(page.url), headers)
+        val response = client.get(mangaPath.absolute(contentBaseUrl, page.url), headers)
         val doc = response.asJsoup()
         checkCloudflare(doc)
 

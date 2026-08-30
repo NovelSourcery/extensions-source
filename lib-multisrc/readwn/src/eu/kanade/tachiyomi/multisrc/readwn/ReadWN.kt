@@ -190,7 +190,7 @@ abstract class ReadWN :
 
     // ======================== Details + Chapters ========================
 
-    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
+    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(mangaPathTemplate.absolute(baseUrl, manga.url), headers)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -295,7 +295,14 @@ abstract class ReadWN :
         return calendar.timeInMillis
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
+
+    // Legacy library entries may still have a full absolute URL stored in SChapter.url from
+    // before chapter urls were domain-stripped via setUrlWithoutDomain(); pass those through
+    // unchanged instead of gluing baseUrl onto the front of them.
+    private fun absoluteUrl(path: String): String = if (path.startsWith("http://") || path.startsWith("https://")) path else baseUrl + path
+
+    override fun getChapterUrl(chapter: SChapter): String = absoluteUrl(chapter.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
@@ -307,7 +314,7 @@ abstract class ReadWN :
 
     // Novel: single text page fetched once in fetchPageText. The app's getPageList short-circuit
     // returns the stub without calling this, so it never double-fetches.
-    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, baseUrl + chapter.url))
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, imageUrl = absoluteUrl(chapter.url)))
 
     // ======================== Novel Content ========================
 
