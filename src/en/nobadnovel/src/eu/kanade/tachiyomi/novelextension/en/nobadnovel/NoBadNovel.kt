@@ -25,8 +25,6 @@ abstract class NoBadNovel :
 
     override val supportsLatest = true
 
-    // ======================== Popular / Latest / Search ========================
-
     override suspend fun getPopularManga(page: Int): MangasPage = browse(page, sort = "createdAt")
 
     override suspend fun getLatestUpdates(page: Int): MangasPage = browse(page, sort = "updatedAt")
@@ -59,8 +57,6 @@ abstract class NoBadNovel :
         return MangasPage(mangas, hasNextPage)
     }
 
-    // ======================== Details + Chapters ========================
-
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/series/${manga.url}"
 
     override suspend fun fetchMangaUpdate(
@@ -69,7 +65,6 @@ abstract class NoBadNovel :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        // Details and the full chapter list both live on the same series page.
         val doc = client.get(getMangaUrl(manga), headers).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
@@ -88,7 +83,7 @@ abstract class NoBadNovel :
     }
 
     private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
-        title = doc.selectFirst("h1")?.text().orEmpty()
+        title = doc.selectFirst("h1")!!.text()
         thumbnail_url = doc.selectFirst("main img")?.attr("abs:src")
         author = doc.selectFirst("span:containsOwn(Author:)")?.nextElementSibling()?.text()
         description = doc.selectFirst("#intro .content")?.let { formatDescription(it.html()) }
@@ -99,11 +94,9 @@ abstract class NoBadNovel :
         }
     }
 
-    /** Description paragraphs are separated by `<br>` rather than `<p>`; mark them before
-     * Jsoup.text() collapses whitespace, then restore as real newlines. */
     private fun formatDescription(html: String): String {
-        val marked = html.replace(Regex("""<br\s*/?>"""), LINE_BREAK_MARKER)
-        return Jsoup.parseBodyFragment(marked).text().replace(LINE_BREAK_MARKER, "\n").trim()
+        val marked = html.replace(lineBreakRegex, LINE_BREAK_MARKER)
+        return Jsoup.parseBodyFragment(marked, baseUrl).text().replace(LINE_BREAK_MARKER, "\n").trim()
     }
 
     private fun parseChapterList(doc: Document): List<SChapter> = doc.select("#chapter-list a[href*=/series/]").map { link ->
@@ -113,8 +106,6 @@ abstract class NoBadNovel :
         }
     }.reversed()
 
-    // ======================== Pages ========================
-
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
@@ -123,8 +114,6 @@ abstract class NoBadNovel :
         content.select("script, ins.adsbygoogle").remove()
         return content.html()
     }
-
-    // ======================== Filters ========================
 
     override fun getFilterList(data: JsonElement?) = FilterList(StatusFilter())
 
@@ -138,5 +127,6 @@ abstract class NoBadNovel :
 
     companion object {
         private const val LINE_BREAK_MARKER = "␈"
+        private val lineBreakRegex = Regex("""<br\s*/?>""")
     }
 }
