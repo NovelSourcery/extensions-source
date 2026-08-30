@@ -23,18 +23,6 @@ import kotlinx.serialization.Serializable
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
-/**
- * qimao.com (七猫中文网) is a Nuxt.js app whose book-detail page embeds a minified, hard-to-parse
- * `window.__NUXT__` IIFE payload - but its own `/api/book-detail/` routes, `/api/book/chapter-list`, and
- * `/api/search/result` routes are open, unauthenticated, and return plain JSON, so those are used
- * directly instead. Chapter *text*, by contrast, genuinely is server-rendered - it's just absent
- * from the __NUXT__ data object itself; the reading page's real HTML (`div.chapter-detail-article`)
- * has it, confirmed live, no API needed.
- *
- * No working "browse everything" or ranking endpoint could be found (`/api/rank/book-list` and
- * `/api/classify/book-list` exist but their required params couldn't be determined); popular
- * instead surfaces the fixed 10-item recommendation list search always returns alongside results.
- */
 @Source
 abstract class Qimao :
     KeiSource(),
@@ -44,8 +32,6 @@ abstract class Qimao :
     override val supportsLatest = false
 
     private val preferences by getPreferencesLazy()
-
-    // ======================== Popular / Search ========================
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         if (page > 1) return MangasPage(emptyList(), false)
@@ -69,8 +55,6 @@ abstract class Qimao :
         return MangasPage(data.searchList.map { it.toSManga() }, hasNextPage)
     }
 
-    // ======================== Details + Chapters ========================
-
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/shuku/${manga.url}/"
 
     override suspend fun fetchMangaUpdate(
@@ -84,7 +68,7 @@ abstract class Qimao :
         val updatedManga = if (fetchDetails) {
             val detailDeferred = async { client.get("$baseUrl/api/book-detail/main-info?book_id=$bookId", headers).parseAs<MainInfoResponse>().data.bookDetail }
             val introDeferred = async { fetchIntro(bookId) }
-            buildSManga(bookId, detailDeferred.await(), introDeferred.await())
+            detailDeferred.await().toSManga(bookId, introDeferred.await())
         } else {
             manga
         }
@@ -110,38 +94,17 @@ abstract class Qimao :
         val response = client.get("$baseUrl/api/book-detail/main-info?book_id=$bookId", headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val detail = response.parseAs<MainInfoResponse>().data.bookDetail
-        return buildSManga(bookId, detail, fetchIntro(bookId))
+        return detail.toSManga(bookId, fetchIntro(bookId))
     }
-
-    private fun buildSManga(bookId: String, detail: BookDetailDto, intro: String?): SManga = SManga.create().apply {
-        url = bookId
-        title = detail.title
-        author = detail.author
-        thumbnail_url = detail.imageLink
-        description = intro
-        genre = listOfNotNull(detail.category1, detail.category2).distinct().joinToString()
-        status = when (detail.isOver) {
-            "1" -> SManga.COMPLETED
-            "0" -> SManga.ONGOING
-            else -> SManga.UNKNOWN
-        }
-    }
-
-    // ======================== Pages ========================
 
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
         val doc = client.get(baseUrl + page.url, headers).asJsoup()
-        // A locked chapter still renders `div.chapter-detail-article`, but empty (no `div.article`
-        // child - just an empty canvas placeholder) - confirmed live. Only the inner div means the
-        // text actually rendered, so don't fall back to the (possibly empty) outer container.
         val content = doc.selectFirst("div.chapter-detail-article div.article")
             ?: throw Exception("This chapter is locked. Unlock it on the website, or disable \"Show locked chapters\".")
         return content.html()
     }
-
-    // ======================== Preferences ========================
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         SwitchPreferenceCompat(screen.context).apply {
@@ -151,8 +114,6 @@ abstract class Qimao :
             setDefaultValue(false)
         }.also(screen::addPreference)
     }
-
-    // ======================== DTOs ========================
 
     @Serializable
     private class SearchResponse(val data: SearchData)
@@ -169,27 +130,20 @@ abstract class Qimao :
 
     @Serializable
     private class SearchItemDto(
-        @SerialName("book_id") val bookId: String,
-        val title: String,
-        val author: String? = null,
-        val intro: String? = null,
-        @SerialName("image_link") val imageLink: String? = null,
-        @SerialName("category2_name") val category2: String? = null,
+        @SerialName("book_id") private val bookId: String,
+        private val title: String,
+        private val author: String? = null,
+        private val intro: String? = null,
+        @SerialName("image_link") private val imageLink: String? = null,
+        @SerialName("category2_name") private val category2: String? = null,
     ) {
-        fun toSManga(): SManga {
-            val itemTitle = title
-            val itemAuthor = author
-            val itemIntro = intro
-            val itemGenre = category2
-
-            return SManga.create().apply {
-                url = bookId
-                title = itemTitle
-                author = itemAuthor
-                thumbnail_url = imageLink
-                description = itemIntro
-                genre = itemGenre
-            }
+        fun toSManga(): SManga = SManga.create().apply {
+            url = bookId
+            title = this@SearchItemDto.title
+            author = this@SearchItemDto.author
+            thumbnail_url = imageLink
+            description = intro
+            genre = category2
         }
     }
 
@@ -201,13 +155,27 @@ abstract class Qimao :
 
     @Serializable
     private class BookDetailDto(
-        val title: String,
-        val author: String? = null,
-        @SerialName("image_link") val imageLink: String? = null,
-        @SerialName("category_1_name") val category1: String? = null,
-        @SerialName("category_2_name") val category2: String? = null,
-        @SerialName("is_over") val isOver: String? = null,
-    )
+        private val title: String,
+        private val author: String? = null,
+        @SerialName("image_link") private val imageLink: String? = null,
+        @SerialName("category_1_name") private val category1: String? = null,
+        @SerialName("category_2_name") private val category2: String? = null,
+        @SerialName("is_over") private val isOver: String? = null,
+    ) {
+        fun toSManga(bookId: String, intro: String?): SManga = SManga.create().apply {
+            url = bookId
+            title = this@BookDetailDto.title
+            author = this@BookDetailDto.author
+            thumbnail_url = imageLink
+            description = intro
+            genre = listOfNotNull(category1, category2).distinct().joinToString()
+            status = when (isOver) {
+                "1" -> SManga.COMPLETED
+                "0" -> SManga.ONGOING
+                else -> SManga.UNKNOWN
+            }
+        }
+    }
 
     @Serializable
     private class IntroResponse(val data: IntroData)
@@ -223,20 +191,19 @@ abstract class Qimao :
 
     @Serializable
     private class ChapterDto(
-        val id: String,
-        val title: String,
-        @SerialName("is_vip") val isVip: String,
-        @SerialName("update_time") val updateTime: String? = null,
-        val index: String,
+        private val id: String,
+        private val title: String,
+        @SerialName("is_vip") private val isVip: String,
+        @SerialName("update_time") private val updateTime: String? = null,
+        private val index: String,
     ) {
         fun toSChapter(bookId: String, showLocked: Boolean): SChapter? {
             val locked = isVip == "1"
             if (locked && !showLocked) return null
-            val chapterTitle = title
 
             return SChapter.create().apply {
                 url = "/shuku/$bookId-$id/"
-                name = if (locked) "🔒 $chapterTitle" else chapterTitle
+                name = if (locked) "🔒 $title" else title
                 chapter_number = index.toFloatOrNull() ?: -1f
                 date_upload = updateTime?.toLongOrNull()?.times(1000L) ?: 0L
             }
