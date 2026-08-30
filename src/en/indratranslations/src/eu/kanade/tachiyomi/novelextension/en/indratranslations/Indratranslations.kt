@@ -39,10 +39,7 @@ abstract class Indratranslations :
 
     private val preferences by getPreferencesLazy()
 
-    /** Series pages live at the site root as `/<slug>/`; [SManga.url] is stored as the bare slug. */
     private val mangaPath = SlugPath("/", "/")
-
-    // ======================== Popular / Latest / Search ========================
 
     override suspend fun getPopularManga(page: Int): MangasPage = parseSeriesListing(client.get("$baseUrl/series/?orderby=views", headers).asJsoup())
 
@@ -69,7 +66,6 @@ abstract class Indratranslations :
         return parseSeriesListing(client.get(url.build(), headers).asJsoup())
     }
 
-    /** The catalog is a single unpaginated page (~a few dozen series at most). */
     private fun parseSeriesListing(doc: Document): MangasPage {
         val mangas = doc.select("div.series-card").mapNotNull { card ->
             val href = onclickUrlRegex.find(card.attr("onclick"))?.groupValues?.get(1) ?: return@mapNotNull null
@@ -84,8 +80,6 @@ abstract class Indratranslations :
         return MangasPage(mangas, false)
     }
 
-    // ======================== Details + Chapters ========================
-
     override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
 
     override suspend fun fetchMangaUpdate(
@@ -94,7 +88,6 @@ abstract class Indratranslations :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        // Details and the full embedded chapter array both live on the same series page.
         val doc = client.get(getMangaUrl(manga), headers).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
@@ -110,7 +103,7 @@ abstract class Indratranslations :
     }
 
     private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
-        title = doc.selectFirst("h1.story-main-title")?.text().orEmpty()
+        title = doc.selectFirst("h1.story-main-title")!!.text()
         thumbnail_url = doc.selectFirst("meta[property=og:image]")?.attr("content")
         author = doc.selectFirst("div.story-meta-list a[href*=/tac-gia/]")?.text()
 
@@ -149,8 +142,6 @@ abstract class Indratranslations :
             .reversed()
     }
 
-    // ======================== Pages ========================
-
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
@@ -160,8 +151,6 @@ abstract class Indratranslations :
         content.select("span.td-s-noise").remove()
         return zeroWidthRegex.replace(content.html(), "")
     }
-
-    // ======================== Filters ========================
 
     override fun getFilterList(data: JsonElement?) = FilterList(
         OrderByFilter(),
@@ -269,8 +258,6 @@ abstract class Indratranslations :
             ),
         )
 
-    // ======================== Preferences ========================
-
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         SwitchPreferenceCompat(screen.context).apply {
             key = PREF_SHOW_LOCKED
@@ -279,8 +266,6 @@ abstract class Indratranslations :
             setDefaultValue(false)
         }.also(screen::addPreference)
     }
-
-    // ======================== Chapter DTO ========================
 
     @Serializable
     private class ChapterDto(
@@ -312,7 +297,6 @@ abstract class Indratranslations :
         private val onclickUrlRegex = Regex("""location\.href='([^']+)'""")
         private val chapterArrayRegex = Regex("""TD_Story_Chapters\s*=\s*(\[.*?\]);""", RegexOption.DOT_MATCHES_ALL)
 
-        /** Zero-width/invisible marks the site injects between words as a copy-tracking watermark. */
         private val zeroWidthRegex = Regex("[\u200B\u200C\u200D\u2060\uFEFF]")
 
         private val dateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH)
