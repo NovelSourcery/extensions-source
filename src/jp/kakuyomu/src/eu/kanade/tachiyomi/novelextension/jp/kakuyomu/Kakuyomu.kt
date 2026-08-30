@@ -25,23 +25,12 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.jsoup.nodes.Document
 import kotlin.time.Instant
 
-/**
- * Kakuyomu is a Next.js (Pages Router) app whose data is an Apollo Client cache serialized into
- * `__NEXT_DATA__` on every server-rendered page - browse/search/details are scraped from that
- * normalized `{__ref: "Type:id"}` graph via [extractApolloState]/[deref] instead of HTML selectors.
- *
- * The episode page (`/works/{workId}/episodes/{episodeId}`, no `/read` suffix - that path 404s)
- * renders the body server-side under `.widget-episodeBody`, so [fetchPageText] scrapes it directly
- * with a plain request instead of a WebView.
- */
 @Source
 abstract class Kakuyomu :
     KeiSource(),
     NovelSource {
 
     override val supportsLatest = true
-
-    // ======================== Popular / Latest / Search ========================
 
     override suspend fun getPopularManga(page: Int): MangasPage = search(page, "", "WEEKLY_RANKING")
 
@@ -75,8 +64,6 @@ abstract class Kakuyomu :
         return MangasPage(works.map { it.toSManga(apollo) }, hasNextPage)
     }
 
-    // ======================== Details + Chapters ========================
-
     override suspend fun fetchMangaUpdate(
         manga: SManga,
         chapters: List<SChapter>,
@@ -99,8 +86,6 @@ abstract class Kakuyomu :
             .mapNotNull { apollo.deref(it)?.parseAs<TocChapterDto>() }
             .flatMap { it.episodeUnions }
 
-        // Number sequentially over resolved episodes only - indexing the pre-filter list would
-        // leave a gap (and a wrong fallback title number) at every unresolvable episode ref.
         var number = 0
         return episodeRefs.mapNotNull { episodeRef ->
             val episodeId = (episodeRef as? JsonObject)?.get("__ref")?.string?.substringAfter(":") ?: return@mapNotNull null
@@ -123,20 +108,15 @@ abstract class Kakuyomu :
         return apollo["Work:$workId"]?.parseAs<WorkDto>()?.toSManga(apollo)
     }
 
-    // ======================== Pages ========================
-
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
         val doc = client.get(baseUrl + page.url, headers).asJsoup()
         val body = doc.selectFirst(".widget-episodeBody") ?: throw Exception("Kakuyomu: episode body not found")
 
-        // Furigana readings (<rt>/<rp>) are redundant with the base kanji text they annotate.
         body.select("rt, rp").remove()
         return body.html()
     }
-
-    // ======================== Filters ========================
 
     override fun getFilterList(data: JsonElement?) = FilterList(OrderFilter(), GenreFilter())
 
@@ -161,17 +141,15 @@ abstract class Kakuyomu :
         }
     }
 
-    // ======================== DTOs ========================
-
     @Serializable
     private class WorkDto(
-        val id: String,
-        val title: String,
-        val author: JsonElement? = null,
-        val genre: String? = null,
-        val introduction: String? = null,
-        val tagLabels: List<String> = emptyList(),
-        val serialStatus: String? = null,
+        private val id: String,
+        private val title: String,
+        private val author: JsonElement? = null,
+        private val genre: String? = null,
+        private val introduction: String? = null,
+        private val tagLabels: List<String> = emptyList(),
+        private val serialStatus: String? = null,
         val tableOfContentsV2: List<JsonElement> = emptyList(),
     ) {
         fun toSManga(apollo: JsonObject): SManga = SManga.create().apply {
@@ -191,7 +169,7 @@ abstract class Kakuyomu :
     }
 
     @Serializable
-    private class UserAccountDto(val activityName: String? = null, val name: String? = null)
+    private class UserAccountDto(val activityName: String? = null)
 
     @Serializable
     private class TocChapterDto(val episodeUnions: List<JsonElement> = emptyList())
@@ -200,8 +178,6 @@ abstract class Kakuyomu :
     private class EpisodeDto(val title: String? = null, val publishedAt: String? = null)
 }
 
-/** Extracts the raw `__APOLLO_STATE__` normalized cache from a server-rendered page. */
 private fun Document.extractApolloState(): JsonObject? = extractNextJs({ it is JsonObject && "ROOT_QUERY" in it }, JsonObject.serializer())
 
-/** Resolves an Apollo `{"__ref": "Type:id"}` pointer to the entity it points at. */
 private fun JsonObject.deref(ref: JsonElement?): JsonElement? = (ref as? JsonObject)?.get("__ref")?.string?.let { this[it] }
