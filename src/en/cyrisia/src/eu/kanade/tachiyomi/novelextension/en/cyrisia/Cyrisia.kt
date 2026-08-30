@@ -31,23 +31,12 @@ import org.jsoup.Jsoup
 import org.jsoup.parser.Parser
 import keiyoushi.zip.readEntry as parseZipEntry
 
-/**
- * Cyrisia is a personal/community EPUB library: series are static uploaded volumes rather than
- * per-chapter web content, so each EPUB is treated as one [SChapter] whose "page text" is the
- * concatenation of the volume's own internal chapter documents.
- *
- * The EPUB file itself needs no login - confirmed live, an anonymous request succeeds as long as
- * `Referer` starts with `$baseUrl/read/` (the site's own reader page for that volume); a bare or
- * missing `Referer` gets a 403.
- */
 @Source
 abstract class Cyrisia :
     KeiSource(),
     NovelSource {
 
     override val supportsLatest = false
-
-    // ======================== Popular / Search ========================
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val all = fetchBookshelf().sortedBy { it.name.lowercase() }
@@ -75,20 +64,10 @@ abstract class Cyrisia :
         return MangasPage(mangas, from + PAGE_SIZE < list.size)
     }
 
-    // The bookshelf API's `cover` field is a query string it built itself, but escaping is
-    // inconsistent per entry - confirmed live, some titles with "+" or raw spaces in their name
-    // come back completely unescaped (e.g. "...Second + Children...Kobo].epub" with a literal
-    // space and "+"), which OkHttp/Coil then reject outright. Percent-encode just those two
-    // unsafe characters; existing %XX sequences are left alone.
     private fun String.escapeCoverUrl(): String = replace(" ", "%20").replace("+", "%2B")
-
-    // ======================== Details + Chapters ========================
 
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/series".toHttpUrl().newBuilder().addPathSegment(manga.url).build().toString()
 
-    // e.g. https://cyrisia.com/series/ReZero%20-%20Starting%20Life%20in%20Another%20World -
-    // pathSegments are already percent-decoded, matching the raw series name used as manga.url
-    // elsewhere (see getMangaUrl, which re-encodes it).
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         if (url.pathSegments.getOrNull(0) != "series") return null
         val seriesName = url.pathSegments.getOrNull(1) ?: return null
@@ -98,7 +77,10 @@ abstract class Cyrisia :
     private suspend fun fetchManga(seriesName: String): SManga {
         val metadataUrl = "$baseUrl/api/metadata".toHttpUrl().newBuilder().addQueryParameter("series", seriesName).build()
         val meta = runCatching { client.get(metadataUrl, headers).parseAs<MetadataDto>() }.getOrNull()
-        return buildSManga(seriesName, meta)
+        return meta?.toSManga(seriesName) ?: SManga.create().apply {
+            url = seriesName
+            title = seriesName
+        }
     }
 
     override suspend fun fetchMangaUpdate(
@@ -128,36 +110,8 @@ abstract class Cyrisia :
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private fun buildSManga(seriesName: String, meta: MetadataDto?): SManga = SManga.create().apply {
-        url = seriesName
-        title = meta?.titleEn ?: meta?.romaji ?: seriesName
-        thumbnail_url = meta?.coverUrl
-        description = meta?.synopsis
-        genre = (meta?.genres.orEmpty() + meta?.tags.orEmpty()).distinct().joinToString()
-        status = when (meta?.publicationStatus) {
-            "ongoing" -> SManga.ONGOING
-            "finished", "completed" -> SManga.COMPLETED
-            "cancelled" -> SManga.CANCELLED
-            "hiatus" -> SManga.ON_HIATUS
-            else -> SManga.UNKNOWN
-        }
-
-        val altTitles = listOfNotNull(meta?.romaji, meta?.titleJa, meta?.aliases)
-            .filter { it.isNotBlank() && it != title }
-            .distinct()
-        if (altTitles.isNotEmpty()) {
-            setAltTitles(altTitles)
-        }
-    }
-
-    // ======================== Pages ========================
-
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
-    // Cyrisia has no chapters of its own - one SChapter is a whole EPUB volume, so re-opening it
-    // (e.g. going back and reopening the same volume) would otherwise redo the full directory +
-    // per-entry range-fetch dance for a result that hasn't changed. Cache only the most recently
-    // read volume - small and bounded, unlike caching every volume ever opened.
     private var lastPage: Pair<String, String>? = null
 
     override suspend fun fetchPageText(page: Page): String {
@@ -167,8 +121,6 @@ abstract class Cyrisia :
         val seriesName = segments.getOrNull(1)
         val volumeFilename = segments.getOrNull(2)
 
-        // The file endpoint 403s without a Referer pointing at the site's own reader page for
-        // this volume - see the class doc. It needs no other auth.
         val readerReferer = if (seriesName != null && volumeFilename != null) {
             "$baseUrl/read".toHttpUrl().newBuilder().addPathSegment(seriesName).addPathSegment(volumeFilename).build().toString()
         } else {
@@ -176,25 +128,18 @@ abstract class Cyrisia :
         }
         val zipHeaders = headers.newBuilder().set("Referer", readerReferer).build()
 
-        // The EPUB is streamed via HTTP Range requests (directory + only the entries actually
-        // needed) instead of downloading the whole archive into memory.
         val zipUrl = baseUrl + page.url
         val directory = fetchZipDirectory(zipUrl, zipHeaders)
 
-        // cyrisia.com's file server ignores the Range header on some responses and returns the
-        // whole EPUB with 200 instead of 206 (confirmed live) - a naive reader then misreads the
-        // response as if it started at the requested offset, corrupting every entry after the
-        // first. Once that happens the "ranged" response already holds the entire file, so cache
-        // it and slice later entries out of it instead of re-requesting (and re-downloading the
-        // whole file) per entry.
         var wholeFile: ByteArray? = null
 
-        fun readEntry(name: String): ByteArray? {
+        suspend fun readEntry(name: String): ByteArray? {
             val entry = directory.entries.firstOrNull { it.name == name } ?: return null
 
             wholeFile?.let { return sliceZipEntry(it, entry) }
 
-            val response = client.newCall(GET(zipUrl, zipHeaders).newBuilder().range(entry.dataRange).build()).execute()
+            val rangeHeaders = zipHeaders.newBuilder().set("Range", "bytes=${entry.dataRange.first}-${entry.dataRange.last}").build()
+            val response = client.get(zipUrl, rangeHeaders)
             val body = response.body.bytes()
             if (response.code != 206) {
                 wholeFile = body
@@ -217,16 +162,10 @@ abstract class Cyrisia :
             .mapNotNull { hrefById[it.attr("idref")] }
             .filterNot { href -> SKIP_SPINE_ITEM_REGEX.containsMatchIn(href) }
 
-        // Stylesheets/scripts referenced from each chapter's <head> - deduped by resolved path,
-        // since every chapter in a volume typically links the same shared files.
         val cssJsPaths = LinkedHashSet<String>()
 
-        // Caps how much image data gets base64-inlined into the returned HTML: a per-image limit
-        // (skip a single oversized illustration/scan) and a running total for the whole volume
-        // (stop inlining once a volume's images alone would bloat the page past a sane size),
-        // so a volume can't blow up memory just by having many/large images.
         var inlinedImageBytes = 0L
-        fun inlineImage(baseDir: String, relative: String): String? {
+        suspend fun inlineImage(baseDir: String, relative: String): String? {
             if (relative.isEmpty() || relative.startsWith("data:")) return null
             val path = resolveZipPath(baseDir, relative)
             val entry = directory.entries.firstOrNull { it.name == path } ?: return null
@@ -236,38 +175,40 @@ abstract class Cyrisia :
             return "data:${mimeTypeFor(path)};base64,${Base64.encodeToString(bytes, Base64.NO_WRAP)}"
         }
 
-        val text = spineHrefs.joinToString("<hr>") { href ->
-            val entryPath = resolveZipPath(opfDir, href)
-            val bytes = readEntry(entryPath) ?: return@joinToString ""
-            val entryDir = entryPath.substringBeforeLast("/", "")
-            val doc = Jsoup.parse(String(bytes))
+        val text = buildString {
+            for ((index, href) in spineHrefs.withIndex()) {
+                val entryPath = resolveZipPath(opfDir, href)
+                val bytes = readEntry(entryPath) ?: continue
+                val entryDir = entryPath.substringBeforeLast("/", "")
+                val doc = Jsoup.parse(String(bytes))
 
-            doc.head().select("link, script").forEach { el ->
-                val relHref = when {
-                    el.tagName() == "link" && el.attr("rel").equals("stylesheet", ignoreCase = true) -> el.attr("href")
-                    el.tagName() == "script" -> el.attr("src")
-                    else -> ""
+                for (el in doc.head().select("link, script")) {
+                    val relHref = when {
+                        el.tagName() == "link" && el.attr("rel").equals("stylesheet", ignoreCase = true) -> el.attr("href")
+                        el.tagName() == "script" -> el.attr("src")
+                        else -> ""
+                    }
+                    if (relHref.isNotEmpty()) cssJsPaths += resolveZipPath(entryDir, relHref)
                 }
-                if (relHref.isNotEmpty()) cssJsPaths += resolveZipPath(entryDir, relHref)
-            }
 
-            val body = doc.body()
-            body.select("img[src]").forEach { img ->
-                val inlined = inlineImage(entryDir, img.attr("src"))
-                if (inlined != null) img.attr("src", inlined) else img.remove()
-            }
-            body.select("image").forEach { image ->
-                val attrName = if (image.hasAttr("xlink:href")) {
-                    "xlink:href"
-                } else if (image.hasAttr("href")) {
-                    "href"
-                } else {
-                    return@forEach
+                val body = doc.body()
+                for (img in body.select("img[src]")) {
+                    val inlined = inlineImage(entryDir, img.attr("src"))
+                    if (inlined != null) img.attr("src", inlined) else img.remove()
                 }
-                val inlined = inlineImage(entryDir, image.attr(attrName))
-                if (inlined != null) image.attr(attrName, inlined) else image.remove()
+                for (image in body.select("image")) {
+                    val attrName = when {
+                        image.hasAttr("xlink:href") -> "xlink:href"
+                        image.hasAttr("href") -> "href"
+                        else -> continue
+                    }
+                    val inlined = inlineImage(entryDir, image.attr(attrName))
+                    if (inlined != null) image.attr(attrName, inlined) else image.remove()
+                }
+
+                if (index > 0) append("<hr>")
+                append(body.html())
             }
-            body.html()
         }
 
         val cssJs = buildString {
@@ -286,8 +227,6 @@ abstract class Cyrisia :
         return fullText
     }
 
-    // Resolves a relative EPUB-internal path (which may use "../") against a directory, without
-    // ever escaping above the archive root.
     private fun resolveZipPath(baseDir: String, relative: String): String {
         if (relative.startsWith("/")) return resolveZipPath("", relative.removePrefix("/"))
         val parts = ArrayDeque<String>()
@@ -311,9 +250,6 @@ abstract class Cyrisia :
         else -> "application/octet-stream"
     }
 
-    // Same 200-instead-of-206 quirk as readEntry, but for the initial directory (EOCD/central
-    // directory) request: cyrisia.com's file server sometimes ignores the suffix Range request and
-    // returns the whole file with no Content-Range header, so fall back to the body's own length.
     private suspend fun fetchZipDirectory(url: String, zipHeaders: Headers): ZipDirectory {
         val rangeHeaders = zipHeaders.newBuilder().set("Range", "bytes=-$MAX_EOCD_SEARCH").build()
         val response = client.get(url, rangeHeaders)
@@ -324,14 +260,11 @@ abstract class Cyrisia :
         }
     }
 
-    // Slices one entry's local header + data out of an already-fully-downloaded archive.
     private fun sliceZipEntry(body: ByteArray, entry: Entry): ByteArray {
         val from = entry.localHeaderOffset.toInt()
         val len = minOf(entry.dataRange.last - entry.dataRange.first + 1, (body.size - from).toLong()).toInt()
         return parseZipEntry(Buffer().write(body, from, len), entry.compressedSize, entry.method).buffer().readByteArray()
     }
-
-    // ======================== DTOs ========================
 
     @Serializable
     private class BookshelfEntry(
@@ -342,16 +275,38 @@ abstract class Cyrisia :
 
     @Serializable
     private class MetadataDto(
-        @SerialName("title_en") val titleEn: String? = null,
-        val romaji: String? = null,
-        @SerialName("title_ja") val titleJa: String? = null,
-        val aliases: String? = null,
-        val synopsis: String? = null,
-        val genres: List<String> = emptyList(),
-        val tags: List<String> = emptyList(),
-        @SerialName("cover_url") val coverUrl: String? = null,
-        @SerialName("publication_status") val publicationStatus: String? = null,
-    )
+        @SerialName("title_en") private val titleEn: String? = null,
+        private val romaji: String? = null,
+        @SerialName("title_ja") private val titleJa: String? = null,
+        private val aliases: String? = null,
+        private val synopsis: String? = null,
+        private val genres: List<String> = emptyList(),
+        private val tags: List<String> = emptyList(),
+        @SerialName("cover_url") private val coverUrl: String? = null,
+        @SerialName("publication_status") private val publicationStatus: String? = null,
+    ) {
+        fun toSManga(seriesName: String): SManga = SManga.create().apply {
+            url = seriesName
+            title = titleEn ?: romaji ?: seriesName
+            thumbnail_url = coverUrl
+            description = synopsis
+            genre = (genres + tags).distinct().joinToString()
+            status = when (publicationStatus) {
+                "ongoing" -> SManga.ONGOING
+                "finished", "completed" -> SManga.COMPLETED
+                "cancelled" -> SManga.CANCELLED
+                "hiatus" -> SManga.ON_HIATUS
+                else -> SManga.UNKNOWN
+            }
+
+            val altTitles = listOfNotNull(romaji, titleJa, aliases)
+                .filter { it.isNotBlank() && it != title }
+                .distinct()
+            if (altTitles.isNotEmpty()) {
+                setAltTitles(altTitles)
+            }
+        }
+    }
 
     companion object {
         private const val PAGE_SIZE = 24
