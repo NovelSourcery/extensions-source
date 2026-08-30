@@ -25,4 +25,14 @@ class SlugPath(private val prefix: String, private val suffix: String = "") {
     } else {
         "$prefix$stored$suffix"
     }
+
+    /**
+     * Builds the full absolute URL for a stored value, old or new. Callers must use this instead
+     * of `baseUrl + resolve(stored)`: when [resolve] passes a legacy absolute URL through
+     * unchanged, prepending [baseUrl] on top of that would double it up, e.g.
+     * "https://host/novel/https://host/novel/some-slug".
+     */
+    fun absolute(baseUrl: String, stored: String): String = resolve(stored).let {
+        if (it.startsWith("http://") || it.startsWith("https://")) it else baseUrl + it
+    }
 }

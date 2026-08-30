@@ -80,7 +80,7 @@ abstract class Indratranslations :
         return MangasPage(mangas, false)
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
