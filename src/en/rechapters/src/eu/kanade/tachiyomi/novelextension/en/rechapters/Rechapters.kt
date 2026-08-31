@@ -102,7 +102,7 @@ abstract class Rechapters :
     }
 
     private fun BookDto.toSManga(): SManga = SManga.create().apply {
-        url = "/book/$slug"
+        url = "/book/$slug-$nanoId"
         title = this@toSManga.title
         author = this@toSManga.author
         description = intro
@@ -317,6 +317,7 @@ abstract class Rechapters :
 
     @Serializable
     private class BookDto(
+        val nanoId: String,
         val slug: String,
         val title: String,
         val author: String? = null,
