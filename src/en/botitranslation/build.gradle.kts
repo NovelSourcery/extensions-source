@@ -1,0 +1,23 @@
+import io.github.keiyoushi.gradle.api.ContentWarning
+
+plugins {
+    alias(ns.plugins.extension)
+}
+
+keiyoushi {
+    name = "BotiTranslation"
+    versionCode = 1
+    contentWarning = ContentWarning.SAFE
+    libVersion = "1.6"
+
+    source {
+        name = "Boti Translation"
+        baseUrl = "https://botitranslation.com"
+        lang = "en"
+    }
+
+    deeplink {
+        host("botitranslation.com")
+        path("/..*")
+    }
+}
