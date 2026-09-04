@@ -179,12 +179,12 @@ abstract class Honeyfeed :
     ): SMangaUpdate = coroutineScope {
         // Details and chapters live on different pages - fire both concurrently when both are needed.
         val detailsDeferred = if (fetchDetails) {
-            async { parseMangaDetails(getBypassingChallenge(baseUrl + mangaPath.resolve(manga.url))) }
+            async { parseMangaDetails(getBypassingChallenge(mangaPath.absolute(baseUrl, manga.url))) }
         } else {
             null
         }
         val chaptersDeferred = if (fetchChapters) {
-            async { parseChapterList(getBypassingChallenge(baseUrl + mangaPath.resolve(manga.url) + "/chapters")) }
+            async { parseChapterList(getBypassingChallenge(mangaPath.absolute(baseUrl, manga.url) + "/chapters")) }
         } else {
             null
         }
@@ -227,7 +227,7 @@ abstract class Honeyfeed :
         }.reversed()
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
     override fun getChapterUrl(chapter: SChapter): String {
         val path = resolveChapterPath(chapter.url)

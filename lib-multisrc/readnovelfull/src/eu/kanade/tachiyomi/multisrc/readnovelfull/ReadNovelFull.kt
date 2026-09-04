@@ -639,8 +639,8 @@ abstract class ReadNovelFull :
 
     // Request for page [page] of the chapter list. Page 1 is the novel page itself.
     protected open fun chapterListPageRequest(manga: SManga, page: Int): Request {
-        val path = mangaPathTemplate.resolve(manga.url).trimEnd('/')
-        val url = if (page <= 1) baseUrl + path else "$baseUrl$path/$page"
+        val path = mangaPathTemplate.absolute(baseUrl, manga.url).trimEnd('/')
+        val url = if (page <= 1) path else "$path/$page"
         return GET(url, headers)
     }
 
@@ -662,14 +662,14 @@ abstract class ReadNovelFull :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)).execute().asJsoup()) else manga
+        val updatedManga = if (fetchDetails) mangaDetailsParse(client.newCall(GET(mangaPathTemplate.absolute(baseUrl, manga.url), headers)).execute().asJsoup()) else manga
         val updatedChapters = if (fetchChapters) fetchReadNovelFullChapterList(manga, chapters) else chapters
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
     private suspend fun fetchReadNovelFullChapterList(manga: SManga, existingChapters: List<SChapter>): List<SChapter> {
         if (!chaptersPaginated) {
-            return parseChapterListResponse(client.newCall(GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)).execute())
+            return parseChapterListResponse(client.newCall(GET(mangaPathTemplate.absolute(baseUrl, manga.url), headers)).execute())
         }
 
         val detailDoc = fetchChapterListPage(manga, 1)
@@ -792,7 +792,7 @@ abstract class ReadNovelFull :
         }.reversed()
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga {
         val doc = client.newCall(GET(url, headers)).execute().asJsoup()

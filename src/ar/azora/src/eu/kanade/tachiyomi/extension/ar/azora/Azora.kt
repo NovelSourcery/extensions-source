@@ -39,7 +39,7 @@ abstract class Azora :
 
     private val mangaPathTemplate = SlugPath("/series/")
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
 
     private val postIdCache = mutableMapOf<String, Int>()
 
@@ -76,7 +76,7 @@ abstract class Azora :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val slug = mangaPathTemplate.slug(mangaPathTemplate.resolve(manga.url))
-        val html = client.get(baseUrl + mangaPathTemplate.resolve(manga.url), headers).body.string()
+        val html = client.get(mangaPathTemplate.absolute(baseUrl, manga.url), headers).body.string()
         val post = extractPost(html)
         post?.let { postIdCache[it.slug] = it.id }
 

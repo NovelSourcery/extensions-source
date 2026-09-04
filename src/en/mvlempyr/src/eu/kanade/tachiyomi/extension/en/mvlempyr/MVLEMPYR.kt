@@ -266,7 +266,7 @@ abstract class MVLEMPYR :
             ?: formatDescription(excerptRendered.ifBlank { contentRendered })
     }
 
-    private fun buildMangaDetailsUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+    private fun buildMangaDetailsUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -364,9 +364,9 @@ abstract class MVLEMPYR :
         return chapters.sortedByDescending { it.chapter_number }
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
 
-    override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapterPathTemplate.resolve(chapter.url)
+    override fun getChapterUrl(chapter: SChapter): String = chapterPathTemplate.absolute(baseUrl, chapter.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = mangaPathTemplate.slug(url.encodedPath)

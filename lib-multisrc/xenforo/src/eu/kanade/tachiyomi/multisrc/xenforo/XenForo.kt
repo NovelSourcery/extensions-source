@@ -179,7 +179,7 @@ abstract class XenForo :
 
     // region Manga details + Chapters
 
-    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url) + "/threadmarks?per_page=200", headers)
+    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(mangaPathTemplate.absolute(baseUrl, manga.url) + "/threadmarks?per_page=200", headers)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -305,7 +305,7 @@ abstract class XenForo :
 
     // endregion
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }

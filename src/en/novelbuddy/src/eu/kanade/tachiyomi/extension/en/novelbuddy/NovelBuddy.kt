@@ -139,7 +139,7 @@ abstract class NovelBuddy :
 
     // Details + Chapters
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
 
     private fun buildMangaDetailsRequest(manga: SManga): Request = GET(buildUrl(mangaPathTemplate.resolve(manga.url)), headers)
 

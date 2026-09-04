@@ -377,7 +377,7 @@ abstract class RoyalRoad :
     }
 
     // Manga details + Chapters
-    protected open fun buildMangaDetailsUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    protected open fun buildMangaDetailsUrl(manga: SManga): String = absoluteUrl(mangaPath.resolve(manga.url))
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,

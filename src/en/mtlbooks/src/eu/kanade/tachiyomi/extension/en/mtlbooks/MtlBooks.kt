@@ -190,7 +190,7 @@ abstract class MtlBooks :
     }
 
     // Webview should open the site page, not the JSON API endpoint
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
     // chapter.url is the site path; strip the "/chapter/" segment of legacy entries
     override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapter.url.replace("/chapter/", "/")

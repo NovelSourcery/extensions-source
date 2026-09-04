@@ -296,7 +296,7 @@ abstract class KuuPress :
         return when {
             stored.startsWith("/read/") -> baseUrl + stored
             stored.startsWith("/") -> "$baseUrl/read$stored"
-            else -> baseUrl + chapterPath.resolve(stored)
+            else -> chapterPath.absolute(baseUrl, stored)
         }
     }
 
@@ -336,7 +336,7 @@ abstract class KuuPress :
         }
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(extractSlug(manga.url))
+    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, extractSlug(manga.url))
 
     override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         Filter.Header("Search"),

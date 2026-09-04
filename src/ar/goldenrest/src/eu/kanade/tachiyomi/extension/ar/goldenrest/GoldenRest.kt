@@ -110,7 +110,7 @@ abstract class GoldenRest :
 
     private fun buildMangaDetailsRequest(manga: SManga): Request = GET("$baseUrl/api/mangas/${mangaId(manga)}", headers)
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,

@@ -24,6 +24,7 @@ import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.JsonElement
 import novelsourcery.lib.siteparsers.SiteParserRegistry
 import okhttp3.FormBody
+import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.Request
 import org.jsoup.Jsoup
@@ -184,12 +185,12 @@ abstract class NovelUpdates :
         var anySuccess = false
 
         if (preferences.getBoolean(PREF_TRACK_LAST_READ, true)) {
-            anySuccess = syncChapter(novelId, target, checked = "yes") || anySuccess
+            anySuccess = syncChapter(novelId, target, checked = "yes", manga = manga) || anySuccess
         }
 
         if (preferences.getBoolean(PREF_TRACK_NOTES, false)) {
             val chapterCount = target.chapter_number.toInt().coerceAtLeast(1)
-            anySuccess = updateNotesProgress(novelId, chapterCount) || anySuccess
+            anySuccess = updateNotesProgress(novelId, chapterCount, manga = manga) || anySuccess
         }
 
         if (anySuccess) {
@@ -213,7 +214,7 @@ abstract class NovelUpdates :
         val novelId = resolveNovelId(manga) ?: return
 
         if (preferences.getBoolean(PREF_TRACK_LAST_READ, true)) {
-            if (syncChapter(novelId, target, checked = "no")) {
+            if (syncChapter(novelId, target, checked = "no", manga = manga)) {
                 forgetHighestTracked(cacheKey(mangaPathTemplate.resolve(manga.url)))
             }
         }
@@ -223,22 +224,34 @@ abstract class NovelUpdates :
 
     override suspend fun onUnfavorited(manga: SManga, categories: List<String>) = Unit
 
-    private suspend fun syncChapter(novelId: String, chapter: SChapter, checked: String): Boolean {
+    private fun trackingHeaders(manga: SManga, ajax: Boolean = false): Headers {
+        val builder = headers.newBuilder()
+            .set("Referer", baseUrl + mangaPathTemplate.resolve(manga.url))
+        if (ajax) {
+            builder
+                .set("Origin", baseUrl)
+                .set("X-Requested-With", "XMLHttpRequest")
+        }
+        return builder.build()
+    }
+
+    private suspend fun syncChapter(novelId: String, chapter: SChapter, checked: String, manga: SManga): Boolean {
         val chapterId = Regex("/(\\d+)/").find(chapter.url)?.groupValues?.get(1) ?: return false
         val url = "$baseUrl/readinglist_update.php?rid=$chapterId&sid=$novelId&checked=$checked"
         return try {
-            client.get(url, headers, ensureSuccess = false).use { resp -> resp.isSuccessful }
+            client.get(url, trackingHeaders(manga), ensureSuccess = false).use { resp -> resp.isSuccessful }
         } catch (e: Exception) {
             false
         }
     }
 
-    private suspend fun updateNotesProgress(novelId: String, chapters: Int): Boolean = try {
+    private suspend fun updateNotesProgress(novelId: String, chapters: Int, manga: SManga): Boolean = try {
+        val ajaxHeaders = trackingHeaders(manga, ajax = true)
         val getBody = FormBody.Builder()
             .add("action", "wi_notestagsfic")
             .add("strSID", novelId)
             .build()
-        val getResponse = client.post("$baseUrl/wp-admin/admin-ajax.php", headers, getBody, ensureSuccess = false)
+        val getResponse = client.post("$baseUrl/wp-admin/admin-ajax.php", ajaxHeaders, getBody, ensureSuccess = false)
         val responseText = getResponse.use { it.body.string() }
         val cleaned = responseText.trim().replace(Regex("\\}\\s*0+$"), "}")
         val existingNotes = Regex("\"notes\"\\s*:\\s*\"([^\"]*)\"").find(cleaned)?.groupValues?.get(1) ?: ""
@@ -258,7 +271,7 @@ abstract class NovelUpdates :
             .add("strNotes", updatedNotes)
             .add("strTags", existingTags)
             .build()
-        client.post("$baseUrl/wp-admin/admin-ajax.php", headers, updateBody, ensureSuccess = false).use { resp -> resp.isSuccessful }
+        client.post("$baseUrl/wp-admin/admin-ajax.php", ajaxHeaders, updateBody, ensureSuccess = false).use { resp -> resp.isSuccessful }
     } catch (e: Exception) {
         false
     }
@@ -420,7 +433,9 @@ abstract class NovelUpdates :
         return MangasPage(novels, hasNextPage)
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
+
+    override fun getChapterUrl(chapter: SChapter): String = if (chapter.url.startsWith("http")) chapter.url else baseUrl + chapter.url
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val response = client.get(url, headers, ensureSuccess = false)
@@ -430,7 +445,7 @@ abstract class NovelUpdates :
         return parseMangaDetails(doc, requestPath).apply { this.url = mangaPathTemplate.slug(requestPath) }
     }
 
-    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
+    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(mangaPathTemplate.absolute(baseUrl, manga.url), headers)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -514,7 +529,7 @@ abstract class NovelUpdates :
         val chaptersResponse = client.post("$baseUrl/wp-admin/admin-ajax.php", headers, formBody)
         val chaptersHtml = chaptersResponse.body.string()
 
-        val chaptersDoc = Jsoup.parse(chaptersHtml)
+        val chaptersDoc = Jsoup.parse(chaptersHtml, baseUrl)
 
         return chaptersDoc.select("li.sp_li_chp").mapNotNull { element ->
             val chapterName = element.text()
@@ -525,18 +540,13 @@ abstract class NovelUpdates :
                 .replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
                 .trim()
 
-            val chapterLink = element.select("a").first()?.nextElementSibling()?.attr("href")
+            val linkElement = element.select("a").first()?.nextElementSibling()
                 ?: return@mapNotNull null
-
-            val fullUrl = if (chapterLink.startsWith("//")) {
-                "https:$chapterLink"
-            } else {
-                chapterLink
-            }
+            if (linkElement.attr("href").isEmpty()) return@mapNotNull null
 
             SChapter.create().apply {
                 name = chapterName
-                url = fullUrl
+                url = linkElement.absUrl("href")
                 date_upload = 0L
             }
         }

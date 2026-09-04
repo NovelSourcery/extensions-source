@@ -92,7 +92,7 @@ abstract class WuxiaDreams :
         return match.groupValues[1].toInt() < match.groupValues[2].toInt()
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val response = client.get(url, headers, ensureSuccess = false)
@@ -140,7 +140,7 @@ abstract class WuxiaDreams :
     ): SMangaUpdate {
         // Details and the first chapter-list page both live on the same novel page - fetch it once.
         val resolvedUrl = mangaPathTemplate.resolve(manga.url)
-        val doc = client.get(baseUrl + resolvedUrl, headers).asJsoup()
+        val doc = client.get(mangaPathTemplate.absolute(baseUrl, manga.url), headers).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) fetchChapterList(resolvedUrl, doc) else chapters

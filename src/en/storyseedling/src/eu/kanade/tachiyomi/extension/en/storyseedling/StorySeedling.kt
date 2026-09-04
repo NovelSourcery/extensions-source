@@ -218,7 +218,7 @@ abstract class StorySeedling :
 
     // ======================== Details + Chapters ========================
 
-    protected open fun buildMangaDetailsUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    protected open fun buildMangaDetailsUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -396,7 +396,7 @@ abstract class StorySeedling :
         }.distinctBy { it.url }.reversed()
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPath.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val response = client.get(url, headers, ensureSuccess = false)

@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "Azora"
-    versionCode = 7
+    versionCode = 8
     contentWarning = ContentWarning.SAFE
 
     source {

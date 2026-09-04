@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "FreeWebNovel"
-    versionCode = 6
+    versionCode = 7
     contentWarning = ContentWarning.SAFE
     theme = "readnovelfull"
 

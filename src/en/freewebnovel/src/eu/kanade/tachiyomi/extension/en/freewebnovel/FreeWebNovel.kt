@@ -32,7 +32,7 @@ abstract class FreeWebNovel : ReadNovelFull() {
     override val mangaPathTemplate = SlugPath("/novel/")
 
     override fun chapterListPageRequest(manga: SManga, page: Int): Request {
-        val base = baseUrl + mangaPathTemplate.resolve(manga.url).trimEnd('/')
+        val base = mangaPathTemplate.absolute(baseUrl, manga.url).trimEnd('/')
         val url = if (page <= 1) base else "$base?$pageParam=$page"
         return GET(url, headers)
     }

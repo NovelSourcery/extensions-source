@@ -103,7 +103,7 @@ abstract class NovelHi :
         return parseList(client.get(request.url, request.headers))
     }
 
-    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(baseUrl + mangaPathTemplate.resolve(manga.url), headers)
+    protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(mangaPathTemplate.absolute(baseUrl, manga.url), headers)
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -132,7 +132,7 @@ abstract class NovelHi :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = mangaPathTemplate.slug(url.encodedPath)
-        val response = client.get(baseUrl + mangaPathTemplate.resolve(slug), headers, ensureSuccess = false)
+        val response = client.get(mangaPathTemplate.absolute(baseUrl, slug), headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         return parseMangaDetails(doc).apply { this.url = slug }
@@ -173,7 +173,7 @@ abstract class NovelHi :
         }.sortedByDescending { it.chapter_number }
     }
 
-    override fun getMangaUrl(manga: SManga): String = baseUrl + mangaPathTemplate.resolve(manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
 
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
