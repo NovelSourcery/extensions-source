@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.novelextension.en.wtrlab
+package eu.kanade.tachiyomi.novelextension.all.wtrlab
 
 import android.app.Application
 import android.util.Log
@@ -65,7 +65,7 @@ abstract class WtrLab :
     SourceTracker {
 
     override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor { chain ->
-        val original = chain.request()
+        val original = chain.request().newBuilder().header("Accept-Language", lang).build()
         if (!original.url.encodedPath.contains("/_next/data/")) {
             chain.proceed(original)
         } else {
@@ -96,9 +96,9 @@ abstract class WtrLab :
     private val preferences = Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
 
     /** [SManga.url] is stored as bare "<rawId>/<slug>"; a stored value starting with "/" is a
-     * pre-existing full-path entry (either "/en/novel/<id>/<slug>" or the legacy
-     * "/en/serie-<id>/<slug>") and is resolved unchanged. */
-    private val mangaPath = SlugPath("/en/novel/")
+     * pre-existing full-path entry (either "/<lang>/novel/<id>/<slug>" or the legacy
+     * "/<lang>/serie-<id>/<slug>") and is resolved unchanged. */
+    private val mangaPath = SlugPath("/$lang/novel/")
 
     private val apiHeaders by lazy {
         headersBuilder()
@@ -133,7 +133,7 @@ abstract class WtrLab :
             else -> return imageUrl // Unknown format, return as-is
         }
 
-        val s3Path = "s3://wtrimg/$path"
+        val s3Path = "s3://wtrimg/${path.substringBefore('?')}"
         val encodedPath = java.net.URLEncoder.encode(s3Path, "UTF-8")
         return "$imgBaseUrl?src=$encodedPath&w=344"
     }
@@ -151,7 +151,7 @@ abstract class WtrLab :
         synchronized(buildIdLock) {
             cachedBuildId?.let { return it }
 
-            val response = client.newCall(GET("$baseUrl/en/novel-finder", headers)).execute()
+            val response = client.newCall(GET("$baseUrl/$lang/novel-finder", headers)).execute()
             val doc = response.asJsoup()
             val nextData = doc.selectFirst("#__NEXT_DATA__")?.data()
                 ?: throw Exception("Could not find __NEXT_DATA__ on page")
@@ -172,10 +172,10 @@ abstract class WtrLab :
         }
 
         val iv = Base64.getDecoder().decode(parts[1])
-        val ciphertext = Base64.getDecoder().decode(parts[2])
-        val tag = Base64.getDecoder().decode(parts[3])
+        val tag = Base64.getDecoder().decode(parts[2])
+        val ciphertext = Base64.getDecoder().decode(parts[3])
 
-        val ciphertextWithTag = tag + ciphertext
+        val ciphertextWithTag = ciphertext + tag
 
         val encryptionKey = getDecryptionKey()
         if (encryptionKey.isEmpty()) {
@@ -211,8 +211,8 @@ abstract class WtrLab :
                     formattedParagraphs.forEach { add(it) }
                 },
             )
-            add("zh-CN")
-            add("en")
+            add("auto")
+            add(lang)
         }
         val fullBody = buildJsonArray {
             add(innerArray)
@@ -274,20 +274,18 @@ abstract class WtrLab :
 
         var translationMode = getTranslationMode()
 
-        // - "ai" mode: server-side AI translation (TS plugin uses this)
-        // - "web" mode: encrypted content intended for web-translation flow
-        // - "raw" mode: encrypted raw content
         var apiTranslateParam = when (translationMode) {
             "ai" -> "ai"
             "web" -> "web"
-            "raw" -> "raw"
+            "raw" -> "web"
+            "webplus" -> "webplus"
             else -> "ai"
         }
 
         suspend fun fetchReader(mode: String): Response {
             val body = ReaderRequestBody(
                 translate = mode,
-                language = "en",
+                language = lang,
                 raw_id = rawId,
                 chapter_no = chapterNo,
             ).toJsonRequestBody()
@@ -307,7 +305,7 @@ abstract class WtrLab :
 
             if (isFailure) {
                 translationMode = "raw"
-                apiTranslateParam = "raw"
+                apiTranslateParam = "web"
                 response = fetchReader(apiTranslateParam)
                 responseBody = response.body.string()
             }
@@ -467,7 +465,7 @@ abstract class WtrLab :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val buildId = getBuildId()
-        val url = "$baseUrl/_next/data/$buildId/en/novel-finder.json?orderBy=views&order=desc&page=$page"
+        val url = "$baseUrl/_next/data/$buildId/$lang/novel-finder.json?orderBy=views&order=desc&page=$page"
         val response = client.get(url, headers)
         return parseSeriesPage(response)
     }
@@ -621,24 +619,24 @@ abstract class WtrLab :
             params.add("count_value=$countValue")
         }
 
-        params.add("locale=en")
+        params.add("locale=$lang")
         params.add("page=$page")
 
-        val url = "$baseUrl/_next/data/$buildId/en/novel-finder.json?${params.joinToString("&")}"
+        val url = "$baseUrl/_next/data/$buildId/$lang/novel-finder.json?${params.joinToString("&")}"
         val response = client.get(url, headers)
         return parseSeriesPage(response)
     }
 
     private fun buildMangaDetailsUrl(manga: SManga): String {
         val buildId = getBuildId()
-        // url shape: /en/novel/<raw_id>/<slug> (legacy: /en/serie-<raw_id>/<slug>). The _next/data
-        // JSON route 308s straight to the plain HTML page for legacy paths, so always request the
-        // canonical novel/ path here.
+        // url shape: /<lang>/novel/<raw_id>/<slug> (legacy: /<lang>/serie-<raw_id>/<slug>). The
+        // _next/data JSON route 308s straight to the plain HTML page for legacy paths, so always
+        // request the canonical novel/ path here.
         val match = Regex("""(?:novel/|serie-)(\d+)/([^/?#]+)""").find(mangaPath.resolve(manga.url))
         val rawId = match?.groupValues?.get(1) ?: ""
         val slug = match?.groupValues?.get(2) ?: ""
-        return "$baseUrl/_next/data/$buildId/en/novel/$rawId/$slug.json" +
-            "?locale=en&raw_id=$rawId&serie_slug=$slug"
+        return "$baseUrl/_next/data/$buildId/$lang/novel/$rawId/$slug.json" +
+            "?locale=$lang&raw_id=$rawId&serie_slug=$slug"
     }
 
     override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
@@ -664,7 +662,7 @@ abstract class WtrLab :
         var redirectHops = 0
         while (true) {
             val redirectPath = pageProps["__N_REDIRECT"]?.jsonPrimitive?.contentOrNull ?: break
-            if (redirectPath.startsWith("/en/auth/login")) {
+            if (redirectPath.contains("/auth/login")) {
                 throw Exception("WTR-LAB requires login to view this novel: ${response.request.url}")
             }
             if (++redirectHops > MAX_DETAILS_REDIRECT_HOPS) {
@@ -674,8 +672,8 @@ abstract class WtrLab :
                 ?: throw Exception("WTR-LAB redirected to an unrecognized path: $redirectPath")
             val redirectRawId = redirectMatch.groupValues[1]
             val redirectSlug = redirectMatch.groupValues[2]
-            val redirectUrl = "$baseUrl/_next/data/${getBuildId()}/en/novel/$redirectRawId/$redirectSlug.json" +
-                "?locale=en&raw_id=$redirectRawId&serie_slug=$redirectSlug"
+            val redirectUrl = "$baseUrl/_next/data/${getBuildId()}/$lang/novel/$redirectRawId/$redirectSlug.json" +
+                "?locale=$lang&raw_id=$redirectRawId&serie_slug=$redirectSlug"
             val redirectResponse = client.get(redirectUrl, headers, ensureSuccess = false)
             if (!redirectResponse.isSuccessful) {
                 val code = redirectResponse.code
@@ -883,7 +881,7 @@ abstract class WtrLab :
                     allChapters.add(
                         SChapter.create().apply {
                             name = title
-                            url = "/en/novel/$rawId/$slug/chapter-$order"
+                            url = "/$lang/novel/$rawId/$slug/chapter-$order"
                             chapter_number = order.toFloat()
                             date_upload = parseDate(updatedAt)
                         },
@@ -959,7 +957,7 @@ abstract class WtrLab :
         val raw_id: Int,
         val translate: String,
         val order: Int,
-        val language: String = "en",
+        val language: String,
         val chapter_id: Int? = null,
         val new_event: Boolean = true,
         val version: Int = 2,
@@ -1073,6 +1071,7 @@ abstract class WtrLab :
             raw_id = ids.rawId,
             translate = getTranslationMode(),
             order = order,
+            language = lang,
             chapter_id = chapterIdFor(ids.rawId, order),
         ).toJsonRequestBody(requestJson)
         runCatching {
@@ -1235,9 +1234,9 @@ abstract class WtrLab :
         ListPreference(screen.context).apply {
             key = TRANSLATION_MODE_KEY
             title = "Translation Mode"
-            entries = arrayOf("Raw (No Translation)", "Web (Google Translate)", "AI Translation")
-            entryValues = arrayOf("raw", "web", "ai")
-            summary = "Raw: Decrypted Chinese text. Web: Google Translate (requires API key). AI: Server-side AI translation (best quality)."
+            entries = arrayOf("Raw (No Translation)", "Web+ (Translated)", "Web (Google Translate)", "AI Translation")
+            entryValues = arrayOf("raw", "webplus", "web", "ai")
+            summary = "Raw: Decrypted original-language text, no translation (requires Decryption Key). Web+: same decryption, already translated server-side. Web: decrypted raw text, then Google Translate (requires API key). AI: Server-side AI translation."
             setDefaultValue("ai")
         }.also(screen::addPreference)
 
