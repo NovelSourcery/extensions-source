@@ -305,10 +305,7 @@ abstract class LnCrawler :
 
     // ======================== Pages ========================
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.get("$apiUrl${chapter.url}", headers)
-        return listOf(Page(0, response.request.url.toString()))
-    }
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, "$apiUrl${chapter.url}"))
 
     // ======================== Page Text (Novel) ========================
 

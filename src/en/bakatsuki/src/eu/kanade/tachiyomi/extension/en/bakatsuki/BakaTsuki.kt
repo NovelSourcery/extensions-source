@@ -197,11 +197,7 @@ abstract class BakaTsuki :
 
     override fun getChapterUrl(chapter: SChapter): String = pagePrefix + chapter.url.replace(" ", "_")
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val request = parseRequest(chapter.url)
-        val response = client.get(request.url, request.headers)
-        return listOf(Page(0, response.request.url.toString()))
-    }
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
         val title = if (page.url.contains("api.php")) {

@@ -476,8 +476,7 @@ abstract class RoyalRoad :
     // Page list - return single page with the chapter URL
     override suspend fun getPageList(chapter: SChapter): List<Page> {
         // chapter.url already contains 'fiction/' prefix, e.g., 'fiction/137985/chapter/12345678'
-        val response = client.get(absoluteUrl(chapter.url), headers)
-        return listOf(Page(0, response.request.url.toString(), null))
+        return listOf(Page(0, absoluteUrl(chapter.url), null))
     }
 
     override fun getMangaUrl(manga: SManga): String = absoluteUrl(mangaPath.resolve(manga.url))

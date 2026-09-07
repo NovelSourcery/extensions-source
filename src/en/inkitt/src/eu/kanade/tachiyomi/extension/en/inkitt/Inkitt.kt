@@ -379,10 +379,7 @@ abstract class Inkitt :
 
     // region Pages
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.get(if (chapter.url.startsWith("http")) chapter.url else baseUrl + chapter.url, headers)
-        return listOf(Page(0, response.request.url.toString()))
-    }
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
         val doc = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers).asJsoup()

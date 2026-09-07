@@ -154,11 +154,7 @@ abstract class GoldenRest :
             .sortedByDescending { it.chapter_number }
     }
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val releaseId = chapter.url.substringAfterLast("/")
-        val response = client.get("$baseUrl/api/releases/$releaseId", headers)
-        return listOf(Page(0, response.request.url.encodedPath))
-    }
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
         val releaseId = page.url.substringAfterLast("/").substringBefore("?")

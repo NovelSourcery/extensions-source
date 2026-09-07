@@ -196,10 +196,7 @@ abstract class ReadFromNet :
     }
     // ======================== Pages ========================
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.get(baseUrl + chapter.url, headers)
-        return listOf(Page(0, response.request.url.toString()))
-    }
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
     // ======================== Novel Content ========================
 
     override suspend fun fetchPageText(page: Page): String {

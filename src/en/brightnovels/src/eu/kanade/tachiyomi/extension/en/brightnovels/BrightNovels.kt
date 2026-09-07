@@ -280,11 +280,7 @@ abstract class BrightNovels :
             .sortedByDescending { it.chapter_number }
     }
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val request = inertiaRequest(absoluteUrl(chapter.url))
-        val response = client.get(request.url, request.headers)
-        return listOf(Page(0, response.request.url.toString(), null))
-    }
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url, null))
 
     override suspend fun fetchPageText(page: Page): String {
         // The app's getPageList short-circuit hands us the raw (relative) chapter url,

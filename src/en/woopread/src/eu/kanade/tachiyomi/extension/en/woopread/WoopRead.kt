@@ -156,10 +156,7 @@ abstract class WoopRead :
 
     override fun getChapterUrl(chapter: SChapter): String = "$baseUrl/series/${chapter.url}"
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.get("$baseUrl/series/${chapter.url}", headers)
-        return listOf(Page(0, response.request.url.toString()))
-    }
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else "$baseUrl/series/${page.url}"
