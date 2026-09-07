@@ -1,6 +1,9 @@
 package eu.kanade.tachiyomi.novelextension.en.flamecomics
 
+import androidx.preference.PreferenceScreen
+import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -13,6 +16,7 @@ import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.getPreferencesLazy
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -36,10 +40,12 @@ import org.jsoup.Jsoup
 @Source
 abstract class FlameComics :
     KeiSource(),
-    NovelSource {
+    NovelSource,
+    ConfigurableSource {
 
     override val supportsLatest = true
 
+    private val preferences by getPreferencesLazy()
     private val cdn = "https://cdn.flamecomics.xyz"
     private val json = Json { ignoreUnknownKeys = true }
     private val novelTypes = setOf("Novel", "Web Novel")
@@ -164,6 +170,17 @@ abstract class FlameComics :
 
     private fun buildMangaDetailsRequest(manga: SManga): Request = GET(dataApiUrl("/novel/${novelIdOf(manga)}.json"), headers)
 
+    // The hydration JSON's chapter `price`/`public_release` fields are static placeholders and
+    // never reflect real paywall state - the actual lock state only shows up as a `data-locked`
+    // attribute on the server-rendered novel page, so paid detection needs this separate HTML fetch.
+    private suspend fun fetchLockedTokens(novelId: String): Set<String> {
+        val response = client.get("$baseUrl/novel/$novelId", headers, ensureSuccess = false)
+        if (!response.isSuccessful) return emptySet()
+        return response.asJsoup().select("a[data-locked=true]")
+            .mapNotNull { it.attr("href").substringAfterLast('/', "").ifEmpty { null } }
+            .toSet()
+    }
+
     override suspend fun fetchMangaUpdate(
         manga: SManga,
         chapters: List<SChapter>,
@@ -176,7 +193,11 @@ abstract class FlameComics :
         val data = json.decodeFromString<NovelDetailsPageData>(response.body.string()).pageProps
 
         val updatedManga = if (fetchDetails) parseMangaDetails(data.novels) else manga
-        val updatedChapters = if (fetchChapters) parseChapterList(data) else chapters
+        val updatedChapters = if (fetchChapters) {
+            parseChapterList(data, fetchLockedTokens(novelIdOf(manga)))
+        } else {
+            chapters
+        }
 
         return SMangaUpdate(updatedManga, updatedChapters)
     }
@@ -210,14 +231,18 @@ abstract class FlameComics :
 
     // ======================== Chapters ========================
 
-    private fun parseChapterList(data: NovelDetailsProps): List<SChapter> {
+    private fun parseChapterList(data: NovelDetailsProps, lockedTokens: Set<String>): List<SChapter> {
         val novelId = data.novels.novel_id
-        return data.chapters.map { ch ->
+        val showLocked = preferences.getBoolean(PREF_SHOW_PAID, false)
+        return data.chapters.mapNotNull { ch ->
+            val locked = ch.token in lockedTokens
+            if (locked && !showLocked) return@mapNotNull null
             SChapter.create().apply {
                 url = "/novel/$novelId/${ch.token}"
                 chapter_number = ch.chapter.toFloatOrNull() ?: -1f
                 date_upload = ch.release_date * 1000
                 name = buildString {
+                    if (locked) append("🔒 ")
                     append("Chapter ${ch.chapter.removeSuffix(".00").removeSuffix(".0")}")
                     if (!ch.title.isNullOrBlank()) append(" - ${ch.title}")
                 }
@@ -239,4 +264,17 @@ abstract class FlameComics :
     }
 
     override fun getFilterList(data: JsonElement?): FilterList = FilterList()
+
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        SwitchPreferenceCompat(screen.context).apply {
+            key = PREF_SHOW_PAID
+            title = "Show paid chapters"
+            summary = "Include locked/early-access chapters in the chapter list (shown with a 🔒 prefix)."
+            setDefaultValue(false)
+        }.also(screen::addPreference)
+    }
+
+    companion object {
+        private const val PREF_SHOW_PAID = "pref_show_paid_chapters"
+    }
 }
