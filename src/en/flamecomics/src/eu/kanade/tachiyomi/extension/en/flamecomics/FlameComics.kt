@@ -31,12 +31,7 @@ import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 
-/**
- * FlameComics (flamecomics.xyz). Next.js site whose `_next/data/{buildId}/...json` routes serve
- * both comics/manhwa and novels; novels are the `series.type in ("Novel", "Web Novel")` subset and
- * live under a separate `novel_id`/`/novel/{id}` namespace with real HTML chapter content (not
- * split page images), so this is a standalone NovelSource rather than sharing the manga path.
- */
+// Ported from keiyoushi (Flame Comics); novels live under their own /novel/{id} namespace.
 @Source
 abstract class FlameComics :
     KeiSource(),
@@ -118,11 +113,8 @@ abstract class FlameComics :
         }
     }
 
-    // ======================== Browse / Search ========================
-    // The catalogue is small (a few dozen novels) and the API has no server-side novel filter or
-    // pagination worth using, so all three listings fetch the same browse.json and filter/sort
-    // client-side; search smuggles the query through the URL fragment (never sent to the server)
-    // so *Parse can recover it without a second round trip.
+    // The API has no server-side novel filter, so all listings filter/sort browse.json client-side;
+    // search carries the query in the URL fragment so the parser can recover it.
 
     private fun browseRequest(): Request = GET(dataApiUrl("/browse.json"), headers)
 
@@ -153,32 +145,29 @@ abstract class FlameComics :
         return MangasPage(novels.map { it.toSManga() }, false)
     }
 
-    // ======================== Details ========================
-
     override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
-        val request = buildMangaDetailsRequest(manga)
-        val response = client.get(request.url, request.headers, ensureSuccess = false)
+        val response = client.get(getMangaUrl(manga), headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
-        val data = json.decodeFromString<NovelDetailsPageData>(response.body.string()).pageProps
-        return parseMangaDetails(data.novels).apply { this.url = manga.url }
+        val data = parseNovelPage(response)
+        return parseMangaDetails(data.details.novels).apply { this.url = manga.url }
     }
 
-    private fun novelIdOf(manga: SManga): String = mangaPathTemplate.resolve(manga.url).substringAfterLast('/')
+    private class NovelPageData(val details: NovelDetailsProps, val lockedTokens: Set<String>)
 
-    private fun buildMangaDetailsRequest(manga: SManga): Request = GET(dataApiUrl("/novel/${novelIdOf(manga)}.json"), headers)
-
-    // The hydration JSON's chapter `price`/`public_release` fields are static placeholders and
-    // never reflect real paywall state - the actual lock state only shows up as a `data-locked`
-    // attribute on the server-rendered novel page, so paid detection needs this separate HTML fetch.
-    private suspend fun fetchLockedTokens(novelId: String): Set<String> {
-        val response = client.get("$baseUrl/novel/$novelId", headers, ensureSuccess = false)
-        if (!response.isSuccessful) return emptySet()
-        return response.asJsoup().select("a[data-locked=true]")
+    // The novel page has the same pageProps as the JSON endpoint plus a per-chapter data-locked
+    // attribute; the JSON's price/public_release fields are placeholders, not real paywall state.
+    private fun parseNovelPage(response: Response): NovelPageData {
+        val doc = response.asJsoup()
+        val nextData = doc.selectFirst("#__NEXT_DATA__")?.data()
+            ?: throw Exception("Could not find __NEXT_DATA__")
+        val details = json.decodeFromString<NovelDetailsNextData>(nextData).props.pageProps
+        val lockedTokens = doc.select("a[data-locked=true]")
             .mapNotNull { it.attr("href").substringAfterLast('/', "").ifEmpty { null } }
             .toSet()
+        return NovelPageData(details, lockedTokens)
     }
 
     override suspend fun fetchMangaUpdate(
@@ -187,17 +176,11 @@ abstract class FlameComics :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        // Details and the chapter list both come from the same novel page - fetch it once.
-        val request = buildMangaDetailsRequest(manga)
-        val response = client.get(request.url, request.headers)
-        val data = json.decodeFromString<NovelDetailsPageData>(response.body.string()).pageProps
+        val response = client.get(getMangaUrl(manga), headers)
+        val data = parseNovelPage(response)
 
-        val updatedManga = if (fetchDetails) parseMangaDetails(data.novels) else manga
-        val updatedChapters = if (fetchChapters) {
-            parseChapterList(data, fetchLockedTokens(novelIdOf(manga)))
-        } else {
-            chapters
-        }
+        val updatedManga = if (fetchDetails) parseMangaDetails(data.details.novels) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(data.details, data.lockedTokens) else chapters
 
         return SMangaUpdate(updatedManga, updatedChapters)
     }
@@ -229,8 +212,6 @@ abstract class FlameComics :
         }
     }
 
-    // ======================== Chapters ========================
-
     private fun parseChapterList(data: NovelDetailsProps, lockedTokens: Set<String>): List<SChapter> {
         val novelId = data.novels.novel_id
         val showLocked = preferences.getBoolean(PREF_SHOW_PAID, false)
@@ -252,7 +233,6 @@ abstract class FlameComics :
 
     override fun getChapterUrl(chapter: SChapter): String = "$baseUrl${chapter.url}"
 
-    // ======================== Content ========================
     // Single metadata page per chapter; the real fetch happens in fetchPageText.
 
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))

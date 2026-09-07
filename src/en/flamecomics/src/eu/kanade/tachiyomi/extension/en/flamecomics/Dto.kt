@@ -22,6 +22,9 @@ class NovelListItem(
 class NovelDetailsPageData(val pageProps: NovelDetailsProps)
 
 @Serializable
+class NovelDetailsNextData(val props: NovelDetailsPageData)
+
+@Serializable
 class NovelDetailsProps(
     val novels: NovelDetails,
     val chapters: List<NovelChapterItem>,
