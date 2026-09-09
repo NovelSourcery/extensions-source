@@ -61,3 +61,11 @@
 # readability4j (lib/siteparsers) pulls in slf4j-api with no binder on the classpath; slf4j's own
 # LoggerFactory already falls back to a no-op logger when the binder is missing at runtime.
 -dontwarn org.slf4j.**
+
+# SourceTracker members have no caller inside a single extension module - the host app invokes
+# them via reflection across the extension classloader boundary, so R8 sees them as unreachable
+# and strips them, silently breaking tracker sync in release-minified extension builds.
+-keep class * implements eu.kanade.tachiyomi.source.SourceTracker
+-keepclassmembers class * implements eu.kanade.tachiyomi.source.SourceTracker {
+    <methods>;
+}
