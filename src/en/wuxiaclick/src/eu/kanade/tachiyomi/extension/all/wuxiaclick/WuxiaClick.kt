@@ -461,8 +461,7 @@ abstract class WuxiaClick :
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
         val slug = chapter.url.removePrefix("/chapter/")
-        val response = client.get("$apiUrl/getchapter/$slug/", headers)
-        return listOf(Page(0, response.request.url.toString()))
+        return listOf(Page(0, "$apiUrl/getchapter/$slug/"))
     }
 
     // ======================== Page Text (Novel) ========================

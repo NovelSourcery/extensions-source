@@ -552,10 +552,7 @@ abstract class NovelUpdates :
         }
     }
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.get(chapter.url, headers)
-        return listOf(Page(0, response.request.url.toString()))
-    }
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override fun getFilterList(data: JsonElement?) = FilterList(
         Filter.Header("NOTE: Filters are ignored if using text search!"),

@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "Markazriwayat"
-    versionCode = 10
+    versionCode = 11
     contentWarning = ContentWarning.SAFE
 
     source {
