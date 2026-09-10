@@ -3,6 +3,7 @@ package eu.kanade.tachiyomi.novelextension.en.webnovel
 import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.CheckBoxPreference
+import androidx.preference.EditTextPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
@@ -41,10 +42,14 @@ abstract class WebNovelNovels :
     /** Stores [SManga.url] as a bare slug via [mangaPath]. */
     private fun SManga.setSlugUrl(href: String) = setSlugUrl(mangaPath, href)
 
+    // the mobile version uses a json API for responses, but I couldn't make it work more than once (works after first visit
+    // but stops working after the next visits, even if you close the app and clear webview data? maybe how Keisource handles cookies affects this.
+    // so i just used a desktop UA
     override fun Headers.Builder.configureHeaders(): Headers.Builder = this
         .set("Accept-Language", "en-US,en;q=0.9")
         .set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
         .set("Referer", baseUrl)
+        .set("User-Agent", userAgent)
 
     // Popular
     override suspend fun getPopularManga(page: Int): MangasPage = parsePopularOrLatest(client.get("$baseUrl/stories/novel?orderBy=1&pageIndex=$page", headers))
@@ -400,6 +405,9 @@ abstract class WebNovelNovels :
     private val excludeLocked: Boolean
         get() = preferences.getBoolean(PREF_EXCLUDE_LOCKED, true)
 
+    private val userAgent: String
+        get() = preferences.getString(PREF_USER_AGENT, DEFAULT_USER_AGENT)?.takeIf { it.isNotBlank() } ?: DEFAULT_USER_AGENT
+
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         CheckBoxPreference(screen.context).apply {
             key = PREF_EXCLUDE_LOCKED
@@ -407,10 +415,18 @@ abstract class WebNovelNovels :
             summary = "Hide chapters that are locked or paid. Enabled by default."
             setDefaultValue(true)
         }.also(screen::addPreference)
+
+        EditTextPreference(screen.context).apply {
+            key = PREF_USER_AGENT
+            title = "User-Agent"
+            setDefaultValue(DEFAULT_USER_AGENT)
+        }.also(screen::addPreference)
     }
 
     companion object {
         private const val PREF_EXCLUDE_LOCKED = "webnovel_exclude_locked"
+        private const val PREF_USER_AGENT = "webnovel_user_agent"
+        private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
     }
 
     // Pages - novel content - return single page with chapter URL for text fetching
