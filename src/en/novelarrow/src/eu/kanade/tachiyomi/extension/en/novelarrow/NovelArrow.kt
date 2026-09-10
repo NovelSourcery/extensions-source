@@ -14,10 +14,14 @@ import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.firstInstance
+import keiyoushi.utils.parseAs
+import keiyoushi.utils.toJsonElement
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -37,6 +41,7 @@ abstract class NovelArrow :
     NovelSource {
 
     override val supportsLatest = true
+    override val supportsFilterFetching = true
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -85,14 +90,50 @@ abstract class NovelArrow :
         return browseParse(client.get(request.url, request.headers))
     }
 
-    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val genre = (filters.firstOrNull { it is GenreFilter } as? GenreFilter)?.selected() ?: "action"
-        return GET("$baseUrl/genre/$genre?page=$page", headers)
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val url = buildAdvancedSearchRequest(page, query, filters)
+        if (url.queryParameterNames.singleOrNull() == "page") return getPopularManga(page)
+        return browseParse(client.get(url, headers))
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val request = buildSearchMangaRequest(page, query, filters)
-        return browseParse(client.get(request.url, request.headers))
+    private fun buildAdvancedSearchRequest(page: Int, query: String, filters: FilterList): HttpUrl {
+        val genreFilter = filters.firstInstance<GenreFilter>()
+        val tagFilter = filters.firstInstance<TagFilter>()
+        val genres = genreFilter.state.filter { it.state == Filter.TriState.STATE_INCLUDE }.map { it.id }
+        val genresExclude = genreFilter.state.filter { it.state == Filter.TriState.STATE_EXCLUDE }.map { it.id }
+        val tags = tagFilter.state.filter { it.state == Filter.TriState.STATE_INCLUDE }.map { it.id }
+        val tagsExclude = tagFilter.state.filter { it.state == Filter.TriState.STATE_EXCLUDE }.map { it.id }
+        val status = filters.firstInstance<StatusFilter>().toUriPart()
+        val language = filters.firstInstance<LanguageFilter>().toUriPart()
+        val startYear = filters.firstInstance<StartYearFilter>().state.trim()
+        val endYear = filters.firstInstance<EndYearFilter>().state.trim()
+        val author = filters.firstInstance<AuthorFilter>().state.trim()
+        val authorExclude = filters.firstInstance<AuthorExcludeFilter>().state.trim()
+        val minChapters = filters.firstInstance<MinChaptersFilter>().state.trim()
+        val maxChapters = filters.firstInstance<MaxChaptersFilter>().state.trim()
+
+        return "$baseUrl/novels/search".toHttpUrl().newBuilder().apply {
+            addQueryParameter("page", page.toString())
+            if (query.isNotBlank()) addQueryParameter("keyword", query)
+            if (genres.isNotEmpty() || genresExclude.isNotEmpty()) {
+                addQueryParameter("genre_mode", filters.firstInstance<GenreModeFilter>().toUriPart())
+            }
+            genres.forEach { addQueryParameter("genres", it) }
+            genresExclude.forEach { addQueryParameter("genres_exclude", it) }
+            if (tags.isNotEmpty() || tagsExclude.isNotEmpty()) {
+                addQueryParameter("tag_mode", filters.firstInstance<TagModeFilter>().toUriPart())
+            }
+            tags.forEach { addQueryParameter("tags", it) }
+            tagsExclude.forEach { addQueryParameter("tags_exclude", it) }
+            if (startYear.isNotEmpty()) addQueryParameter("start_year", startYear)
+            if (endYear.isNotEmpty()) addQueryParameter("end_year", endYear)
+            if (status.isNotEmpty()) addQueryParameter("status", status)
+            if (language.isNotEmpty()) addQueryParameter("language", language)
+            if (author.isNotEmpty()) addQueryParameter("author", author)
+            if (authorExclude.isNotEmpty()) addQueryParameter("author_exclude", authorExclude)
+            if (minChapters.isNotEmpty()) addQueryParameter("min_chapters", minChapters)
+            if (maxChapters.isNotEmpty()) addQueryParameter("max_chapters", maxChapters)
+        }.build()
     }
 
     private fun browseParse(response: Response): MangasPage {
@@ -243,11 +284,80 @@ abstract class NovelArrow :
 
     // Filters
 
-    override fun getFilterList(data: JsonElement?) = FilterList(GenreFilter())
-
-    private class GenreFilter : Filter.Select<String>("Genre", GENRES.map { it.first }.toTypedArray()) {
-        fun selected() = GENRES[state].second
+    override suspend fun fetchFilterData(): JsonElement {
+        val flight = client.get("$baseUrl/novels/search", rscHeaders()).body.string()
+        val genres = GENRE_ENTRY.findAll(flight).map {
+            NovelArrowFilterOption(
+                label = STRING.decode(it.groupValues[2]).orEmpty(),
+                id = STRING.decode(it.groupValues[3]).orEmpty(),
+            )
+        }.toList()
+        val tagsStart = flight.indexOf("\"name\":\"tags\",")
+        val tagsEnd = flight.indexOf("\"name\":\"tags_exclude\"", tagsStart).takeIf { it != -1 } ?: flight.length
+        val tagsSegment = if (tagsStart != -1) flight.substring(tagsStart, tagsEnd) else ""
+        val tags = TAG_ENTRY.findAll(tagsSegment).map {
+            NovelArrowFilterOption(
+                label = STRING.decode(it.groupValues[1]).orEmpty(),
+                id = STRING.decode(it.groupValues[2]).orEmpty(),
+            )
+        }.toList()
+        return NovelArrowFilterData(genres, tags).toJsonElement()
     }
+
+    override fun getFilterList(data: JsonElement?): FilterList {
+        val filterData = data?.let { runCatching { it.parseAs<NovelArrowFilterData>() }.getOrNull() } ?: NovelArrowFilterData()
+        return FilterList(
+            GenreModeFilter(),
+            GenreFilter(filterData.genres.map { GenreOption(it.label, it.id) }),
+            Filter.Separator(),
+            TagModeFilter(),
+            TagFilter(filterData.tags.map { TagOption(it.label, it.id) }),
+            Filter.Separator(),
+            StatusFilter(),
+            LanguageFilter(),
+            StartYearFilter(),
+            EndYearFilter(),
+            AuthorFilter(),
+            AuthorExcludeFilter(),
+            MinChaptersFilter(),
+            MaxChaptersFilter(),
+        )
+    }
+
+    @kotlinx.serialization.Serializable
+    private class NovelArrowFilterOption(val label: String, val id: String)
+
+    @kotlinx.serialization.Serializable
+    private class NovelArrowFilterData(val genres: List<NovelArrowFilterOption> = emptyList(), val tags: List<NovelArrowFilterOption> = emptyList())
+
+    private class GenreModeFilter : Filter.Select<String>("Genre Match", arrayOf("Match All (AND)", "Match Any (OR)")) {
+        fun toUriPart() = if (state == 0) "AND" else "OR"
+    }
+
+    private class GenreOption(name: String, val id: String) : Filter.TriState(name)
+    private class GenreFilter(options: List<GenreOption>) : Filter.Group<GenreOption>("Genres", options)
+
+    private class TagModeFilter : Filter.Select<String>("Tag Match", arrayOf("Match All (AND)", "Match Any (OR)")) {
+        fun toUriPart() = if (state == 0) "AND" else "OR"
+    }
+
+    private class TagOption(name: String, val id: String) : Filter.TriState(name)
+    private class TagFilter(options: List<TagOption>) : Filter.Group<TagOption>("Tags", options)
+
+    private class StatusFilter : Filter.Select<String>("Status", arrayOf("All Statuses", "Ongoing", "Completed")) {
+        fun toUriPart() = arrayOf("", "ongoing", "completed")[state]
+    }
+
+    private class LanguageFilter : Filter.Select<String>("Language", arrayOf("All Languages", "English", "Chinese")) {
+        fun toUriPart() = arrayOf("", "EN", "CN")[state]
+    }
+
+    private class StartYearFilter : Filter.Text("Start Year")
+    private class EndYearFilter : Filter.Text("End Year")
+    private class AuthorFilter : Filter.Text("Author")
+    private class AuthorExcludeFilter : Filter.Text("Author Exclude")
+    private class MinChaptersFilter : Filter.Text("Min Chapters")
+    private class MaxChaptersFilter : Filter.Text("Max Chapters")
 
     private fun Regex.firstGroup(input: String): String? = find(input)?.groupValues?.getOrNull(1)
 
@@ -276,36 +386,10 @@ abstract class NovelArrow :
         private val ARTICLE_TAG = Regex("\"article:tag\",\"content\":\"((?:[^\"\\\\]|\\\\.)*)\"")
         private val CONTENT_REF = Regex("\"chapter_content\":\"\\\$([0-9a-f]+)\"")
 
-        private val GENRES = listOf(
-            "Action" to "action",
-            "Adult" to "adult",
-            "Adventure" to "adventure",
-            "Comedy" to "comedy",
-            "Drama" to "drama",
-            "Eastern" to "eastern",
-            "Ecchi" to "ecchi",
-            "Fan-fiction" to "fan-fiction",
-            "Fantasy" to "fantasy",
-            "Harem" to "harem",
-            "Historical" to "historical",
-            "Horror" to "horror",
-            "Josei" to "josei",
-            "Martial Arts" to "martial-arts",
-            "Mature" to "mature",
-            "Mecha" to "mecha",
-            "Mystery" to "mystery",
-            "Psychological" to "psychological",
-            "Romance" to "romance",
-            "School Life" to "school-life",
-            "Sci-fi" to "sci-fi",
-            "Seinen" to "seinen",
-            "Shoujo" to "shoujo",
-            "Shounen" to "shounen",
-            "Slice of Life" to "slice-of-life",
-            "Supernatural" to "supernatural",
-            "Wuxia" to "wuxia",
-            "Xianxia" to "xianxia",
-            "Xuanhuan" to "xuanhuan",
-        )
+        // Site-wide genre/tag option lists embedded on /novels/search, e.g.
+        // {"route_name":"anime-\u0026-comics","genre_name":"Anime \u0026 comics","genre_id":"ANIME \u0026 COMICS"}
+        // {"label":"#undead","value":"#undead"}
+        private val GENRE_ENTRY = Regex("\\{\"route_name\":\"((?:[^\"\\\\]|\\\\.)*)\",\"genre_name\":\"((?:[^\"\\\\]|\\\\.)*)\",\"genre_id\":\"((?:[^\"\\\\]|\\\\.)*)\"\\}")
+        private val TAG_ENTRY = Regex("\\{\"label\":\"((?:[^\"\\\\]|\\\\.)*)\",\"value\":\"((?:[^\"\\\\]|\\\\.)*)\"\\}")
     }
 }
