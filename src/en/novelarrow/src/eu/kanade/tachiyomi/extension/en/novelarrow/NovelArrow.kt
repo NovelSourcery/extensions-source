@@ -18,6 +18,7 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -85,15 +86,52 @@ abstract class NovelArrow :
         return browseParse(client.get(request.url, request.headers))
     }
 
+    private fun buildKeywordSearchRequest(page: Int, query: String): Request {
+        val url = "$baseUrl/api-web/novels".toHttpUrl().newBuilder()
+            .addQueryParameter("limit", "20")
+            .addQueryParameter("page", page.toString())
+            .addQueryParameter("status", "all")
+            .addQueryParameter("sort", "SEARCH_KEYWORD")
+            .addQueryParameter("genre", "ALL")
+            .addQueryParameter("keyword", query)
+            .build()
+        return GET(url, headers)
+    }
+
     private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val genre = (filters.firstOrNull { it is GenreFilter } as? GenreFilter)?.selected() ?: "action"
         return GET("$baseUrl/genre/$genre?page=$page", headers)
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        if (query.isNotBlank()) {
+            val request = buildKeywordSearchRequest(page, query)
+            return keywordSearchParse(client.get(request.url, request.headers))
+        }
         val request = buildSearchMangaRequest(page, query, filters)
         return browseParse(client.get(request.url, request.headers))
     }
+
+zd    private fun keywordSearchParse(response: Response): MangasPage {
+        val data = json.decodeFromString<KeywordSearchResponse>(response.body.string())
+        val mangas = data.items.map { item ->
+            SManga.create().apply {
+                setSlugUrl(mangaPathTemplate, "$baseUrl/novel/${item.novel_id}")
+                title = item.novel_name
+                thumbnail_url = "https://images.novelarrow.com/novel_240_360/${item.novel_id}.jpg"
+            }
+        }
+        return MangasPage(mangas, data.pagination.page < data.pagination.totalPages)
+    }
+
+    @kotlinx.serialization.Serializable
+    private class KeywordSearchResponse(val items: List<KeywordSearchItem> = emptyList(), val pagination: KeywordSearchPagination = KeywordSearchPagination())
+
+    @kotlinx.serialization.Serializable
+    private class KeywordSearchItem(val novel_id: String = "", val novel_name: String = "")
+
+    @kotlinx.serialization.Serializable
+    private class KeywordSearchPagination(val page: Int = 1, val totalPages: Int = 1)
 
     private fun browseParse(response: Response): MangasPage {
         val doc = response.asJsoup()
