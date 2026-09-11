@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.CheckBoxPreference
 import androidx.preference.EditTextPreference
+import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.NovelSource
@@ -19,6 +20,7 @@ import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.firstInstanceOrNull
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonElement
@@ -42,9 +44,6 @@ abstract class WebNovelNovels :
     /** Stores [SManga.url] as a bare slug via [mangaPath]. */
     private fun SManga.setSlugUrl(href: String) = setSlugUrl(mangaPath, href)
 
-    // the mobile version uses a json API for responses, but I couldn't make it work more than once (works after first visit
-    // but stops working after the next visits, even if you close the app and clear webview data? maybe how Keisource handles cookies affects this.
-    // so i just used a desktop UA
     override fun Headers.Builder.configureHeaders(): Headers.Builder = this
         .set("Accept-Language", "en-US,en;q=0.9")
         .set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
@@ -59,14 +58,9 @@ abstract class WebNovelNovels :
         val finalUrl = response.request.url.toString()
         val isMobile = finalUrl.contains("m.webnovel.com")
 
-        // Mobile and desktop sites have different structures
-        // Mobile: redirected from www.webnovel.com to m.webnovel.com
-        // Try multiple selectors to handle both formats
         val mangas = mutableListOf<SManga>()
 
         if (isMobile) {
-            // Mobile site - Try multiple selector patterns
-            // Pattern 1: Novel list items with a[href*=book]
             document.select("a[href*='/book/']").forEach { link ->
                 val href = link.attr("href")
                 if (href.isBlank() || href.contains("/chapter/")) return@forEach
@@ -96,11 +90,9 @@ abstract class WebNovelNovels :
                 )
             }
 
-            // Deduplicate by URL
             val seen = mutableSetOf<String>()
             mangas.removeAll { !seen.add(it.url) }
         } else {
-            // Desktop site - TS ref: .j_category_wrapper li with .g_thumb
             document.select(".j_category_wrapper li").forEach { element ->
                 val thumb = element.selectFirst(".g_thumb") ?: return@forEach
                 val img = element.selectFirst(".g_thumb > img") ?: return@forEach
@@ -117,15 +109,11 @@ abstract class WebNovelNovels :
             }
         }
 
-        // TS ref: Pagination should continue while results exist and pagination elements present
-        // Check for pagination controls in both mobile and desktop formats
         val hasNextPage = if (mangas.isEmpty()) {
             false
         } else if (isMobile) {
-            // Mobile: Check for "Load more" or pagination indicators
             mangas.size >= 10 || document.select("[class*=load], [class*=more], [class*=page]").isNotEmpty()
         } else {
-            // Desktop: Check for pagination elements or assume more if we got results
             mangas.size >= 10 || document.select(".j_page, .pagination, [class*=page]").isNotEmpty()
         }
 
@@ -138,7 +126,17 @@ abstract class WebNovelNovels :
     // Search
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         if (query.isNotBlank()) {
-            return parseSearchResponse(client.get("$baseUrl/search?keywords=$query&pageIndex=$page", headers))
+            val searchType = filters.firstInstanceOrNull<SearchTypeFilter>()?.toUriPart() ?: defaultSearchType
+            return when (searchType) {
+                "both" -> coroutineScope {
+                    val novelDeferred = async { parseSearchResponse(client.get(searchUrl(query, "novel", page), headers)) }
+                    val fanficDeferred = async { parseSearchResponse(client.get(searchUrl(query, "fanfic", page), headers)) }
+                    val novel = novelDeferred.await()
+                    val fanfic = fanficDeferred.await()
+                    MangasPage(novel.mangas + fanfic.mangas, novel.hasNextPage || fanfic.hasNextPage)
+                }
+                else -> parseSearchResponse(client.get(searchUrl(query, searchType, page), headers))
+            }
         }
 
         // Filters
@@ -147,9 +145,15 @@ abstract class WebNovelNovels :
         var status = "0"
         var sort = "1"
         var type = "0"
+        var browseFanfic = false
+        var fanficGenre = ""
 
         filters.forEach { filter ->
             when (filter) {
+                is BrowseTypeFilter -> browseFanfic = filter.state == 1
+
+                is FanficGenreFilter -> fanficGenre = filter.toUriPart()
+
                 is GenderFilter -> gender = filter.toUriPart()
 
                 is SortFilter -> sort = filter.toUriPart()
@@ -174,27 +178,44 @@ abstract class WebNovelNovels :
             }
         }
 
-        val builder = "$baseUrl/stories".toHttpUrl().newBuilder()
+        if (browseFanfic) {
+            val path = if (fanficGenre.isNotEmpty()) "stories/$fanficGenre" else "stories/fanfic"
+            val fanficBuilder = "$baseUrl/$path".toHttpUrl().newBuilder()
+                .addQueryParameter("bookStatus", status)
+                .addQueryParameter("orderBy", sort)
+                .addQueryParameter("pageIndex", page.toString())
+            applyContentType(fanficBuilder, type)
+            return parseSearchResponse(client.get(fanficBuilder.build().toString(), headers))
+        }
 
         if (genre.isNotEmpty()) {
-            return parseSearchResponse(client.get("$baseUrl/stories/$genre?bookStatus=$status&orderBy=$sort&pageIndex=$page", headers))
-        } else {
-            builder.addPathSegment("novel")
-            builder.addQueryParameter("gender", gender)
+            val genreBuilder = "$baseUrl/stories/$genre".toHttpUrl().newBuilder()
+                .addQueryParameter("bookStatus", status)
+                .addQueryParameter("orderBy", sort)
+                .addQueryParameter("pageIndex", page.toString())
+            applyContentType(genreBuilder, type)
+            return parseSearchResponse(client.get(genreBuilder.build().toString(), headers))
         }
 
-        if (type != "3") {
-            if (type != "0") builder.addQueryParameter("sourceType", type)
-        } else {
-            builder.addQueryParameter("translateMode", "3")
-            builder.addQueryParameter("sourceType", "1")
-        }
-
-        builder.addQueryParameter("bookStatus", status)
-        builder.addQueryParameter("orderBy", sort)
-        builder.addQueryParameter("pageIndex", page.toString())
+        val builder = "$baseUrl/stories".toHttpUrl().newBuilder()
+            .addPathSegment("novel")
+            .addQueryParameter("gender", gender)
+            .addQueryParameter("bookStatus", status)
+            .addQueryParameter("orderBy", sort)
+            .addQueryParameter("pageIndex", page.toString())
+        applyContentType(builder, type)
 
         return parseSearchResponse(client.get(builder.build().toString(), headers))
+    }
+
+    private fun searchUrl(query: String, type: String, page: Int): String = "$baseUrl/search?keywords=$query&type=$type&pageIndex=$page"
+
+    private fun applyContentType(builder: HttpUrl.Builder, type: String) {
+        if (type == "3") {
+            builder.addQueryParameter("translateMode", "3").addQueryParameter("sourceType", "1")
+        } else if (type != "0") {
+            builder.addQueryParameter("sourceType", type)
+        }
     }
 
     private fun parseSearchResponse(response: Response): MangasPage {
@@ -206,7 +227,6 @@ abstract class WebNovelNovels :
         val mangas = mutableListOf<SManga>()
 
         if (isMobile) {
-            // Mobile site - Try multiple selector patterns
             document.select("a[href*='/book/']").forEach { link ->
                 val href = link.attr("href")
                 if (href.isBlank() || href.contains("/chapter/")) return@forEach
@@ -236,11 +256,9 @@ abstract class WebNovelNovels :
                 )
             }
 
-            // Deduplicate by URL
             val seen = mutableSetOf<String>()
             mangas.removeAll { !seen.add(it.url) }
         } else {
-            // Desktop site - Search uses .j_list_container with 'src', category uses .j_category_wrapper with 'data-original'
             val selector = if (isSearch) ".j_list_container li" else ".j_category_wrapper li"
             val imgAttr = if (isSearch) "src" else "data-original"
 
@@ -252,7 +270,6 @@ abstract class WebNovelNovels :
                     SManga.create().apply {
                         title = thumb.attr("title").ifEmpty { img.attr("alt") }
                         setSlugUrl(thumb.attr("href"))
-                        // Search uses 'src', category uses 'data-original'
                         val imgSrc = if (isSearch) img.attr("src") else img.attr("data-original").ifEmpty { img.attr("src") }
                         thumbnail_url = if (imgSrc.startsWith("http")) imgSrc else "https:$imgSrc"
                     },
@@ -269,7 +286,6 @@ abstract class WebNovelNovels :
         return SManga.create().apply {
             title = document.selectFirst(".g_thumb > img")?.attr("alt") ?: "No Title"
             thumbnail_url = "https:" + document.selectFirst(".g_thumb > img")?.attr("src")
-            // Parse synopsis with Jsoup and preserve paragraph spacing as plain text.
             val synopsisEl = document.selectFirst(".j_synopsis")
             val synopsisText = synopsisEl?.select("p")?.map { p ->
                 val raw = p.html()
@@ -283,10 +299,8 @@ abstract class WebNovelNovels :
                     val cleaned = withBr.replace(Regex("<[^>]+>"), "")
                     cleaned.lines().joinToString("\n") { it.trim() }.trim()
                 }.filter { it.isNotBlank() }.joinToString("\n\n")
-            // Fallback to whole element text if no paragraphs found
             description = synopsisText.ifBlank { synopsisEl?.text().orEmpty() }
             author = document.select(".det-info .c_s").firstOrNull { it.text().contains("Author") }?.nextElementSibling()?.text()
-            // Prefer tag list under .j_tagWrap (site's tag block). Fallback to older selector.
             val tags = document.select(".j_tagWrap .m-tags a")
                 .map { it.text().replace("#", "").trim() }
                 .filter { it.isNotEmpty() }
@@ -302,21 +316,17 @@ abstract class WebNovelNovels :
                 else -> SManga.UNKNOWN
             }
 
-            // --- Extra metadata: rating, ratings count, views, review scores ---
             val extras = mutableListOf<String>()
 
-            // Rating and number of ratings (e.g. 4.65 (5,977 ratings))
             val ratingValue = document.selectFirst("p._score strong")?.text()
             val ratingsCount = document.selectFirst("p._score small")?.text()?.removePrefix("(")?.removeSuffix(")")
             if (!ratingValue.isNullOrEmpty()) {
                 extras.add("Rating: ${ratingValue}${if (!ratingsCount.isNullOrEmpty()) " ($ratingsCount)" else ""}")
             }
 
-            // Views (look for svg title="View")
             val views = document.select(".det-hd-detail svg").firstOrNull { it.attr("title") == "View" }?.nextElementSibling()?.text()
             if (!views.isNullOrEmpty()) extras.add("Views: $views")
 
-            // Review score breakdown (Translation Quality, Stability of Updates, ...)
             val reviewScoreElements = document.select(".rev-score-list li")
             if (reviewScoreElements.isNotEmpty()) {
                 val scoreLines = reviewScoreElements.mapNotNull { li ->
@@ -331,10 +341,7 @@ abstract class WebNovelNovels :
                 }
             }
 
-            // Append extras to description. If synopsis was HTML, append extras as HTML <p> blocks,
-            // otherwise append as plain text paragraphs.
             if (extras.isNotEmpty()) {
-                // Append extras as plain text paragraphs
                 val extraText = extras.joinToString("\n\n")
                 description = listOf(description, extraText).filter { !it.isNullOrBlank() }.joinToString("\n\n")
             }
@@ -348,7 +355,6 @@ abstract class WebNovelNovels :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate = coroutineScope {
-        // Details and chapters live on different pages - fire both concurrently when both are needed.
         val detailsDeferred = if (fetchDetails) {
             async { parseMangaDetails(client.get(mangaPath.absolute(baseUrl, manga.url), headers)) }
         } else {
@@ -397,7 +403,6 @@ abstract class WebNovelNovels :
         }
     }
 
-    // Preferences - hide locked chapters
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
@@ -408,12 +413,24 @@ abstract class WebNovelNovels :
     private val userAgent: String
         get() = preferences.getString(PREF_USER_AGENT, DEFAULT_USER_AGENT)?.takeIf { it.isNotBlank() } ?: DEFAULT_USER_AGENT
 
+    private val defaultSearchType: String
+        get() = preferences.getString(PREF_DEFAULT_SEARCH_TYPE, "novel") ?: "novel"
+
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         CheckBoxPreference(screen.context).apply {
             key = PREF_EXCLUDE_LOCKED
             title = "Exclude locked chapters"
-            summary = "Hide chapters that are locked or paid. Enabled by default."
+            summary = "Hide chapters that are locked or paid."
             setDefaultValue(true)
+        }.also(screen::addPreference)
+
+        ListPreference(screen.context).apply {
+            key = PREF_DEFAULT_SEARCH_TYPE
+            title = "Default search type"
+            summary = "Used for keyword search when no Search Type filter is explicitly set"
+            entries = arrayOf("Novel", "Fan-fic", "Both")
+            entryValues = arrayOf("novel", "fanfic", "both")
+            setDefaultValue("novel")
         }.also(screen::addPreference)
 
         EditTextPreference(screen.context).apply {
@@ -425,6 +442,7 @@ abstract class WebNovelNovels :
 
     companion object {
         private const val PREF_EXCLUDE_LOCKED = "webnovel_exclude_locked"
+        private const val PREF_DEFAULT_SEARCH_TYPE = "webnovel_default_search_type"
         private const val PREF_USER_AGENT = "webnovel_user_agent"
         private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
     }
@@ -462,6 +480,13 @@ abstract class WebNovelNovels :
 
     // Filters
     override fun getFilterList(data: JsonElement?) = FilterList(
+        Filter.Header("only used for keyword search"),
+        SearchTypeFilter(searchTypeIndex(defaultSearchType)),
+        Filter.Separator(),
+        BrowseTypeFilter(),
+        FanficGenreFilter(),
+        Filter.Header("^ Fan-fic Category only used when Browse Type above is Fan-fic"),
+        Filter.Separator(),
         GenderFilter(),
         MaleGenreFilter(),
         FemaleGenreFilter(),
@@ -469,6 +494,43 @@ abstract class WebNovelNovels :
         SortFilter(),
         TypeFilter(),
     )
+
+    private fun searchTypeIndex(value: String) = when (value) {
+        "fanfic" -> 1
+        "both" -> 2
+        else -> 0
+    }
+
+    private class SearchTypeFilter(state: Int = 0) : Filter.Select<String>("Search Type", arrayOf("Novel", "Fan-fic", "Both"), state) {
+        fun toUriPart() = when (state) {
+            1 -> "fanfic"
+            2 -> "both"
+            else -> "novel"
+        }
+    }
+
+    private class BrowseTypeFilter : Filter.Select<String>("Browse Type", arrayOf("Novel", "Fan-fic"), 0)
+
+    private class FanficGenreFilter :
+        Filter.Select<String>(
+            "Fan-fic Category",
+            arrayOf("All", "Anime & Comics", "Video Games", "Celebrities", "Music & Bands", "Movies", "Book & Literature", "TV", "Theater", "Others"),
+            0,
+        ) {
+        private val vals = arrayOf(
+            "",
+            "fanfic-anime-comics",
+            "fanfic-video-games",
+            "fanfic-celebrities",
+            "fanfic-music-bands",
+            "fanfic-movies",
+            "fanfic-book-literature",
+            "fanfic-tv",
+            "fanfic-theater",
+            "fanfic-others",
+        )
+        fun toUriPart() = vals[state]
+    }
 
     private class GenderFilter : Filter.Select<String>("Gender", arrayOf("Male", "Female"), 0) {
         fun toUriPart() = if (state == 0) "1" else "2"
