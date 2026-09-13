@@ -8,12 +8,17 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.source.KeiSource
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
-import okhttp3.Request
-import okhttp3.Response
+import okhttp3.Headers
+import okhttp3.HttpUrl
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 
@@ -23,63 +28,42 @@ import org.jsoup.nodes.Document
  * The web side is fully server-rendered (no JS API). The site gates chapters
  * behind the mobile app: only the first `maxFree` chapters (50 by default) are
  * readable in a normal browser; later chapters return an HTTP 403
- * ("actualiza dentro de la app") when fetched without the app session.
+ * when fetched without the app session.
  *
  * This source therefore exposes the public catalog, search, novel details and
  * the **free chapter preview** (1..maxFree). Gated chapters are not returned.
  */
-class RealmNovel :
-    HttpSource(),
+@Source
+abstract class RealmNovel :
+    KeiSource(),
     NovelSource {
 
-    override val name = "Realm Novel"
-    override val baseUrl = "https://realmnovel.com"
-    override val lang = "ar"
     override val supportsLatest = true
 
-    // Summary of the free-tier limitation, shown as a header in the filter dialog.
-    override fun getFilterList(): FilterList = FilterList(
-        Filter.Header("ملاحظة: يتوفر فقط الفصول المجانية (حتى 50)"),
-        Filter.Separator(),
-        Filter.Header("باقي الفصول تتطلب تطبيق الموقع (مدفوعة)"),
-    )
-
-    override val isNovelSource = true
-
-    override val client = network.cloudflareClient
-
-    override fun imageUrlParse(response: Response): String = ""
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = this
 
     // ======================== Catalog / Latest / Search ========================
 
-    override fun popularMangaRequest(page: Int): Request = pageRequest(page)
+    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelCards(client.get(pageRequest(page), headers).asJsoup())
 
-    override fun popularMangaParse(response: Response): MangasPage = parseNovelCards(response)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelCards(client.get(pageRequest(page), headers).asJsoup())
 
-    override fun latestUpdatesRequest(page: Int): Request = pageRequest(page)
-
-    override fun latestUpdatesParse(response: Response): MangasPage = parseNovelCards(response)
-
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val url = "$baseUrl/?q=${query.trim().replace(" ", "+")}"
-        return GET(url, headers)
-    }
-
-    override fun searchMangaParse(response: Response): MangasPage = parseNovelCards(response)
-
-    private fun pageRequest(page: Int): Request {
+    private fun pageRequest(page: Int): String {
         val url = if (page <= 1) {
             "$baseUrl/"
         } else {
             "$baseUrl/?page=$page"
         }
-        return GET(url, headers)
+        return url
+    }
+
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val url = "$baseUrl/?q=${query.trim().replace(" ", "+")}"
+        return parseNovelCards(client.get(url, headers).asJsoup())
     }
 
     /** Parse the homepage / search results: `.g3card` novel cards. */
-    private fun parseNovelCards(response: Response): MangasPage {
-        val doc = Jsoup.parse(response.body.string())
-
+    private fun parseNovelCards(doc: Document): MangasPage {
         val novels = doc.select("a.g3card").mapNotNull { card ->
             val link = card.attr("href")
             val id = link.substringAfterLast('/')
@@ -112,18 +96,39 @@ class RealmNovel :
 
     // ======================== Details ========================
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+    override fun getMangaUrl(manga: SManga): String = baseUrl + manga.url
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        val doc = Jsoup.parse(response.body.string())
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val doc = client.get(baseUrl + manga.url, headers).asJsoup()
+
+        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
+        val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val response = client.get(url, headers, ensureSuccess = false)
+        if (!response.isSuccessful) return null
+        val doc = response.asJsoup()
+        return parseMangaDetails(doc).apply { this.url = url.encodedPath }
+    }
+
+    private fun parseMangaDetails(doc: Document): SManga {
         val track = parseTrackVars(doc)
 
-        val title = track["title"] ?: doc.selectFirst("h1")?.text()?.trim()
+        val title = track["title"] ?: doc.selectFirst("h1")?.text()?.trim() ?: "?"
         val en = track["titleEn"]
 
         return SManga.create().apply {
-            this.title = title ?: "?"
-            url = "/novel/" + (track["id"] ?: response.request.url.toString().substringAfterLast('/'))
+            this.title = title
+            url = "/novel/" + (track["id"] ?: "")
+
             thumbnail_url = doc.selectFirst("meta[property=og:image]")?.attr("content")?.toAbsoluteUrl()
 
             // Genres from JSON-LD
@@ -162,15 +167,11 @@ class RealmNovel :
 
     // ======================== Chapters ========================
 
-    override fun chapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
-
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val doc = Jsoup.parse(response.body.string())
+    private fun parseChapterList(doc: Document): List<SChapter> {
         val track = parseTrackVars(doc)
 
         // Novels may set a custom free cap. Default 50.
         val maxFree = track["maxFree"]?.toIntOrNull() ?: 50
-        val novelId = track["id"] ?: ""
 
         val chapters = doc.select("a.chapter-row").mapNotNull { link ->
             val href = link.attr("href")
@@ -192,7 +193,7 @@ class RealmNovel :
 
     // ======================== Chapter content ========================
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.toString()))
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) {
@@ -219,6 +220,14 @@ class RealmNovel :
             paragraphs.joinToString("\n")
         }
     }
+
+    // ======================== Filters ========================
+
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
+        Filter.Header("ملاحظة: يتوفر فقط الفصول المجانية (حتى 50)"),
+        Filter.Separator(),
+        Filter.Header("باقي الفصول تتطلب تطبيق الموقع (مدفوعة)"),
+    )
 
     // ======================== Helpers ========================
 
