@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.ar.mknov
 
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -8,24 +7,27 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.source.KeiSource
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
-import okhttp3.Request
-import okhttp3.Response
+import okhttp3.Headers
+import okhttp3.HttpUrl
 import org.jsoup.Jsoup
 
-class Mknov :
-    HttpSource(),
+@Source
+abstract class Mknov :
+    KeiSource(),
     NovelSource {
 
-    override val name = "مملكه الروايات"
-    override val baseUrl = "https://mknov.com"
-    override val lang = "ar"
     override val supportsLatest = true
 
     private val json: Json = Json {
@@ -33,30 +35,18 @@ class Mknov :
         isLenient = true
     }
 
-    override val isNovelSource = true
-
-    override val client = network.cloudflareClient
-
-    override fun imageUrlParse(response: Response): String = ""
+    /** Site is behind Cloudflare; KeiSource's client already carries a Cloudflare interceptor. */
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = this
 
     // ======================== Catalog / Latest / Search ========================
 
-    private fun worksRequest(): Request = GET("$baseUrl/api/works?limit=5000", headers)
+    private fun worksUrl(): String = "$baseUrl/api/works?limit=5000"
 
-    override fun popularMangaRequest(page: Int): Request = worksRequest()
+    override suspend fun getPopularManga(page: Int): MangasPage = parseWorks(client.get(worksUrl(), headers).body.string(), "")
 
-    override fun popularMangaParse(response: Response): MangasPage = parseWorks(response.body.string(), "")
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseWorks(client.get(worksUrl(), headers).body.string(), "")
 
-    override fun latestUpdatesRequest(page: Int): Request = worksRequest()
-
-    override fun latestUpdatesParse(response: Response): MangasPage = parseWorks(response.body.string(), "")
-
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        searchQuery = query
-        return worksRequest()
-    }
-
-    override fun searchMangaParse(response: Response): MangasPage = parseWorks(response.body.string(), searchQuery)
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseWorks(client.get(worksUrl(), headers).body.string(), query)
 
     private fun parseWorks(body: String, query: String): MangasPage {
         val works = try {
@@ -83,9 +73,6 @@ class Mknov :
         return MangasPage(filtered, false)
     }
 
-    /** Current search query, so parseWorks knows how to filter. Set by searchMangaParse. */
-    private var searchQuery: String = ""
-
     private fun Work.toSManga(): SManga {
         val statusText = status
         val authorText = author
@@ -110,10 +97,31 @@ class Mknov :
 
     // ======================== Details ========================
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, headers)
+    override fun getMangaUrl(manga: SManga): String = baseUrl + manga.url
 
-    override fun mangaDetailsParse(response: Response): SManga {
-        val html = response.body.string()
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val doc = client.get(baseUrl + manga.url, headers).asJsoup()
+
+        val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
+        val updatedChapters = if (fetchChapters) loadChapterList(manga) else chapters
+
+        return SMangaUpdate(updatedManga, updatedChapters)
+    }
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        val response = client.get(url, headers, ensureSuccess = false)
+        if (!response.isSuccessful) return null
+        val doc = response.asJsoup()
+        return parseMangaDetails(doc).apply { this.url = url.encodedPath }
+    }
+
+    private fun parseMangaDetails(doc: org.jsoup.nodes.Document): SManga {
+        val html = doc.outerHtml()
 
         // Extract the work (donghua) JSON embedded in the RSC flight payload.
         val work = extractDonghua(html)
@@ -122,7 +130,6 @@ class Mknov :
         }
 
         // Fallback: simplest parse from the page.
-        val doc = Jsoup.parse(html)
         return SManga.create().apply {
             title = doc.selectFirst("h1")?.text()?.trim() ?: "Unknown"
             thumbnail_url = doc.selectFirst("meta[property=og:image]")?.attr("content")
@@ -203,20 +210,17 @@ class Mknov :
 
     // ======================== Chapters ========================
 
-    override fun chapterListRequest(manga: SManga): Request {
+    private suspend fun loadChapterList(manga: SManga): List<SChapter> {
         val id = manga.url.substringAfterLast('/')
-        return GET("$baseUrl/api/works/$id/chapters", headers)
-    }
+        val body = client.get("$baseUrl/api/works/$id/chapters", headers, ensureSuccess = false).body.string()
 
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val body = response.body.string()
         val chaptersResponse = try {
             json.decodeFromString<ChaptersResponse>(body)
         } catch (e: Exception) {
             return emptyList()
         }
 
-        val novelId = response.request.url.toString().substringAfter("/api/works/").substringBefore("/chapters")
+        val novelId = manga.url.substringAfterLast('/')
 
         val chapters = chaptersResponse.volumes.flatMap { vol ->
             vol.chapters.map { ch ->
@@ -238,15 +242,18 @@ class Mknov :
 
     // ======================== Chapter content ========================
 
-    override fun pageListParse(response: Response): List<Page> = listOf(Page(0, response.request.url.encodedPath))
+    override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapter.url
 
-    /** "52.99" → "52.99", "52.0" → "52", "3.5" → "3.5" */
-    private fun Float.formatChapterNumber(): String = if (this % 1f == 0f) toInt().toString() else toString()
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
+        val url = if (page.url.startsWith("http")) {
+            page.url
+        } else {
+            baseUrl + page.url
+        }
 
-        val html = client.newCall(GET(url, headers)).execute().use { it.body.string() }
+        val html = client.get(url, headers).body.string()
 
         // Jsoup parses HTML entities (&quot; etc.) so quotes become real chars.
         val doc = Jsoup.parse(html)
@@ -264,7 +271,7 @@ class Mknov :
         // 3) Fetch the font and decode.
         val fontAbs = if (fontUrl.startsWith("http")) fontUrl else baseUrl + fontUrl
         val woff2 = try {
-            client.newCall(GET(fontAbs, headers)).execute().use { it.body.bytes() }
+            client.get(fontAbs, headers).body.bytes()
         } catch (e: Exception) {
             return rawBody
         }
@@ -302,6 +309,14 @@ class Mknov :
         return doc.body()?.text()?.trim() ?: ""
     }
 
+    // ======================== Filters ========================
+
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
+        Filter.Header("مملكه الروايات – الفهرس الكامل"),
+        Filter.Separator(),
+        Filter.Header("يتم عرض جميع الروايات الأحدث أولاً"),
+    )
+
     // ======================== Helpers ========================
 
     private fun String?.toAbsoluteUrl(): String? = when {
@@ -312,11 +327,8 @@ class Mknov :
         else -> this
     }
 
-    override fun getFilterList(): FilterList = FilterList(
-        Filter.Header("مملكه الروايات – الفهرس الكامل"),
-        Filter.Separator(),
-        Filter.Header("يتم عرض جميع الروايات الأحدث أولاً"),
-    )
+    /** "52.99" → "52.99", "52.0" → "52", "3.5" → "3.5" */
+    private fun Float.formatChapterNumber(): String = if (this % 1f == 0f) toInt().toString() else toString()
 
     // ======================== Data classes ========================
 
