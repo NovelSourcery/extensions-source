@@ -1,5 +1,6 @@
 package eu.kanade.tachiyomi.novelextension.ar.galaxynovels
 
+import android.util.Log
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
@@ -13,10 +14,13 @@ import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -24,8 +28,6 @@ import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.Jsoup
-import uy.kohesive.injekt.injectLazy
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -36,7 +38,13 @@ abstract class GalaxyNovels :
 
     override val supportsLatest = true
 
-    private val json: Json by injectLazy()
+    private companion object {
+        const val TAG = "GalaxyNovels"
+    }
+
+    // Explicit instance with ignoreUnknownKeys — the injected app-wide Json is not
+    // guaranteed to tolerate the extra keys in the WorReader manifest/pack payloads.
+    private val json = Json { ignoreUnknownKeys = true }
 
     override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(WorReaderCookieInterceptor(baseUrl))
 
@@ -85,7 +93,8 @@ abstract class GalaxyNovels :
 
     private fun buildLatestUpdatesRequest(page: Int): Request {
         val url = "$baseUrl/recent/".toHttpUrl().newBuilder()
-            .addQueryParameter("page", page.toString())
+            // The /recent/ archive paginates with recent_page, not page
+            .addQueryParameter("recent_page", page.toString())
             .build()
         return GET(url, headers)
     }
@@ -123,11 +132,15 @@ abstract class GalaxyNovels :
         if (query.isNotEmpty()) {
             val url = "$baseUrl/library/".toHttpUrl().newBuilder()
                 .addQueryParameter("q", query)
+                // The WorReader library page paginates with library_page, not page
+                .addQueryParameter("library_page", page.toString())
                 .build()
             return GET(url, headers)
         }
 
         val url = "$baseUrl/library/".toHttpUrl().newBuilder()
+            // Filter-only browsing on /library/ also paginates via library_page
+            .addQueryParameter("library_page", page.toString())
 
         filters.forEach { filter ->
             when (filter) {
@@ -241,7 +254,7 @@ abstract class GalaxyNovels :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val doc = client.get(baseUrl + manga.url, headers).asJsoup()
+        val doc = client.get(baseUrl + manga.url, headers, ensureSuccess = false).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) fetchChapterList(manga, doc) else chapters
@@ -249,38 +262,99 @@ abstract class GalaxyNovels :
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private suspend fun fetchChapterList(manga: SManga, doc: org.jsoup.nodes.Document): List<SChapter> {
-        val novelId = doc.selectFirst("[data-novel-id]")?.attr("data-novel-id")
-            ?: doc.selectFirst("[data-wor-current-novel]")?.attr("data-novel-id")
+    private suspend fun fetchChapterList(manga: SManga, doc: org.jsoup.nodes.Document): List<SChapter> = // The app can cancel getMangaUpdate mid-fetch (background update + foreground
+        // detail refresh overlap). Wrap the whole network chain in NonCancellable so a
+        // cancelled coroutine doesn't abort the manifest/pack fetch and drop us to
+        // the 30-chapter HTML fallback.
+        withContext(NonCancellable) {
+            val novelId = doc.selectFirst("[data-novel-id]")?.attr("data-novel-id")
+                ?: doc.selectFirst("[data-wor-current-novel]")?.attr("data-novel-id")
 
-        val response = if (novelId != null) {
-            client.get("$baseUrl/wp-content/uploads/wor-reader-cache/chapters/novel-$novelId.json", headers)
-        } else {
-            client.get(baseUrl + manga.url, headers)
-        }
-        val body = response.body.string()
+            // Fallback: try to derive the novel id from the URL slug if the page lacks the attr.
+            if (novelId == null) {
+                Log.w(TAG, "fetchChapterList: detail page has no data-novel-id; manga.url=${manga.url}")
+            } else {
+                Log.i(TAG, "fetchChapterList: novelId=$novelId for ${manga.url}")
+            }
 
-        return try {
-            val chaptersResponse = json.decodeFromString<ChaptersResponse>(body)
-            chaptersResponse.chapters.map { chapter ->
-                SChapter.create().apply {
-                    url = chapter.url.removePrefix(baseUrl)
-                    name = chapter.label.ifEmpty { "الفصل ${chapter.number}" }
-                    if (chapter.title.isNotEmpty()) {
-                        name += " - ${chapter.title}"
+            // Step 1: try the WorReader v2 manifest + pack endpoints (they return ALL chapters).
+            if (novelId != null) {
+                try {
+                    val manifestUrl = "$baseUrl/wp-content/uploads/wor-reader-cache/chapters/manifest/novel-$novelId.json"
+                    val manifestResp = client.get(manifestUrl, headers, ensureSuccess = false)
+                    if (manifestResp.isSuccessful) {
+                        val manifestBody = manifestResp.body.string()
+                        val manifest = json.decodeFromString<ManifestResponse>(manifestBody)
+                        Log.i(TAG, "fetchChapterList: manifest ok total=${manifest.total} pack_url=${manifest.pack_url}")
+
+                        val packUrl = manifest.pack_url
+                        if (packUrl.isNotBlank()) {
+                            val packResp = client.get(packUrl, headers, ensureSuccess = false)
+                            if (packResp.isSuccessful) {
+                                val packBody = packResp.body.string()
+                                val pack = json.decodeFromString<PackResponse>(packBody)
+                                Log.i(TAG, "fetchChapterList: pack ok chapters=${pack.chapters.size} total=${pack.total}")
+                                return@withContext pack.chapters.toChapterList()
+                            } else {
+                                Log.w(TAG, "fetchChapterList: pack HTTP ${packResp.code}")
+                            }
+                        }
+
+                        if (manifest.live_tail.isNotEmpty()) {
+                            Log.i(TAG, "fetchChapterList: using live_tail size=${manifest.live_tail.size}")
+                            return@withContext manifest.live_tail.toChapterList()
+                        }
+                    } else {
+                        Log.w(TAG, "fetchChapterList: manifest HTTP ${manifestResp.code}")
                     }
-                    chapter_number = chapter.number.toFloatOrNull() ?: chapter.position.toFloat()
-                    date_upload = parseDate(chapter.date_iso)
+                } catch (e: Exception) {
+                    Log.e(TAG, "fetchChapterList: manifest/pack error", e)
                 }
-            }.sortedByDescending { it.chapter_number }
-        } catch (_: Exception) {
-            parseChaptersFromHtml(body)
+            }
+
+            // Step 2: fallback — the old legacy JSON endpoint.
+            if (novelId != null) {
+                try {
+                    val resp = client.get(
+                        "$baseUrl/wp-content/uploads/wor-reader-cache/chapters/novel-$novelId.json",
+                        headers,
+                        ensureSuccess = false,
+                    )
+                    if (resp.isSuccessful) {
+                        val chaptersResponse = json.decodeFromString<ChaptersResponse>(resp.body.string())
+                        Log.i(TAG, "fetchChapterList: legacy ok chapters=${chaptersResponse.chapters.size}")
+                        return@withContext chaptersResponse.chapters.toChapterList()
+                    } else {
+                        Log.w(TAG, "fetchChapterList: legacy HTTP ${resp.code}")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "fetchChapterList: legacy error", e)
+                }
+            }
+
+            // Step 3: last resort — parse the detail page HTML (has the ~30 most recent chapters).
+            Log.w(TAG, "fetchChapterList: falling back to HTML chapters")
+            val htmlDoc = if (doc.select("article.wor-novel-chapter-item").isEmpty()) {
+                client.get(baseUrl + manga.url, headers, ensureSuccess = false).asJsoup()
+            } else {
+                doc
+            }
+            return@withContext parseChaptersFromHtml(htmlDoc)
         }
-    }
 
-    private fun parseChaptersFromHtml(html: String): List<SChapter> {
-        val doc = Jsoup.parse(html)
+    private fun List<ChapterData>.toChapterList(): List<SChapter> = map { chapter ->
+        SChapter.create().apply {
+            url = chapter.url.removePrefix(baseUrl)
+            name = chapter.label.ifEmpty { "الفصل ${chapter.number}" }
+            if (chapter.title.isNotEmpty()) {
+                name += " - ${chapter.title}"
+            }
+            chapter_number = chapter.number.toFloatOrNull() ?: chapter.position.toFloat()
+            date_upload = parseDate(chapter.date_iso)
+        }
+    }.sortedByDescending { it.chapter_number }
 
+    private fun parseChaptersFromHtml(doc: org.jsoup.nodes.Document): List<SChapter> {
         return doc.select("article.wor-novel-chapter-item").mapNotNull { item ->
             val link = item.selectFirst("a[href]") ?: return@mapNotNull null
             val chapterNum = item.selectFirst(".wor-novel-chapter-item__num")?.text()
@@ -417,6 +491,28 @@ abstract class GalaxyNovels :
 
     @Serializable
     class ChaptersResponse(
+        val chapters: List<ChapterData> = emptyList(),
+    )
+
+    /** WorReader v2 manifest: metadata + a link to the full chapter pack. */
+    @Serializable
+    class ManifestResponse(
+        val schema: Int = 0,
+        val novel_id: Long = 0,
+        val total: Int = 0,
+        val live_tail_count: Int = 0,
+        val pack: String = "",
+        @SerialName("pack_url")
+        val pack_url: String = "",
+        val live_tail: List<ChapterData> = emptyList(),
+    )
+
+    /** WorReader v2 pack: the full chapter list for a novel. */
+    @Serializable
+    class PackResponse(
+        val version: JsonElement = JsonNull,
+        val novel_id: Long = 0,
+        val total: Int = 0,
         val chapters: List<ChapterData> = emptyList(),
     )
 
