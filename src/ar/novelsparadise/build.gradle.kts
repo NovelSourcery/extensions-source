@@ -6,17 +6,23 @@ plugins {
 
 keiyoushi {
     name = "NovelsParadise"
-    versionCode = 4
+    versionCode = 5
     contentWarning = ContentWarning.SAFE
     theme = "lightnovelwpnovel"
 
     source {
         lang = "ar"
-        baseUrl = "https://novelsparadise.site"
+        baseUrl {
+            mirrors(
+                "https://www.novelsparadise.site",
+                "https://novelsparadise.site",
+            )
+        }
     }
 
     deeplink {
         host("novelsparadise.site")
-        path("/series/..*")
+        host("www.novelsparadise.site")
+        path("/np-light/series/..*")
     }
 }
