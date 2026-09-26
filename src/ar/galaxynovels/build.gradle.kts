@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "Galaxy Novels"
-    versionCode = 10
+    versionCode = 11
     contentWarning = ContentWarning.SAFE
 
     source {
