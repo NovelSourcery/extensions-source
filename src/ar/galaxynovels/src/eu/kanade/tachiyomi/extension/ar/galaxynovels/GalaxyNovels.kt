@@ -52,6 +52,16 @@ abstract class GalaxyNovels :
             "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
 
         const val ACCEPT_LANGUAGE = "ar,en-US;q=0.7,en;q=0.3"
+
+        /**
+         * Matches the anti-piracy notice lines the site hides inside the chapter body. Each is
+         * marked `data-wor-decoy="1"` by the theme (and also carries `hidden aria-hidden="true"`,
+         * so a real browser never shows them — a plain HTML scrape keeps them). The site's own
+         * marker is matched first; the accessibility attributes are kept as a fallback in case a
+         * future theme drop it. Matching on attributes rather than wording survives the rotation.
+         */
+        const val ANTI_COPY_SELECTOR =
+            "[data-wor-decoy], [data-nosnippet], [hidden][aria-hidden=true]"
     }
 
     // Explicit instance with ignoreUnknownKeys — the injected app-wide Json is not
@@ -419,6 +429,10 @@ abstract class GalaxyNovels :
         }
 
         content.select("script, style, ins, iframe, .ads, .ad-unit, [data-ad-position]").remove()
+
+        // The site interleaves anti-piracy notice lines inside the chapter text, one every few
+        // paragraphs, so they have to come out or they show up as stray sentences while reading.
+        content.select(ANTI_COPY_SELECTOR).remove()
 
         return content.html()
     }
