@@ -21,7 +21,6 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
-import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
@@ -40,39 +39,68 @@ abstract class GalaxyNovels :
 
     private companion object {
         const val TAG = "GalaxyNovels"
+
+        /**
+         * A fixed desktop Chrome UA. Do not use the app's random/custom User-Agent here: OkHttp's
+         * default `okhttp/x.y.z` is what Cloudflare blocks, and this source must always look like a
+         * browser. See [WorReaderBrowserInterceptor].
+         */
+        const val BROWSER_USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+
+        const val HTML_ACCEPT =
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+
+        const val ACCEPT_LANGUAGE = "ar,en-US;q=0.7,en;q=0.3"
+
+        /**
+         * Matches the anti-piracy notice lines the site hides inside the chapter body. Each is
+         * marked `data-wor-decoy="1"` by the theme (and also carries `hidden aria-hidden="true"`,
+         * so a real browser never shows them — a plain HTML scrape keeps them). The site's own
+         * marker is matched first; the accessibility attributes are kept as a fallback in case a
+         * future theme drop it. Matching on attributes rather than wording survives the rotation.
+         */
+        const val ANTI_COPY_SELECTOR =
+            "[data-wor-decoy], [data-nosnippet], [hidden][aria-hidden=true]"
     }
 
     // Explicit instance with ignoreUnknownKeys — the injected app-wide Json is not
     // guaranteed to tolerate the extra keys in the WorReader manifest/pack payloads.
     private val json = Json { ignoreUnknownKeys = true }
 
-    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(WorReaderCookieInterceptor(baseUrl))
+    /**
+     * Cloudflare blocks this host on a request signature, not on a solvable JS challenge (a hard
+     * WAF 403 — "Sorry, you have been blocked" — so cf_clearance/WebView solving cannot help).
+     * Two independent signatures were measured against the live site:
+     *
+     * 1. OkHttp's default `okhttp/x.y.z` User-Agent is blocked on every path, so the default
+     *    client 403s even where the site is reachable. Any real browser UA passes.
+     * 2. `Accept-Language` together with BOTH `Sec-Fetch-Dest: document` and
+     *    `Sec-Fetch-Mode: navigate` is blocked. Either of the two Sec-Fetch headers alone is fine,
+     *    as is Accept-Language on its own.
+     *
+     * So we advertise a plain browser UA and deliberately do not send Sec-Fetch-Dest /
+     * Sec-Fetch-Mode. Referer/Origin already come from KeiSource's headersBuilder().
+     */
+    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(WorReaderBrowserInterceptor())
+
+    private class WorReaderBrowserInterceptor : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): okhttp3.Response = chain.proceed(
+            chain.request().newBuilder()
+                .header("User-Agent", BROWSER_USER_AGENT)
+                // The site serves its reader shell in JS and expects this opt-in cookie.
+                .header("Cookie", "wor_reader_js=1")
+                .header("Accept", HTML_ACCEPT)
+                .header("Accept-Language", ACCEPT_LANGUAGE)
+                .build(),
+        )
+    }
 
     private fun String?.toAbsoluteUrl(): String? = when {
         this.isNullOrEmpty() -> null
         startsWith("http") -> this
         startsWith("/") -> baseUrl + this
         else -> this
-    }
-
-    private class WorReaderCookieInterceptor(private val base: String) : Interceptor {
-        override fun intercept(chain: Interceptor.Chain): okhttp3.Response {
-            val original = chain.request()
-            val newRequest = original.newBuilder()
-                .header("Cookie", "wor_reader_js=1")
-                .header("Referer", "$base/")
-                .header(
-                    "Accept",
-                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                )
-                .header("Accept-Language", "ar,en-US;q=0.7,en;q=0.3")
-                .header("Sec-Fetch-Dest", "document")
-                .header("Sec-Fetch-Mode", "navigate")
-                .header("Sec-Fetch-Site", "same-origin")
-                .header("Upgrade-Insecure-Requests", "1")
-                .build()
-            return chain.proceed(newRequest)
-        }
     }
 
     // ======================== Popular/Latest ========================
@@ -312,27 +340,7 @@ abstract class GalaxyNovels :
                 }
             }
 
-            // Step 2: fallback — the old legacy JSON endpoint.
-            if (novelId != null) {
-                try {
-                    val resp = client.get(
-                        "$baseUrl/wp-content/uploads/wor-reader-cache/chapters/novel-$novelId.json",
-                        headers,
-                        ensureSuccess = false,
-                    )
-                    if (resp.isSuccessful) {
-                        val chaptersResponse = json.decodeFromString<ChaptersResponse>(resp.body.string())
-                        Log.i(TAG, "fetchChapterList: legacy ok chapters=${chaptersResponse.chapters.size}")
-                        return@withContext chaptersResponse.chapters.toChapterList()
-                    } else {
-                        Log.w(TAG, "fetchChapterList: legacy HTTP ${resp.code}")
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "fetchChapterList: legacy error", e)
-                }
-            }
-
-            // Step 3: last resort — parse the detail page HTML (has the ~30 most recent chapters).
+            // Step 2: last resort — parse the detail page HTML (has the ~30 most recent chapters).
             Log.w(TAG, "fetchChapterList: falling back to HTML chapters")
             val htmlDoc = if (doc.select("article.wor-novel-chapter-item").isEmpty()) {
                 client.get(baseUrl + manga.url, headers, ensureSuccess = false).asJsoup()
@@ -403,25 +411,15 @@ abstract class GalaxyNovels :
             baseUrl + page.url
         }
 
-        val requestHeaders = Headers.Builder()
-            .add("Cookie", "wor_reader_js=1")
-            .add("Referer", "$baseUrl/")
-            .add(
-                "Accept",
-                "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            )
-            .add("Accept-Language", "ar,en-US;q=0.7,en;q=0.3")
-            .add("Sec-Fetch-Dest", "document")
-            .add("Sec-Fetch-Mode", "navigate")
-            .add("Sec-Fetch-Site", "same-origin")
-            .add("Upgrade-Insecure-Requests", "1")
-            .build()
-
-        val response = client.get(url, requestHeaders)
+        // The source headers (browser UA + Cookie/Accept/Accept-Language, no Sec-Fetch-Dest/Mode)
+        // come from WorReaderBrowserInterceptor, which runs for every request through this client.
+        val response = client.get(url, headers)
         val doc = response.asJsoup()
 
+        // The reader renders the chapter body in `div.wor-reader-text-surface`; the older
+        // WordPress-style containers are kept as a fallback in case the theme changes back.
         val content = doc.selectFirst(
-            ".wor-chapter-content, .entry-content, .chapter-content, .post-content, article .content",
+            ".wor-reader-text-surface, .wor-chapter-content, .entry-content, .chapter-content",
         ) ?: doc.selectFirst("article")
 
         if (content == null) {
@@ -431,6 +429,10 @@ abstract class GalaxyNovels :
         }
 
         content.select("script, style, ins, iframe, .ads, .ad-unit, [data-ad-position]").remove()
+
+        // The site interleaves anti-piracy notice lines inside the chapter text, one every few
+        // paragraphs, so they have to come out or they show up as stray sentences while reading.
+        content.select(ANTI_COPY_SELECTOR).remove()
 
         return content.html()
     }
@@ -488,11 +490,6 @@ abstract class GalaxyNovels :
         )
 
     // ======================== Data Classes ========================
-
-    @Serializable
-    class ChaptersResponse(
-        val chapters: List<ChapterData> = emptyList(),
-    )
 
     /** WorReader v2 manifest: metadata + a link to the full chapter pack. */
     @Serializable
