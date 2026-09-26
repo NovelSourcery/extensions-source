@@ -12,7 +12,6 @@ import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.parseAs
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -23,11 +22,12 @@ private const val SORT_BY_CHAPTERS = "-num_chapters"
 /**
  * مكتبة الخيال (mtlarabic.com) — an Arabic web-novel library.
  *
- * The site is a server-rendered Node app with no browse API: `/novels` and `/novel-details`
- * ship their payload as a `<script type="application/json">` island, which is what the listing
- * and detail parsing here read. The chapter list is the one exception — the site exposes
- * `/api/novels/{id}/chapters` for its own pagination widget, so chapters go through that
- * instead of being scraped.
+ * A server-rendered Node app. `/novels`, `/novel-details` and the reader answer `text/html` with
+ * their data in a `<script type="application/json">` island, so those are read through
+ * [parseAsIsland] rather than parsed as bare JSON.
+ *
+ * The chapter list is the exception: the site serves `/api/novels/{id}/chapters` as real JSON,
+ * and that is the only endpoint that paginates past the first 100 chapters.
  */
 @Source
 abstract class MtlArabic :
@@ -40,9 +40,6 @@ abstract class MtlArabic :
         /** The chapter endpoint's own page size; the site hardcodes 100. */
         const val CHAPTERS_PER_PAGE = 100
     }
-
-    // Explicit instance: the islands carry many fields that are irrelevant at a given call site.
-    private val json = Json { ignoreUnknownKeys = true }
 
     // ==================== Catalogue ====================
 
@@ -80,10 +77,10 @@ abstract class MtlArabic :
         .build()
 
     private suspend fun getNovelsPage(url: HttpUrl): MangasPage {
-        val listing = client.get(url).parseAs<ListingResponse>(json)
+        val listing = client.get(url).parseAsIsland<ListingResponse>()
         val pagination = listing.pagination
         return MangasPage(
-            listing.items.map { it.toSManga() },
+            listing.items.map { it.toSManga(baseUrl) },
             pagination.currentPage < pagination.totalPages,
         )
     }
@@ -93,7 +90,7 @@ abstract class MtlArabic :
     private fun parseDetails(details: NovelDetails) = SManga.create().apply {
         url = ID_PREFIX + details.id
         title = details.name
-        thumbnail_url = coverUrl(details.image)
+        thumbnail_url = coverUrl(baseUrl, details.image)
         description = details.description
         // The site files the Chinese original title here; it is the only name besides the
         // Arabic one, and the library has no author field of its own.
@@ -102,7 +99,7 @@ abstract class MtlArabic :
         status = mangaStatus(details.status)
     }
 
-    private suspend fun fetchDetails(id: Int): NovelDetails = client.get(detailsUrl(id)).parseAs<NovelDetails>(json)
+    private suspend fun fetchDetails(id: Int): NovelDetails = client.get(detailsUrl(id)).parseAsIsland<NovelDetails>()
 
     private fun detailsUrl(id: Int) = "$baseUrl/novel-details?id=$id"
 
@@ -151,16 +148,17 @@ abstract class MtlArabic :
         return chapters.sortedByDescending { it.chapter_number }
     }
 
+    // The one endpoint that answers with bare JSON, so no island extraction here.
     private suspend fun fetchChapterPage(id: Int, page: Int): ChaptersResponse = client.get(
         "$baseUrl/api/novels/$id/chapters?page=$page&limit=$CHAPTERS_PER_PAGE&sort=asc",
-    ).parseAs(json)
+    ).parseAs<ChaptersResponse>(islandJson)
 
     // ==================== Reader ====================
 
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val chapter = client.get(baseUrl + page.url).parseAs<ChapterPage>(json)
+        val chapter = client.get(baseUrl + page.url).parseAsIsland<ChapterPage>()
         // The reader island stores the body as plain text rather than markup, one paragraph per
         // line, with the lines separated by blank lines. The blanks are the site's own spacing and
         // are dropped here so they don't compound with the separator below.
