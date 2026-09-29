@@ -139,6 +139,9 @@ abstract class Fenrirealm :
     private val hideLockedChapters: Boolean
         get() = preferences.getBoolean(PREF_HIDE_LOCKED_CHAPTERS, true)
 
+    private val fetchChapterWithAPI: Boolean
+        get() = preferences.getBoolean(PREF_FETCH_API_CHAPTER, false)
+
     // API base URL - from instructions.txt: /api/new/v2
     private val apiBaseUrl = "$baseUrl/api/new/v2"
 
@@ -352,13 +355,26 @@ abstract class Fenrirealm :
             summary = "Exclude chapters that require payment"
             setDefaultValue(true)
         }.also(screen::addPreference)
+
+        SwitchPreferenceCompat(screen.context).apply {
+            key = PREF_FETCH_API_CHAPTER
+            title = "Fetch chapter with API"
+            summary = "Fetch chapter content via REST API"
+            setDefaultValue(false)
+        }.also(screen::addPreference)
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(baseUrl + page.url, headers)
-        val doc = response.asJsoup()
+        val doc = if (fetchChapterWithAPI) {
+            val response = client.get(apiBaseUrl + page.url, headers)
+            val chapter = json.decodeFromString<ChapterDto>(response.body.string())
+            Jsoup.parseBodyFragment(chapter.content)
+        } else {
+            val response = client.get(baseUrl + page.url, headers)
+            response.asJsoup()
+        }
 
         // Try DOM extraction first (more reliable for rendered HTML)
         val chapterContent = extractChapterContentFromDOM(doc)
@@ -371,10 +387,14 @@ abstract class Fenrirealm :
 
     private fun extractChapterContentFromDOM(doc: Document): String {
         // Prefer the actual chapter body over the outer reader wrapper.
-        val readerArea = doc.selectFirst("div.reader-area[id^=reader-area]")
-            ?: doc.selectFirst("div.reader-area")
-            ?: doc.selectFirst("div[role=region][id^=reader-area]")
-            ?: return ""
+        val readerArea = if (fetchChapterWithAPI) {
+            doc.body()
+        } else {
+            doc.selectFirst("div.reader-area[id^=reader-area]")
+                ?: doc.selectFirst("div.reader-area")
+                ?: doc.selectFirst("div[role=region][id^=reader-area]")
+                ?: return ""
+        }
 
         // Strip real comment/reaction sections structurally. Never match on prose
         // text: a chapter sentence containing the word "comment" used to cut the
@@ -601,6 +621,15 @@ abstract class Fenrirealm :
     }
 
     @Serializable
+    class ChapterDto(
+        val id: Int,
+        val name: String? = null,
+        val title: String? = null,
+        val content: String,
+        val has_illustration: Boolean,
+    )
+
+    @Serializable
     class StatsDto(
         @SerialName("total_views") val totalViews: Int? = null,
         @SerialName("daily_views") val dailyViews: Int? = null,
@@ -699,6 +728,7 @@ abstract class Fenrirealm :
 
     companion object {
         private const val PREF_HIDE_LOCKED_CHAPTERS = "fenrirealm_hide_locked_chapters"
+        private const val PREF_FETCH_API_CHAPTER = "fenrirealm_fetch_chapter_via_api"
     }
 
     private class StatusFilter :
