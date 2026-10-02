@@ -3,7 +3,7 @@ plugins {
 }
 
 keiyoushi {
-    baseVersionCode = 5
+    baseVersionCode = 6
     libVersion = "1.6"
 
     // Every site type stores manga.url as a root-level slug (mangaPath = SlugPath("/")), and
@@ -16,5 +16,4 @@ keiyoushi {
 
 dependencies {
     implementation(project(":lib:chapterutils"))
-    implementation(project(":lib:cookieinterceptor"))
 }
