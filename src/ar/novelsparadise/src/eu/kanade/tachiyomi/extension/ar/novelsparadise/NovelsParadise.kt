@@ -1,7 +1,6 @@
 package eu.kanade.tachiyomi.novelextension.ar.novelsparadise
 
 import android.util.Log
-import android.webkit.CookieManager
 import eu.kanade.tachiyomi.multisrc.lightnovelwpnovel.LightNovelWPNovel
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -10,8 +9,6 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
-import keiyoushi.utils.WebViewSession
-import keiyoushi.utils.WebViewTimeoutException
 import keiyoushi.utils.applicationContext
 import keiyoushi.utils.formattedText
 import keiyoushi.utils.parseAs
@@ -19,20 +16,17 @@ import keiyoushi.utils.runWebViewBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
-import okhttp3.Interceptor
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.seconds
 
 /**
  * NovelsParadise (novelsparadise.site).
  *
- * The site is a custom PHP app sitting behind a Cloudflare managed challenge on every path, with a
+ * The site is a custom PHP app with a
  * markup shape that differs from the LightNovelWP sites [LightNovelWPNovel] was written for, so the
  * list/detail/chapter parsers are overridden here:
  *
@@ -50,13 +44,6 @@ abstract class NovelsParadise : LightNovelWPNovel() {
     /** The browsing/search list page is a different path than the novel detail pages. */
     private val listPath = "np-light/series-list"
 
-    private val webViewSession = WebViewSession()
-
-    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder {
-        addInterceptor(CloudflareChallengeInterceptor(webViewSession, baseUrl))
-        return this
-    }
-
     /**
      * The detail page renders cover + chapter list via client-side JS after initial load, so a plain
      * HTTP fetch misses both. Load the URL in a WebView (shared cookie jar → cf_clearance already
@@ -65,8 +52,7 @@ abstract class NovelsParadise : LightNovelWPNovel() {
     private fun fetchRenderedDom(url: String): Document? {
         return try {
             var html: String? = null
-            runWebViewBlocking<Unit>(call = client.newCall(GET(url, headers)), session = webViewSession, timeout = 45.seconds) {
-                useOkHttpNetwork = true
+            runWebViewBlocking<Unit>(call = client.newCall(GET(url, headers)), timeout = 45.seconds) {
                 var done = false
                 var grabCount = 0
 
@@ -399,15 +385,7 @@ abstract class NovelsParadise : LightNovelWPNovel() {
     // ---- content ----------------------------------------------------------
 
     override suspend fun fetchPageText(page: eu.kanade.tachiyomi.source.model.Page): String {
-        // Chapter content itself is server-rendered and ships in the initial HTML, so try the fast
-        // OKHttp path first (the interceptor already carries the solved cf_clearance cookie). Only
-        // if that lands on a Cloudflare challenge do we fall back to rendering via WebView — that
-        // path is slow (waits for full render), so it must be the exception, not the default.
-        var html = client.newCall(GET(baseUrl + page.url, headers)).execute().body.string()
-        if (isChallenge(html)) {
-            Log.w(TAG, "chapter GET hit a challenge, rendering via WebView")
-            html = fetchRenderedDom(baseUrl + page.url)?.outerHtml() ?: html
-        }
+        val html = client.newCall(GET(baseUrl + page.url, headers)).execute().body.string()
         val doc = Jsoup.parse(html)
         doc.select("script, style, ins, iframe, .ads, .adsbygoogle, .advertisement, .ad-unit, nav, footer, header").remove()
 
@@ -477,20 +455,6 @@ abstract class NovelsParadise : LightNovelWPNovel() {
         else -> "$baseUrl/$this"
     }
 
-    private fun isChallenge(body: String): Boolean {
-        // Real pages are large (100 KB+) and only reference "challenge-platform" in <script> tags;
-        // only small pages (< 10 KB) with a challenge <title> are actual CF challenge stubs.
-        if (body.length > 10_000) return false
-        val titleStart = body.indexOf("<title>", 0, ignoreCase = true)
-        if (titleStart < 0) return false
-        val titleEnd = body.indexOf("</title>", titleStart, ignoreCase = true)
-        if (titleEnd < 0) return false
-        val title = body.substring(titleStart + 7, titleEnd)
-        return title.contains("Just a moment", ignoreCase = true) ||
-            title.contains("Attention Required", ignoreCase = true) ||
-            title.contains("Security Check", ignoreCase = true)
-    }
-
     private companion object {
         const val TAG = "NovelsParadiseCF"
 
@@ -502,138 +466,5 @@ abstract class NovelsParadise : LightNovelWPNovel() {
 
         /** Placeholder texts the site leaves where an ad would load. */
         val AD_TEXT_MARKERS = listOf("advertise here", "advertisement", "ad space", "ad start", "ad end")
-    }
-}
-
-/**
- * Detects Cloudflare managed challenge pages ("Just a moment…") served by
- * novelsparadise.site and auto-solves them via WebView, then retries the request
- * with the `cf_clearance` cookie harvested from the solved WebView session.
- *
- * OkHttp and the WebView have separate cookie stores, so the challenge cookie solved inside the
- * WebView must be read back and injected into the OkHttp request for the retry to pass. The cookie
- * is cached per host so subsequent calls go straight through; if a cached cookie is ever rejected we
- * re-solve once and retry, then fail with a clear message.
- */
-private class CloudflareChallengeInterceptor(
-    private val session: WebViewSession,
-    private val baseUrl: String,
-) : Interceptor {
-
-    private val cookieCache = ConcurrentHashMap<String, String>()
-
-    override fun intercept(chain: Interceptor.Chain): Response {
-        val request = chain.request()
-        val host = request.url.host
-
-        // Attach a previously solved cookie so normal traffic skips the challenge.
-        // If the process restarted (cookieCache empty) but the user already solved the challenge
-        // in WebView, cf_clearance still lives in the shared CookieManager — reuse it directly
-        // instead of re-solving, so a manual bypass is respected.
-        val cached = cookieCache.getOrPut(host) {
-            val shared = runCatching {
-                CookieManager.getInstance().getCookie("https://$host/").orEmpty()
-            }.getOrDefault("")
-            if (shared.isNotBlank() && "cf_clearance" in shared) shared else ""
-        }.takeIf { it.isNotBlank() }
-        Log.i(TAG, "→ ${request.method} ${request.url} (cachedCookie=${cached != null})")
-        var response = chain.proceed(if (cached != null) request.carrying(cached) else request)
-        Log.i(TAG, "← ${response.code} ${request.url}")
-
-        if (!isChallengePage(response)) return response
-        Log.w(TAG, "challenge detected on ${request.url}, solving via WebView…")
-        response.close()
-
-        val cookie = solveChallenge(chain)
-        cookieCache[host] = cookie
-
-        response = chain.proceed(request.carrying(cookie))
-        Log.i(TAG, "retry → ${response.code} ${request.url}")
-        if (isChallengePage(response)) {
-            response.close()
-            throw Exception(
-                "NovelsParadise: the Cloudflare challenge was solved but the request is still " +
-                    "blocked. Please open the site in WebView once, then retry.",
-            )
-        }
-
-        return response
-    }
-
-    private fun okhttp3.Request.carrying(cookie: String): okhttp3.Request = newBuilder().header("Cookie", cookie).build()
-
-    private fun isChallengePage(response: Response): Boolean {
-        val body = response.peekBody(8192).string()
-        return isChallenge(body)
-    }
-
-    private fun isChallenge(body: String): Boolean {
-        // Real pages are large (100 KB+) and only reference "challenge-platform" in <script> tags;
-        // only small pages (< 10 KB) with a challenge <title> are actual CF challenge stubs.
-        if (body.length > 10_000) return false
-        val titleStart = body.indexOf("<title>", 0, ignoreCase = true)
-        if (titleStart < 0) return false
-        val titleEnd = body.indexOf("</title>", titleStart, ignoreCase = true)
-        if (titleEnd < 0) return false
-        val title = body.substring(titleStart + 7, titleEnd)
-        return title.contains("Just a moment", ignoreCase = true) ||
-            title.contains("Attention Required", ignoreCase = true) ||
-            title.contains("Security Check", ignoreCase = true)
-    }
-
-    private fun solveChallenge(chain: Interceptor.Chain): String {
-        Log.i(TAG, "opening WebView at $baseUrl (useOkHttpNetwork=false)")
-        try {
-            runWebViewBlocking<Unit>(call = chain.call(), session = session, timeout = 60.seconds) {
-                useOkHttpNetwork = false
-                var done = false
-
-                fun checkSolved() {
-                    if (done) return
-                    // The challenge page swaps out once solved; a real document title means the
-                    // interstitial is gone. Read it from the live DOM rather than the callback arg
-                    // so it also works for the poll fallback below.
-                    evaluateJs("document.title") { titleJson ->
-                        if (done) return@evaluateJs
-                        val title = runCatching { titleJson.parseAs<String>() }.getOrDefault("")
-                        if (title.isNotBlank() && !isChallengeTitle(title)) {
-                            done = true
-                            resolve(Unit)
-                        }
-                    }
-                }
-
-                onPageFinished { checkSolved() }
-                // onPageFinished can miss the swap on some WebView builds, so re-check periodically.
-                poll(interval = 1.seconds) { checkSolved() }
-                loadUrl(baseUrl)
-            }
-        } catch (e: WebViewTimeoutException) {
-            throw Exception(
-                "NovelsParadise: could not solve the Cloudflare challenge automatically. " +
-                    "Please open the site in WebView once, then retry.",
-                e,
-            )
-        }
-
-        // The WebView used its own network stack, so cf_clearance was stored as an HttpOnly cookie
-        // in the shared Android cookie store — read it back for the OkHttp retry.
-        val cookie = CookieManager.getInstance().getCookie(baseUrl)
-        if (cookie.isNullOrBlank() || "cf_clearance" !in cookie) {
-            throw Exception(
-                "NovelsParadise: the Cloudflare challenge was solved but no cf_clearance cookie " +
-                    "was stored. Please open the site in WebView once, then retry.",
-            )
-        }
-
-        return cookie
-    }
-
-    private fun isChallengeTitle(title: String): Boolean = title.contains("Just a moment", ignoreCase = true) ||
-        title.contains("Attention Required", ignoreCase = true) ||
-        title.contains("Security Check", ignoreCase = true)
-
-    companion object {
-        private const val TAG = "NovelsParadiseCF"
     }
 }

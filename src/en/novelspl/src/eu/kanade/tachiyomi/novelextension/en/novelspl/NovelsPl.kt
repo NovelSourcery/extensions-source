@@ -11,7 +11,6 @@ import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
-import keiyoushi.utils.WebViewSession
 import keiyoushi.utils.WebViewTimeoutException
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.runWebView
@@ -37,8 +36,6 @@ abstract class NovelsPl :
 
     override val supportsLatest = false
 
-    private val webViewSession = WebViewSession()
-
     private suspend fun getBypassingChallenge(url: String): Response {
         var response = client.get(url, headers)
         if (isChallengePage(response)) {
@@ -53,8 +50,7 @@ abstract class NovelsPl :
 
     private suspend fun solveAnubisChallenge(url: String) {
         try {
-            runWebView<Unit>(session = webViewSession, timeout = 30.seconds) {
-                useOkHttpNetwork = true
+            runWebView<Unit>(timeout = 30.seconds) {
                 var resolved = false
                 onPageFinished {
                     if (resolved) return@onPageFinished
