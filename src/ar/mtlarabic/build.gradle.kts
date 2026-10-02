@@ -5,18 +5,17 @@ plugins {
 }
 
 keiyoushi {
-    name = "Fenrirealm"
-    versionCode = 14
+    name = "MTL Arabic"
+    versionCode = 1
     contentWarning = ContentWarning.SAFE
-    libVersion = "1.6"
 
     source {
-        lang = "en"
-        baseUrl = "https://fenrirealm.com"
+        lang = "ar"
+        baseUrl = "https://mtlarabic.com"
     }
 
     deeplink {
-        host("fenrirealm.com")
-        path("/series/..*")
+        host("mtlarabic.com")
+        path("/..*")
     }
 }

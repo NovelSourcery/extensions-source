@@ -93,18 +93,27 @@ abstract class MadaraNovel :
         "Redirecting...",
     )
 
+    // Cloudflare's own block/challenge pages, which never carry site content.
+    private val cloudflareBlockTitles = listOf(
+        "Attention Required! | Cloudflare",
+        "Access denied | Cloudflare",
+    )
+
     /**
      * LN Reader: Check for captcha/bot verification pages
      * Throws exception to prompt webview open
+     *
+     * Note: the Turnstile `<script>` tag alone is deliberately *not* treated as a challenge. Some
+     * sites (e.g. cenele.com) load that script on every page — including the login and register
+     * forms and plain content pages — so keying on it made every chapter list throw
+     * "Cloudflare Turnstile detected" even though the page had loaded fine. A block page is
+     * detected by its Cloudflare title / challenge marker instead, both of which appear only when
+     * the request was actually challenged.
      */
     protected fun checkCaptcha(doc: Document, url: String) {
         val title = doc.title().trim()
-        if (captchaTitles.contains(title)) {
+        if (captchaTitles.contains(title) || cloudflareBlockTitles.contains(title)) {
             throw Exception("Captcha detected, please open in WebView")
-        }
-        // Also check for Cloudflare Turnstile
-        if (doc.selectFirst("script[src*='challenges.cloudflare.com/turnstile']") != null) {
-            throw Exception("Cloudflare Turnstile detected, please open in WebView")
         }
     }
 
