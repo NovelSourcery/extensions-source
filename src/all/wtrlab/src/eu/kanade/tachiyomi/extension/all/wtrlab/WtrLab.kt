@@ -30,6 +30,8 @@ import keiyoushi.utils.setAltTitles
 import keiyoushi.utils.toJsonRequestBody
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -77,7 +79,7 @@ abstract class WtrLab :
                     ?.groupValues?.get(1) ?: break
                 response.close()
                 cachedBuildId = null
-                val freshBuildId = runCatching { getBuildId() }.getOrNull() ?: break
+                val freshBuildId = runCatching { getBuildIdBlocking() }.getOrNull() ?: break
                 currentRequest = currentRequest.newBuilder()
                     .url(currentRequest.url.toString().replace(failedBuildId, freshBuildId))
                     .build()
@@ -108,6 +110,9 @@ abstract class WtrLab :
     }
 
     private val imgBaseUrl = "https://wtr-lab.com/api/v2/img"
+
+    private val titleTemplateRegex = Regex("""%\{([^|{}]*)\|[^{}]*\}""")
+    private fun resolveTitleTemplate(title: String): String = title.replace(titleTemplateRegex) { it.groupValues[1] }
 
     // Example: "https://img.wtr-lab.com/cdn/series/JtiyvIDCk8L3qSgbIIAO2BPQ-xP-szSp7LbLKfz7yJ8.jpg"
     // becomes: "https://wtr-lab.com/api/v2/img?src=s3://wtrimg/series/JtiyvIDCk8L3qSgbIIAO2BPQ-xP-szSp7LbLKfz7yJ8.jpg&w=344"
@@ -141,11 +146,29 @@ abstract class WtrLab :
     @Volatile
     private var cachedBuildId: String? = null
     private val buildIdLock = Any()
+    private val buildIdMutex = Mutex()
 
-    // Concurrent mass-import can fire dozens of requests off a stale buildId at once; without
-    // single-flighting, each would independently refetch/overwrite cachedBuildId and hammer
-    // novel-finder. The double-checked lock collapses them into one refresh.
-    private fun getBuildId(): String {
+    private suspend fun getBuildIdSuspend(): String {
+        cachedBuildId?.let { return it }
+
+        return buildIdMutex.withLock {
+            cachedBuildId?.let { return@withLock it }
+
+            val response = client.get("$baseUrl/$lang/novel-finder", headers)
+            val doc = response.asJsoup()
+            val nextData = doc.selectFirst("#__NEXT_DATA__")?.data()
+                ?: throw Exception("Could not find __NEXT_DATA__ on page")
+
+            val jsonData = json.parseToJsonElement(nextData).jsonObject
+            val buildId = jsonData["buildId"]?.jsonPrimitive?.content
+                ?: throw Exception("Could not extract buildId")
+
+            cachedBuildId = buildId
+            buildId
+        }
+    }
+
+    private fun getBuildIdBlocking(): String {
         cachedBuildId?.let { return it }
 
         synchronized(buildIdLock) {
@@ -266,7 +289,7 @@ abstract class WtrLab :
 
     override suspend fun fetchPageText(page: Page): String {
         val urlPath = page.url.removePrefix(baseUrl).removePrefix("/")
-        val match = Regex("""(?:serie-|novel/)(\d+)/[^/]+/chapter-(\d+)""").find(urlPath)
+        val match = Regex("""(?:serie-|novel/)(\d+)/(?:[^/]+/)?chapter-(\d+)""").find(urlPath)
             ?: throw Exception("Invalid chapter URL format: ${page.url}")
 
         val rawId = match.groupValues[1].toInt()
@@ -464,7 +487,7 @@ abstract class WtrLab :
     }
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val buildId = getBuildId()
+        val buildId = getBuildIdSuspend()
         val url = "$baseUrl/_next/data/$buildId/$lang/novel-finder.json?orderBy=views&order=desc&page=$page"
         val response = client.get(url, headers)
         return parseSeriesPage(response)
@@ -495,7 +518,7 @@ abstract class WtrLab :
             val data = obj["data"]?.jsonObject
 
             SManga.create().apply {
-                title = data?.get("title")?.jsonPrimitive?.contentOrNull ?: ""
+                title = resolveTitleTemplate(data?.get("title")?.jsonPrimitive?.contentOrNull ?: "")
                 thumbnail_url = transformImageUrl(data?.get("image")?.jsonPrimitive?.contentOrNull)
                 url = "$rawId/$slug"
             }
@@ -521,7 +544,7 @@ abstract class WtrLab :
             val serieData = serie["data"]?.jsonObject
 
             SManga.create().apply {
-                title = serieData?.get("title")?.jsonPrimitive?.contentOrNull ?: ""
+                title = resolveTitleTemplate(serieData?.get("title")?.jsonPrimitive?.contentOrNull ?: "")
                 thumbnail_url = transformImageUrl(serieData?.get("image")?.jsonPrimitive?.contentOrNull)
                 url = "$rawId/$slug"
             }
@@ -533,7 +556,7 @@ abstract class WtrLab :
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val buildId = getBuildId()
+        val buildId = getBuildIdSuspend()
 
         val params = mutableListOf<String>()
 
@@ -627,14 +650,16 @@ abstract class WtrLab :
         return parseSeriesPage(response)
     }
 
-    private fun buildMangaDetailsUrl(manga: SManga): String {
-        val buildId = getBuildId()
+    private suspend fun buildMangaDetailsUrl(manga: SManga): String {
+        val buildId = getBuildIdSuspend()
         // url shape: /<lang>/novel/<raw_id>/<slug> (legacy: /<lang>/serie-<raw_id>/<slug>). The
         // _next/data JSON route 308s straight to the plain HTML page for legacy paths, so always
         // request the canonical novel/ path here.
-        val match = Regex("""(?:novel/|serie-)(\d+)/([^/?#]+)""").find(mangaPath.resolve(manga.url))
-        val rawId = match?.groupValues?.get(1) ?: ""
-        val slug = match?.groupValues?.get(2) ?: ""
+        val resolvedPath = mangaPath.resolve(manga.url)
+        val match = Regex("""(?:novel/|serie-)(\d+)/([^/?#]+)""").find(resolvedPath)
+            ?: throw Exception("Unrecognized WTR-LAB URL, missing novel id/slug: $resolvedPath")
+        val rawId = match.groupValues[1]
+        val slug = match.groupValues[2]
         return "$baseUrl/_next/data/$buildId/$lang/novel/$rawId/$slug.json" +
             "?locale=$lang&raw_id=$rawId&serie_slug=$slug"
     }
@@ -672,7 +697,7 @@ abstract class WtrLab :
                 ?: throw Exception("WTR-LAB redirected to an unrecognized path: $redirectPath")
             val redirectRawId = redirectMatch.groupValues[1]
             val redirectSlug = redirectMatch.groupValues[2]
-            val redirectUrl = "$baseUrl/_next/data/${getBuildId()}/$lang/novel/$redirectRawId/$redirectSlug.json" +
+            val redirectUrl = "$baseUrl/_next/data/${getBuildIdSuspend()}/$lang/novel/$redirectRawId/$redirectSlug.json" +
                 "?locale=$lang&raw_id=$redirectRawId&serie_slug=$redirectSlug"
             val redirectResponse = client.get(redirectUrl, headers, ensureSuccess = false)
             if (!redirectResponse.isSuccessful) {
@@ -699,7 +724,7 @@ abstract class WtrLab :
             if (sid != null && rid != null) cacheSerieId(rid, sid)
 
             val data = serieData["data"]?.jsonObject
-            manga.title = data?.get("title")?.jsonPrimitive?.contentOrNull ?: ""
+            manga.title = resolveTitleTemplate(data?.get("title")?.jsonPrimitive?.contentOrNull ?: "")
             manga.thumbnail_url = transformImageUrl(data?.get("image")?.jsonPrimitive?.contentOrNull)
             manga.author = data?.get("author")?.jsonPrimitive?.contentOrNull
 
@@ -751,8 +776,8 @@ abstract class WtrLab :
             altTitles = names.flatMap { nameElem ->
                 val obj = nameElem.jsonObject
                 listOfNotNull(
-                    obj["raw_title"]?.jsonPrimitive?.contentOrNull,
-                    obj["title"]?.jsonPrimitive?.contentOrNull,
+                    obj["raw_title"]?.jsonPrimitive?.contentOrNull?.let(::resolveTitleTemplate),
+                    obj["title"]?.jsonPrimitive?.contentOrNull?.let(::resolveTitleTemplate),
                 )
             }
         }
@@ -808,7 +833,6 @@ abstract class WtrLab :
             ?: return emptyList()
 
         val rawId = urlMatch.groupValues[1].toInt()
-        val slug = urlMatch.groupValues[2]
         val chapterCount = extractChapterCount(doc)
 
         if (chapterCount == 0) return emptyList()
@@ -833,7 +857,7 @@ abstract class WtrLab :
 
         Log.d(TAG, "getChapterList: startOrder=$startOrder keepCount=$keepCount")
 
-        val fresh = fetchAllChapters(rawId, chapterCount, slug, startOrder)
+        val fresh = fetchAllChapters(rawId, chapterCount, startOrder)
         return mergeChapters(chapters, fresh, keepCount).reversed()
     }
 
@@ -858,7 +882,7 @@ abstract class WtrLab :
             .find(doc.text())?.groupValues?.get(1)?.toIntOrNull() ?: 0
     }
 
-    private suspend fun fetchAllChapters(rawId: Int, totalChapters: Int, slug: String, startOrder: Int = 1): List<SChapter> {
+    private suspend fun fetchAllChapters(rawId: Int, totalChapters: Int, startOrder: Int = 1): List<SChapter> {
         val allChapters = mutableListOf<SChapter>()
         val batchSize = CHAPTER_BATCH
 
@@ -881,7 +905,7 @@ abstract class WtrLab :
                     allChapters.add(
                         SChapter.create().apply {
                             name = title
-                            url = "/$lang/novel/$rawId/$slug/chapter-$order"
+                            url = "/$lang/novel/$rawId/chapter-$order"
                             chapter_number = order.toFloat()
                             date_upload = parseDate(updatedAt)
                         },
