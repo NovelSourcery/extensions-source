@@ -104,7 +104,7 @@ abstract class WuxiaWorldEU :
         title = data["name"]!!.jsonPrimitive.content
         thumbnail_url = data["image"]?.jsonPrimitive?.contentOrNull
             ?: data["original_image"]?.jsonPrimitive?.contentOrNull
-        author = data["author"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull
+        author = (data["author"] as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull
         genre = data["categories"]?.jsonArray
             ?.mapNotNull { it.jsonObject["name"]?.jsonPrimitive?.contentOrNull }
             ?.joinToString()
@@ -140,7 +140,7 @@ abstract class WuxiaWorldEU :
 
     private fun parseChapterList(data: JsonObject): List<SChapter> {
         val slug = data["slug"]?.jsonPrimitive?.contentOrNull ?: return emptyList()
-        val count = data["chapters"]?.jsonPrimitive?.intOrNull ?: return emptyList()
+        val count = data["numOfChaps"]?.jsonPrimitive?.intOrNull ?: return emptyList()
         if (count <= 0) return emptyList()
 
         return (1..count).map { n ->
