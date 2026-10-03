@@ -19,6 +19,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
@@ -109,20 +110,42 @@ abstract class BakaTsuki :
     private fun parseRequest(title: String): Request {
         val url = apiUrl.toHttpUrl().newBuilder()
             .addQueryParameter("action", "parse")
-            .addQueryParameter("page", title.removePrefix("/").replace("_", " "))
+            .addQueryParameter("page", normalizedTitle(title).replace("_", " "))
             .addQueryParameter("prop", "text")
             .addQueryParameter("format", "json")
         return GET(url.build(), headers)
     }
 
+    private fun normalizedTitle(raw: String): String {
+        val title = if (raw.contains("title=")) raw.substringAfter("title=").substringBefore('&') else raw
+        return title.removePrefix("/").replace(" ", "_").substringBefore('#')
+    }
+
+    private fun withBalancedParentheses(title: String): String {
+        val open = title.count { it == '(' }
+        val close = title.count { it == ')' }
+        return if (open > close) title + ")".repeat(open - close) else title
+    }
+
+    private fun titleCandidates(rawTitle: String): List<String> {
+        val normalized = normalizedTitle(rawTitle)
+        val balanced = withBalancedParentheses(normalized)
+        return if (balanced == normalized) listOf(normalized) else listOf(normalized, balanced)
+    }
+
     override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val title = url.queryParameter("title")?.replace(" ", "_") ?: return null
-        val request = parseRequest(title)
-        val response = client.get(request.url, request.headers, ensureSuccess = false)
-        if (!response.isSuccessful) return null
-        return parseMangaDetails(response).apply { this.url = title }
+        val rawTitle = url.queryParameter("title") ?: return null
+        for (candidate in titleCandidates(rawTitle)) {
+            val request = parseRequest(candidate)
+            val response = client.get(request.url, request.headers, ensureSuccess = false)
+            if (!response.isSuccessful) continue
+            val manga = runCatching { parseMangaDetails(response) }.getOrNull() ?: continue
+            manga.url = candidate
+            return manga
+        }
+        return null
     }
 
     override suspend fun fetchMangaUpdate(
@@ -174,20 +197,21 @@ abstract class BakaTsuki :
         var counter = 0
 
         doc.select("a[href*=title=]").forEach { a ->
-            val chapterTitle = a.absUrl("href").toHttpUrl().queryParameter("title")
+            val chapterTitle = a.absUrl("href").toHttpUrlOrNull()?.queryParameter("title")
                 ?: return@forEach
-            if (!chapterTitle.startsWith("$projectTitle:")) return@forEach
+            val normalizedChapterTitle = withBalancedParentheses(normalizedTitle(chapterTitle))
+            if (!normalizedChapterTitle.startsWith("$projectTitle:")) return@forEach
             if (chapterTitle.contains("Illustrations", ignoreCase = true)) return@forEach
             val text = a.text()
             if (!CHAPTER_REGEX.containsMatchIn(text)) return@forEach
-            if (!seen.add(chapterTitle)) return@forEach
+            if (!seen.add(normalizedChapterTitle)) return@forEach
 
-            val volume = VOLUME_REGEX.find(chapterTitle)?.groupValues?.get(1)
+            val volume = VOLUME_REGEX.find(normalizedChapterTitle)?.groupValues?.get(1)
             counter++
             chapters.add(
                 SChapter.create().apply {
                     name = if (volume != null) "Volume $volume - $text" else text
-                    url = chapterTitle
+                    url = normalizedChapterTitle
                     chapter_number = counter.toFloat()
                 },
             )
