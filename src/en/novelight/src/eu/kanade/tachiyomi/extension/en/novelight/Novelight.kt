@@ -69,8 +69,10 @@ abstract class Novelight :
                 thumbnail_url = el.selectFirst("img")?.attr("abs:src")
             }
         }
-        val hasNext = doc.selectFirst("a.next, .pagination a[rel=next], a.page-link[rel=next]") != null ||
-            novels.isNotEmpty()
+        val currentPage = response.request.url.queryParameter("page")?.toIntOrNull() ?: 1
+        val hasNext = doc.select(".page-pagination a[href*=page=]").any {
+            it.attr("href").substringAfter("page=").takeWhile(Char::isDigit).toIntOrNull()?.let { n -> n > currentPage } == true
+        }
         return MangasPage(novels, hasNext)
     }
 
