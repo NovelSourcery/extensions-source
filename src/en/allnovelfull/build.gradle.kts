@@ -5,14 +5,15 @@ plugins {
 }
 
 keiyoushi {
-    name = "AllNovelFull"
-    versionCode = 4
+    name = "Novgo"
+    versionCode = 6
     contentWarning = ContentWarning.SAFE
     theme = "readnovelfull"
 
     source {
         lang = "en"
         baseUrl = "https://novgo.net"
+        id = 3273374795580060030L
     }
 
     deeplink {
