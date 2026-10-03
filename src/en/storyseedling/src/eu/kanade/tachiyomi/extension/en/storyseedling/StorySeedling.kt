@@ -111,9 +111,9 @@ abstract class StorySeedling :
         return client.post("$baseUrl/ajax", headers, body)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(fetchPopularMangaResponse(page))
+    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(fetchPopularMangaResponse(page), page)
 
-    private fun parseMangaListResponse(response: Response): MangasPage {
+    private fun parseMangaListResponse(response: Response, requestedPage: Int): MangasPage {
         val responseBody = response.body.string()
         if (responseBody.isBlank()) return MangasPage(emptyList(), false)
 
@@ -122,8 +122,12 @@ abstract class StorySeedling :
             val dataObj = jsonData["data"]?.jsonObject ?: return MangasPage(emptyList(), false)
             val posts = dataObj["posts"]?.jsonArray ?: return MangasPage(emptyList(), false)
 
-            // Get pagination info from JSON response
-            val currentPage = dataObj["page"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
+            // The API's own "page" field is unreliable - it comes back JSON null on some
+            // responses (its jsonPrimitive.content is then the literal string "null", not
+            // parseable as Int), which used to silently reset currentPage to 1 via the `?: 1`
+            // fallback and made hasNextPage true forever regardless of actual depth. The page we
+            // requested is already known, so use that instead of trusting the echoed field.
+            val currentPage = requestedPage
             val totalPages = dataObj["pages"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
 
             val mangas = posts.mapNotNull { post ->
@@ -153,7 +157,7 @@ abstract class StorySeedling :
 
     protected open suspend fun fetchLatestUpdatesResponse(page: Int): Response = fetchPopularMangaResponse(page)
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(fetchLatestUpdatesResponse(page))
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(fetchLatestUpdatesResponse(page), page)
 
     protected open suspend fun fetchSearchMangaResponse(page: Int, query: String, filters: FilterList): Response {
         var orderBy = "recent"
@@ -214,7 +218,7 @@ abstract class StorySeedling :
         return client.post("$baseUrl/ajax", headers, body.build())
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseMangaListResponse(fetchSearchMangaResponse(page, query, filters))
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseMangaListResponse(fetchSearchMangaResponse(page, query, filters), page)
 
     // ======================== Details + Chapters ========================
 
