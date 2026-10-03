@@ -343,7 +343,7 @@ abstract class WuxiaClick :
         }
     }
 
-    override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapter.url
+    override fun getChapterUrl(chapter: SChapter): String = "$baseUrl/chapter/${chapter.url.removePrefix("/chapter/")}"
 
     // ======================== Details + Chapters ========================
 
@@ -449,7 +449,7 @@ abstract class WuxiaClick :
 
         return chapters.map { chapter ->
             SChapter.create().apply {
-                url = "/chapter/${chapter.novSlugChapSlug}"
+                url = chapter.novSlugChapSlug
                 name = chapter.title
                 chapter_number = chapter.index.toFloat()
                 date_upload = parseChapterDate(chapter.timeAdded)
