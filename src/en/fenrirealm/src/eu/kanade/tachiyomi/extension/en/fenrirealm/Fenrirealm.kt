@@ -368,7 +368,20 @@ abstract class Fenrirealm :
 
     override suspend fun fetchPageText(page: Page): String {
         val doc = if (fetchChapterWithAPI) {
-            val response = client.get(apiBaseUrl + page.url, headers)
+            val response = client.get(
+                buildString {
+                    append(apiBaseUrl)
+                    page.url
+                        .substringBeforeLast('/')
+                        .let { append("$it") }
+                    page.url
+                        .substringAfterLast('/')
+                        .removePrefix("chapter-")
+                        .replace('-', '.')
+                        .let { append("/$it") }
+                },
+                headers,
+            )
             val chapter = json.decodeFromString<ChapterDto>(response.body.string())
             Jsoup.parseBodyFragment(chapter.content)
         } else {
