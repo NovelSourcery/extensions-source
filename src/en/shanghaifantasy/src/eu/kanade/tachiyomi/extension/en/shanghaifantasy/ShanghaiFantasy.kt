@@ -17,6 +17,7 @@ import keiyoushi.utils.SlugPath
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -48,13 +49,18 @@ abstract class ShanghaiFantasy :
         return parseMangaListResponse(response)
     }
 
+    private fun JsonElement?.asImageUrlOrEmpty(): String {
+        val primitive = this as? JsonPrimitive ?: return ""
+        return if (primitive.isString) primitive.content else ""
+    }
+
     private fun parseMangaListResponse(response: Response): MangasPage {
         val novels = json.decodeFromString<List<ShanghaiNovel>>(response.body.string())
         val mangas = novels.map { novel ->
             SManga.create().apply {
                 title = novel.title
                 url = mangaPath.slug(novel.permalink.removePrefix(baseUrl))
-                thumbnail_url = novel.novelImage
+                thumbnail_url = novel.novelImage.asImageUrlOrEmpty()
             }
         }
         return MangasPage(mangas, mangas.isNotEmpty())
@@ -234,7 +240,8 @@ abstract class ShanghaiFantasy :
     class ShanghaiNovel(
         val title: String = "",
         val permalink: String = "",
-        val novelImage: String = "",
+        // The API sends `false` instead of a url string when a novel has no cover image.
+        val novelImage: JsonElement? = null,
     )
 
     @Serializable
