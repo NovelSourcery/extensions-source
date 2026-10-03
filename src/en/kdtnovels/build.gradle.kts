@@ -6,9 +6,9 @@ plugins {
 
 keiyoushi {
     name = "KDT Novels"
-    versionCode = 3
+    versionCode = 4
     contentWarning = ContentWarning.SAFE
-    theme = "lightnovelwpnovel"
+    libVersion = "1.6"
 
     source {
         lang = "en"
