@@ -433,7 +433,7 @@ abstract class ReadNovelFull :
                     }
                 }
 
-                text.contains("Status", ignoreCase = true) -> {
+                text.contains("Status", ignoreCase = true) || element.select("span.glyphicon-time").isNotEmpty() -> {
                     status = parseStatus(text.substringAfter(":").trim())
                 }
 
@@ -552,7 +552,7 @@ abstract class ReadNovelFull :
         if (descCandidate.isBlank()) {
             descCandidate = document.selectFirst(
                 "div.desc-text#novel-description-content, div#novel-description-content, " +
-                    "div.novel-description-block div.desc-text, [itemprop=description], " +
+                    "div.novel-description-block div.desc-text, [itemprop=description]:not(meta), " +
                     "div.inner, div.desc, div.m-desc div.txt div.inner, " +
                     "div.summary div.content, div#editdescription, div.desc-text-full, " +
                     "div.novel-detail-body div.summary, div.desc_panel",
@@ -857,7 +857,7 @@ abstract class ReadNovelFull :
         Filter.Header("Type filters"),
         TypeFilter(getTypeOptions()),
         Filter.Header("Genre filters"),
-        GenreFilter(getGenreList()),
+        GenreFilter(getGenreList(data)),
         Filter.Header("Status filters"),
         StatusFilter(),
     )
@@ -901,6 +901,8 @@ abstract class ReadNovelFull :
     )
 
     protected open fun getGenreOptions(): List<Pair<String, String>> = emptyList()
+
+    protected open fun getGenreList(data: JsonElement?): List<Genre> = getGenreList()
 
     protected open fun getGenreList(): List<Genre> {
         val legacyGenreOptions = getGenreOptions()
