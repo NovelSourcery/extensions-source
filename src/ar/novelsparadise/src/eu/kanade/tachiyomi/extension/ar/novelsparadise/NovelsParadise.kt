@@ -53,6 +53,7 @@ abstract class NovelsParadise : LightNovelWPNovel() {
         return try {
             var html: String? = null
             runWebViewBlocking<Unit>(call = client.newCall(GET(url, headers)), timeout = 45.seconds) {
+                userAgent = headers["User-Agent"]!!
                 var done = false
                 var grabCount = 0
 
@@ -121,7 +122,7 @@ abstract class NovelsParadise : LightNovelWPNovel() {
 
                 onPageFinished { grab() }
                 poll(interval = 2.seconds) { grab() }
-                loadUrl(url)
+                loadUrl(url, headers.toMultimap().mapValues { it.value.first() })
             }
             html?.let { Jsoup.parse(it) }
         } catch (e: Exception) {
