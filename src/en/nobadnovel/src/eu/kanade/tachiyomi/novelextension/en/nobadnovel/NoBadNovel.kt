@@ -25,6 +25,12 @@ abstract class NoBadNovel :
 
     override val supportsLatest = true
 
+    private fun mangaSlug(path: String): String {
+        var p = path.trim('/')
+        while (p.startsWith("series/")) p = p.removePrefix("series/").trim('/')
+        return p
+    }
+
     override suspend fun getPopularManga(page: Int): MangasPage = browse(page, sort = "createdAt")
 
     override suspend fun getLatestUpdates(page: Int): MangasPage = browse(page, sort = "updatedAt")
@@ -49,7 +55,7 @@ abstract class NoBadNovel :
             if (title.isEmpty()) return@mapNotNull null
             SManga.create().apply {
                 this.title = title
-                this.url = link.attr("abs:href").toHttpUrl().encodedPath.removePrefix("/series/").removeSuffix("/")
+                this.url = mangaSlug(link.attr("abs:href").toHttpUrl().encodedPath)
                 thumbnail_url = link.parent()?.parent()?.selectFirst("img")?.attr("abs:src")
             }
         }
@@ -78,7 +84,7 @@ abstract class NoBadNovel :
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         return parseMangaDetails(doc).apply {
-            this.url = url.encodedPath.removePrefix("/series/").removeSuffix("/")
+            this.url = mangaSlug(url.encodedPath)
         }
     }
 
@@ -102,14 +108,18 @@ abstract class NoBadNovel :
     private fun parseChapterList(doc: Document): List<SChapter> = doc.select("#chapter-list a[href*=/series/]").map { link ->
         SChapter.create().apply {
             name = link.text()
-            url = link.attr("abs:href").toHttpUrl().encodedPath
+            url = link.attr("abs:href").toHttpUrl().encodedPath.removePrefix("/series/")
         }
     }.reversed()
+
+    private fun chapterPath(stored: String): String = if (stored.startsWith("/")) stored else "/series/$stored"
+
+    override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapterPath(chapter.url)
 
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.get(baseUrl + page.url, headers).asJsoup()
+        val doc = client.get(baseUrl + chapterPath(page.url), headers).asJsoup()
         val content = doc.selectFirst("p.para")?.parent() ?: throw Exception("Chapter content not found")
         content.select("script, ins.adsbygoogle").remove()
         return content.html()
