@@ -72,7 +72,7 @@ abstract class KolNovel : LightNovelWPNovel() {
             }
 
             // Remove paragraphs that are mostly English (spam)
-            val arabicCount = text.count { it in '؀'..'ۿ' || it in 'ݐ'..'ݿ' || it in 'ﭐ'..'﷿' || it in 'ﹰ'..'﻿' }
+            val arabicCount = text.count { it in '؀'..'ۿ' || it in 'ݐ'..'ݿ' || it in 'ﭐ'..'﷿' || it in 'ﹰ'..'\uFEFF' }
             val totalCount = text.replace("\\s".toRegex(), "").length
             if (totalCount > 0 && arabicCount.toFloat() / totalCount < 0.2f) {
                 p.remove()
