@@ -18,6 +18,7 @@ import keiyoushi.utils.formattedText
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -117,9 +118,9 @@ abstract class NovelBuddy :
     }
 
     private fun parseApiResponse(response: Response): MangasPage = try {
-        val items = json.parseToJsonElement(response.body.string())
-            .jsonObject["data"]?.jsonObject?.get("items")?.jsonArray
+        val dataObj = json.parseToJsonElement(response.body.string()).jsonObject["data"]?.jsonObject
             ?: return MangasPage(emptyList(), false)
+        val items = dataObj["items"]?.jsonArray ?: return MangasPage(emptyList(), false)
 
         val mangas = items.mapNotNull { item ->
             val obj = item.jsonObject
@@ -132,7 +133,12 @@ abstract class NovelBuddy :
                     ?.let { if (it.startsWith("//")) "https:$it" else it }
             }
         }
-        MangasPage(mangas, items.size >= 24)
+        // The API enforces a hard max_navigable_page (its search index's result-window cap) well
+        // before "items.size >= 24" stops being true, so a full last page still 400s on the next
+        // request. pagination.has_next is the API's own authoritative signal for this.
+        val hasNextPage = dataObj["pagination"]?.jsonObject?.get("has_next")?.jsonPrimitive?.booleanOrNull
+            ?: (items.size >= 24)
+        MangasPage(mangas, hasNextPage)
     } catch (e: Exception) {
         MangasPage(emptyList(), false)
     }
