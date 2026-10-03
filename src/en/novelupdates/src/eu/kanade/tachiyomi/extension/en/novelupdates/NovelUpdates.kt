@@ -391,7 +391,7 @@ abstract class NovelUpdates :
     override suspend fun getPopularManga(page: Int): MangasPage {
         val popularRequest = buildPopularMangaRequest(page)
         val doc = client.get(popularRequest.url, popularRequest.headers).asJsoup()
-        return parseNovelsFromSearch(doc)
+        return parseNovelsFromSearch(doc, popularRequest.url, page)
     }
 
     private fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/series-finder/?sf=1&sort=sdate&order=desc&pg=$page", headers)
@@ -417,10 +417,13 @@ abstract class NovelUpdates :
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val searchRequest = buildSearchMangaRequest(page, query, filters)
         val doc = client.get(searchRequest.url, searchRequest.headers).asJsoup()
-        return parseNovelsFromSearch(doc)
+        return parseNovelsFromSearch(doc, searchRequest.url, page)
     }
 
-    private fun parseNovelsFromSearch(doc: Document): MangasPage {
+    private var rankingKey: String? = null
+    private var rankingPreviousUrls: Set<String> = emptySet()
+
+    private fun parseNovelsFromSearch(doc: Document, requestUrl: HttpUrl? = null, page: Int = 1): MangasPage {
         val novels = doc.select("div.search_main_box_nu").mapNotNull { element ->
             val titleElement = element.select(".search_title > a").first() ?: return@mapNotNull null
             val novelUrl = titleElement.attr("href")
@@ -430,6 +433,15 @@ abstract class NovelUpdates :
                 thumbnail_url = element.select("img").attr("src")
                 url = mangaPathTemplate.slug(novelUrl.removePrefix(baseUrl))
             }
+        }
+
+        if (requestUrl != null && requestUrl.encodedPath.startsWith("/series-ranking")) {
+            val key = requestUrl.newBuilder().removeAllQueryParameters("pg").build().toString()
+            val previous = if (page > 1 && key == rankingKey) rankingPreviousUrls else emptySet()
+            val fresh = novels.filter { it.url !in previous }
+            rankingKey = key
+            rankingPreviousUrls = novels.map { it.url }.toSet()
+            return MangasPage(fresh, fresh.isNotEmpty())
         }
 
         val hasNextPage = doc.select(".digg_pagination a.next_page").isNotEmpty() ||
