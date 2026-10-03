@@ -50,6 +50,8 @@ abstract class MzNovels :
      */
     private val mangaPathTemplate: SlugPath = SlugPath("/novel/")
 
+    private fun mangaSlug(path: String): String = mangaPathTemplate.slug(path).substringBefore('/')
+
     override suspend fun fetchPageText(page: Page): String {
         val response = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
         val doc = response.asJsoup()
@@ -155,7 +157,7 @@ abstract class MzNovels :
 
             SManga.create().apply {
                 this.title = title
-                this.url = mangaPathTemplate.slug(novelUrl.removePrefix(baseUrl))
+                this.url = mangaSlug(novelUrl.removePrefix(baseUrl))
                 thumbnail_url = when {
                     coverUrl.isEmpty() -> ""
                     coverUrl.startsWith("http") -> coverUrl
@@ -306,7 +308,8 @@ abstract class MzNovels :
     override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val slug = mangaPathTemplate.slug(url.encodedPath)
+        if (!url.encodedPath.startsWith("/novel/")) return null
+        val slug = mangaSlug(url.encodedPath)
         val tempManga = SManga.create().apply { this.url = slug }
         val response = client.get(buildMangaDetailsUrl(tempManga), headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
