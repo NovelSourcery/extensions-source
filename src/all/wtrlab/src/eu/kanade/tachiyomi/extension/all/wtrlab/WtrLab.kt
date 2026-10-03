@@ -26,12 +26,14 @@ import keiyoushi.network.post
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.jsonInstance
+import keiyoushi.utils.parseAs
 import keiyoushi.utils.setAltTitles
 import keiyoushi.utils.toJsonRequestBody
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -305,14 +307,28 @@ abstract class WtrLab :
             else -> "ai"
         }
 
+        val chapterId = chapterIdFor(rawId, chapterNo)
+
+        // reader/get now only returns a signed content_url; the chapter payload is behind it.
         suspend fun fetchReader(mode: String): Response {
             val body = ReaderRequestBody(
                 translate = mode,
                 language = lang,
                 raw_id = rawId,
                 chapter_no = chapterNo,
+                chapter_id = chapterId,
             ).toJsonRequestBody()
-            return client.post("$baseUrl/api/reader/get", apiHeaders, body, ensureSuccess = false)
+            val readerResponse = client.post("$baseUrl/api/reader/get", apiHeaders, body, ensureSuccess = false)
+            val contentUrl = if (readerResponse.isSuccessful) {
+                runCatching {
+                    readerResponse.peekBody(Long.MAX_VALUE).string().parseAs<ReaderResponse>().contentUrl
+                }.getOrNull()
+            } else {
+                null
+            }
+            if (contentUrl == null) return readerResponse
+            readerResponse.close()
+            return client.get("$baseUrl$contentUrl", headers, ensureSuccess = false)
         }
 
         var response = fetchReader(apiTranslateParam)
@@ -968,8 +984,14 @@ abstract class WtrLab :
         val language: String,
         val raw_id: Int,
         val chapter_no: Int,
+        val chapter_id: Int? = null,
         val retry: Boolean = false,
         val force_retry: Boolean = false,
+    )
+
+    @Serializable
+    private class ReaderResponse(
+        @SerialName("content_url") val contentUrl: String? = null,
     )
 
     @Serializable
