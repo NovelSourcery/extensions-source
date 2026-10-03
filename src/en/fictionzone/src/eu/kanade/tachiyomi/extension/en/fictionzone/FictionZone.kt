@@ -290,6 +290,12 @@ abstract class FictionZone :
 
     override fun getMangaUrl(manga: SManga): String = baseUrl + resolveMangaPath(manga.url)
 
+    private fun resolveChapterPath(stored: String): String = when {
+        stored.startsWith("/") -> stored
+        stored.substringBefore('?').count { it == '/' } >= 2 -> "/omniportal/$stored"
+        else -> "/novel/$stored"
+    }
+
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
         val stored = when {
@@ -409,15 +415,13 @@ abstract class FictionZone :
             SChapter.create().apply {
                 name = chapter.title
 
-                // Site chapter paths, so webview works; fetchPageText maps
-                // them back onto the API endpoints
                 url = if (isOmniportal) {
                     val respSourceId = data.sourceId ?: sourceId
                     val respSourceKey = data.sourceKey ?: sourceKey
-                    "/omniportal/$respSourceId/$respSourceKey/${chapter.chapterId}"
+                    "$respSourceId/$respSourceKey/${chapter.chapterId}"
                 } else {
                     val slug = resolvedMangaUrl.removePrefix("/novel/").trim('/')
-                    "/novel/$slug/${chapter.chapterId}?novel_id=$novelId"
+                    "$slug/${chapter.chapterId}?novel_id=$novelId"
                 }
 
                 // API format is "yyyy-MM-dd HH:mm:ss" (confirmed live) - a bare "yyyy-MM-dd"
@@ -462,15 +466,14 @@ abstract class FictionZone :
 
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
-    // chapter.url is the site path; strip the helper novel_id query for webview
-    override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapter.url.substringBefore('?')
+    override fun getChapterUrl(chapter: SChapter): String = baseUrl + resolveChapterPath(chapter.url).substringBefore('?')
 
     /**
      * Fetches chapter content either by scraping the HTML page (recommended)
      * or via the API, depending on user preference.
      */
     override suspend fun fetchPageText(page: Page): String {
-        val chapterUrl = page.url
+        val chapterUrl = resolveChapterPath(page.url)
         val fullUrl = baseUrl + chapterUrl
 
         // Omniportal chapters are rendered client-side: the HTML page only ships a teaser that
