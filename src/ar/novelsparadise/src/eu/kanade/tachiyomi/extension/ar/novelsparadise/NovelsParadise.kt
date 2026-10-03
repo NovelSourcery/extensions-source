@@ -36,7 +36,7 @@ import kotlin.time.Duration.Companion.seconds
  */
 @Source
 abstract class NovelsParadise : LightNovelWPNovel() {
-    override val reverseChapters = true
+    override val reverseChapters = false
 
     /** Novel detail pages live at `/np-light/series/<slug>`; the slug is stored bare. */
     override val seriesPath: String = "np-light/series"
