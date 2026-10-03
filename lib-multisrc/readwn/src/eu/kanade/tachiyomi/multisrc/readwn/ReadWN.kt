@@ -51,6 +51,14 @@ abstract class ReadWN :
      */
     protected open val mangaPathTemplate: SlugPath = SlugPath("/novel/", ".html")
 
+    protected open val chapterPathTemplate: SlugPath = SlugPath("/novel/", ".html")
+
+    private fun storedChapterUrl(path: String): String = if (path.startsWith("/novel/") && path.endsWith(".html") && path.length > "/novel/.html".length) {
+        chapterPathTemplate.slug(path)
+    } else {
+        path
+    }
+
     /** Stores [SManga.url] as a bare slug via [mangaPathTemplate]. */
     protected fun SManga.setSlugUrl(href: String) = setSlugUrl(mangaPathTemplate, href)
 
@@ -241,6 +249,7 @@ abstract class ReadWN :
             SChapter.create().apply {
                 element.selectFirst("a")?.let {
                     setUrlWithoutDomain(it.attr("abs:href"))
+                    url = storedChapterUrl(url)
                 }
                 name = element.selectFirst("a .chapter-title")?.text() ?: "Chapter ${index + 1}"
                 chapter_number = (index + 1).toFloat()
@@ -262,7 +271,7 @@ abstract class ReadWN :
             for (i in (lastChapterNo + 1)..latestChapterNo) {
                 chapters.add(
                     SChapter.create().apply {
-                        url = novelPath.replace(".html", "_$i.html")
+                        url = storedChapterUrl(novelPath.replace(".html", "_$i.html"))
                         name = "Chapter $i"
                         chapter_number = i.toFloat()
                     },
@@ -297,12 +306,7 @@ abstract class ReadWN :
 
     override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
 
-    // Legacy library entries may still have a full absolute URL stored in SChapter.url from
-    // before chapter urls were domain-stripped via setUrlWithoutDomain(); pass those through
-    // unchanged instead of gluing baseUrl onto the front of them.
-    private fun absoluteUrl(path: String): String = if (path.startsWith("http://") || path.startsWith("https://")) path else baseUrl + path
-
-    override fun getChapterUrl(chapter: SChapter): String = absoluteUrl(chapter.url)
+    override fun getChapterUrl(chapter: SChapter): String = chapterPathTemplate.absolute(baseUrl, chapter.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
@@ -314,12 +318,12 @@ abstract class ReadWN :
 
     // Novel: single text page fetched once in fetchPageText. The app's getPageList short-circuit
     // returns the stub without calling this, so it never double-fetches.
-    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, imageUrl = absoluteUrl(chapter.url)))
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, imageUrl = chapterPathTemplate.absolute(baseUrl, chapter.url)))
 
     // ======================== Novel Content ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.newCall(GET(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)).execute()
+        val response = client.newCall(GET(chapterPathTemplate.absolute(baseUrl, page.url), headers)).execute()
         val document = response.asJsoup()
 
         return document.selectFirst(".chapter-content")?.html() ?: ""
