@@ -181,7 +181,9 @@ abstract class NovelCool :
     // The human-facing URL (/novel/<slug>.html) carries no book_id - the API needs one for every
     // other call - so scrape it off the page itself (embedded in a book-follow-trigger button).
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val visitPath = url.encodedPath.removePrefix("/novel/").removeSuffix(".html").trim('/')
+        var visitPath = url.encodedPath.trim('/')
+        while (visitPath.startsWith("novel/")) visitPath = visitPath.removePrefix("novel/").trim('/')
+        while (visitPath.endsWith(".html")) visitPath = visitPath.removeSuffix(".html")
         if (visitPath.isBlank()) return null
 
         val response = client.get(url, headers, ensureSuccess = false)
