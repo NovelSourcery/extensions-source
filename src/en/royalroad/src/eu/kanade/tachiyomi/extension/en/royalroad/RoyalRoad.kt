@@ -456,9 +456,7 @@ abstract class RoyalRoad :
 
         return orderedChapters.mapNotNull { chapter ->
             val volume = volumeMap[chapter.volumeId]
-            // Use the full URL path - RoyalRoad needs the complete URL format
-            // URL format: fiction/{id}/{slug}/chapter/{chapterId}/{chapterSlug}
-            val chapterUrl = if (chapter.url.startsWith("/")) chapter.url else "/${chapter.url}"
+            val chapterUrl = "$CHAPTER_PREFIX${chapter.id}"
             SChapter.create().apply {
                 name = chapter.title
                 url = chapterUrl
@@ -474,9 +472,12 @@ abstract class RoyalRoad :
     private fun parseDate(dateString: String): Long = Instant.parseOrNull(dateString)?.toEpochMilliseconds() ?: 0L
 
     // Page list - return single page with the chapter URL
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        // chapter.url already contains 'fiction/' prefix, e.g., 'fiction/137985/chapter/12345678'
-        return listOf(Page(0, absoluteUrl(chapter.url), null))
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, getChapterUrl(chapter), null))
+
+    override fun getChapterUrl(chapter: SChapter): String = if (chapter.url.startsWith(CHAPTER_PREFIX)) {
+        absoluteUrl("fiction/${chapter.url}")
+    } else {
+        absoluteUrl(chapter.url)
     }
 
     override fun getMangaUrl(manga: SManga): String = absoluteUrl(mangaPath.resolve(manga.url))
@@ -686,6 +687,8 @@ abstract class RoyalRoad :
         }
     }
 }
+
+private const val CHAPTER_PREFIX = "chapter/"
 
 // Data classes for JSON parsing
 @Serializable
