@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "LnCrawler"
-    versionCode = 8
+    versionCode = 9
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 
@@ -17,6 +17,7 @@ keiyoushi {
 
     deeplink {
         host("lncrawler.monster")
+        host("www.lncrawler.monster")
         path("/novels/..*")
     }
 }
