@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "Sufficient Velocity"
-    versionCode = 3
+    versionCode = 4
     contentWarning = ContentWarning.SAFE
     theme = "xenforo"
 

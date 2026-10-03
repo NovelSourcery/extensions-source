@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "LightNovelFR"
-    versionCode = 3
+    versionCode = 4
     contentWarning = ContentWarning.SAFE
     theme = "lightnovelwpnovel"
 
