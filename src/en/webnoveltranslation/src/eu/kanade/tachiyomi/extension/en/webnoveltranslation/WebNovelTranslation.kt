@@ -254,7 +254,7 @@ abstract class WebNovelTranslation :
         }
     }
 
-    private fun SManga.novelId(): String = url.trimStart('/').substringBefore('/')
+    private fun SManga.novelId(): String = mangaPathTemplate.slug(mangaPathTemplate.resolve(url))
 
     private fun String.normalizeForSearch(): String = lowercase().replace(Regex("[^a-z0-9]"), "")
 
