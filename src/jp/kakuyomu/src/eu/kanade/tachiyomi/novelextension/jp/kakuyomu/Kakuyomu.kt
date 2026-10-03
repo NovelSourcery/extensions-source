@@ -70,7 +70,7 @@ abstract class Kakuyomu :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val workId = manga.url.substringAfterLast("/")
+        val workId = workIdOf(manga.url)
         val doc = client.get("$baseUrl/works/$workId", headers).asJsoup()
         val apollo = doc.extractApolloState() ?: return SMangaUpdate(manga, chapters)
         val work = apollo["Work:$workId"]?.parseAs<WorkDto>()
@@ -92,13 +92,21 @@ abstract class Kakuyomu :
             val episode = apollo.deref(episodeRef)?.parseAs<EpisodeDto>() ?: return@mapNotNull null
             number++
             SChapter.create().apply {
-                url = "/works/$workId/episodes/$episodeId"
+                url = "$workId/$episodeId"
                 name = episode.title ?: "Episode $number"
                 chapter_number = number.toFloat()
                 date_upload = episode.publishedAt?.let { Instant.parseOrNull(it)?.toEpochMilliseconds() } ?: 0L
             }
         }.reversed()
     }
+
+    private fun workIdOf(stored: String): String = stored.substringAfterLast("/")
+
+    private fun chapterPath(stored: String): String = if (stored.startsWith("/")) stored else "/works/${stored.substringBefore("/")}/episodes/${stored.substringAfter("/")}"
+
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl/works/${workIdOf(manga.url)}"
+
+    override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapterPath(chapter.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val workId = url.pathSegments.getOrNull(1) ?: return null
@@ -111,7 +119,7 @@ abstract class Kakuyomu :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.get(baseUrl + page.url, headers).asJsoup()
+        val doc = client.get(baseUrl + chapterPath(page.url), headers).asJsoup()
         val body = doc.selectFirst(".widget-episodeBody") ?: throw Exception("Kakuyomu: episode body not found")
 
         body.select("rt, rp").remove()
@@ -153,7 +161,7 @@ abstract class Kakuyomu :
         val tableOfContentsV2: List<JsonElement> = emptyList(),
     ) {
         fun toSManga(apollo: JsonObject): SManga = SManga.create().apply {
-            url = "/works/$id"
+            url = id
             title = this@WorkDto.title
             thumbnail_url = "https://cdn-static.kakuyomu.jp/works/$id/ogimage.png"
             author = apollo.deref(this@WorkDto.author)?.parseAs<UserAccountDto>()?.activityName
