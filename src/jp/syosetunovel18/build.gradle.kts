@@ -8,7 +8,7 @@ keiyoushi {
     contentWarning = ContentWarning.NSFW
 
     name = "小説家になろう (R18)"
-    versionCode = 3
+    versionCode = 4
     theme = "syosetu"
 
     source {
