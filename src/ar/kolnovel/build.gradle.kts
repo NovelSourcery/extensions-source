@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "Kol Novel"
-    versionCode = 5
+    versionCode = 6
     contentWarning = ContentWarning.SAFE
     theme = "lightnovelwpnovel"
 
