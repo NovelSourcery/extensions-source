@@ -11,7 +11,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.lib.chapterutils.checkCloudflare
-import keiyoushi.lib.cookieinterceptor.CookieInterceptor
+import keiyoushi.network.addCookie
 import keiyoushi.network.get
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
@@ -65,11 +65,11 @@ abstract class SyosetuBase(
     // CookieJar-backed BridgeInterceptor as soon as the jar holds any cookie for that host
     // (which it will, from ordinary browsing/WebView use) - it replaces the whole header
     // rather than merging into it. Seeding the age-gate cookie into the shared CookieManager
-    // itself (what CookieInterceptor does) is what actually survives that.
+    // itself (what addCookie does) is what actually survives that.
     override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder {
         var builder = rateLimit(minimumDelayMillis, recommendedPermits)
         if (isAdult) {
-            builder = builder.addInterceptor(CookieInterceptor("syosetu.com", "over18" to "yes"))
+            builder = builder.addCookie({ "syosetu.com" }, "over18" to "yes")
         }
         return builder
     }

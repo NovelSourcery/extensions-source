@@ -10,17 +10,14 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
+import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
-import keiyoushi.utils.WebViewSession
-import keiyoushi.utils.WebViewTimeoutException
-import keiyoushi.utils.parseAs
-import keiyoushi.utils.runWebView
 import keiyoushi.utils.setAltTitles
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Response
+import okhttp3.OkHttpClient
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -37,41 +34,7 @@ abstract class NovelsPl :
 
     override val supportsLatest = false
 
-    private val webViewSession = WebViewSession()
-
-    private suspend fun getBypassingChallenge(url: String): Response {
-        var response = client.get(url, headers)
-        if (isChallengePage(response)) {
-            response.close()
-            solveAnubisChallenge(url)
-            response = client.get(url, headers)
-        }
-        return response
-    }
-
-    private fun isChallengePage(response: Response): Boolean = "anubis_challenge" in response.peekBody(4096).string()
-
-    private suspend fun solveAnubisChallenge(url: String) {
-        try {
-            runWebView<Unit>(session = webViewSession, timeout = 30.seconds) {
-                useOkHttpNetwork = true
-                var resolved = false
-                onPageFinished {
-                    if (resolved) return@onPageFinished
-                    evaluateJs("document.title") { titleJson ->
-                        val title = titleJson.parseAs<String>()
-                        if (!title.contains("not a bot", ignoreCase = true)) {
-                            resolved = true
-                            resolve(Unit)
-                        }
-                    }
-                }
-                loadUrl(url)
-            }
-        } catch (e: WebViewTimeoutException) {
-            throw Exception("Novels.pl: could not solve the anti-bot challenge automatically. Please open the site in WebView once, then retry.", e)
-        }
-    }
+    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = rateLimit(permits = 2, period = 1.seconds)
 
     override suspend fun getPopularManga(page: Int): MangasPage = browse(page, "")
 
@@ -80,7 +43,7 @@ abstract class NovelsPl :
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = browse(page, query)
 
     private suspend fun browse(page: Int, query: String): MangasPage {
-        val doc = getBypassingChallenge("$baseUrl/listNovels").asJsoup()
+        val doc = client.get("$baseUrl/listNovels").asJsoup()
         val all = doc.select("a[data-toggle=tooltip][href*=/novel/]")
         val entries: List<Element> = if (query.isNotBlank()) {
             all.filter { it.text().contains(query, ignoreCase = true) }
@@ -112,7 +75,7 @@ abstract class NovelsPl :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val doc = getBypassingChallenge(getMangaUrl(manga)).asJsoup()
+        val doc = client.get(getMangaUrl(manga)).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) parseAllChapters(doc, manga) else chapters
@@ -121,7 +84,7 @@ abstract class NovelsPl :
     }
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? = runCatching {
-        val response = getBypassingChallenge(url.toString())
+        val response = client.get(url.toString())
         parseMangaDetails(response.asJsoup()).apply {
             this.url = url.encodedPath.removePrefix("/novel/")
         }
@@ -180,7 +143,7 @@ abstract class NovelsPl :
         } else {
             coroutineScope {
                 val rest = (2..lastPage).map { p ->
-                    async { getBypassingChallenge("${getMangaUrl(manga)}?p=$p").asJsoup() }
+                    async { client.get("${getMangaUrl(manga)}?p=$p").asJsoup() }
                 }
                 listOf(firstPageDoc) + rest.map { it.await() }
             }
@@ -208,7 +171,7 @@ abstract class NovelsPl :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = getBypassingChallenge(baseUrl + page.url).asJsoup()
+        val doc = client.get(baseUrl + page.url).asJsoup()
         val content = doc.selectFirst("#chapter-content") ?: throw Exception("Chapter content not found")
         content.selectFirst("h4")?.remove()
         return content.html()
