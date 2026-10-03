@@ -254,7 +254,7 @@ abstract class NovelDex :
 
     // ======================== Details ========================
 
-    private suspend fun parseMangaDetails(rawBody: String): SManga {
+    private suspend fun parseMangaDetails(rawBody: String, fallbackPath: String? = null, existingTitle: String? = null): SManga {
         val (body, redirectedPath) = resolveRedirects(rawBody)
 
         // RSC response contains a JSON fragment with series data
@@ -272,9 +272,22 @@ abstract class NovelDex :
             parseMangaFromRaw(body)
         }
 
-        if (redirectedPath != null) manga.url = redirectedPath
+        if (manga.title.isBlank()) manga.title = existingTitle?.takeIf { it.isNotBlank() } ?: "Unknown Title"
+
+        val resolvedStoredUrl = listOfNotNull(redirectedPath, fallbackPath)
+            .firstNotNullOfOrNull(::seriesStoredUrlFromPath)
+        if (manga.urlOrNull().isNullOrBlank() && resolvedStoredUrl != null) {
+            manga.url = resolvedStoredUrl
+        }
         return manga
     }
+
+    private fun seriesStoredUrlFromPath(path: String): String? {
+        val match = Regex("""/series/([^/]+)/([^/?#]+)""").find(path) ?: return null
+        return "${match.groupValues[1]}/${match.groupValues[2]}"
+    }
+
+    private fun SManga.urlOrNull(): String? = runCatching { url }.getOrNull()
 
     private fun parseMangaFromJson(seriesJson: String, fullBody: String): SManga {
         // Extract the series object – it's embedded in RSC, parse key fields with regex
@@ -396,7 +409,7 @@ abstract class NovelDex :
         val rawBody = response.body.string()
         val requestPath = response.request.url.encodedPath
 
-        val updatedManga = if (fetchDetails) parseMangaDetails(rawBody) else manga
+        val updatedManga = if (fetchDetails) parseMangaDetails(rawBody, requestPath, runCatching { manga.title }.getOrNull()) else manga
         val updatedChapters = if (fetchChapters) parseChapterListBody(rawBody, requestPath) else chapters
         return SMangaUpdate(updatedManga, updatedChapters)
     }
@@ -561,8 +574,10 @@ abstract class NovelDex :
         val path = url.encodedPath
         val response = client.get(baseUrl + path, rscHeaders(), ensureSuccess = false)
         if (!response.isSuccessful) return null
-        val manga = parseMangaDetails(response.body.string())
-        if (manga.url.isBlank()) manga.url = mangaPath.slug(path)
+        val manga = parseMangaDetails(response.body.string(), path)
+        if (manga.urlOrNull().isNullOrBlank()) {
+            manga.url = seriesStoredUrlFromPath(path) ?: mangaPath.slug(path)
+        }
         return manga
     }
 
