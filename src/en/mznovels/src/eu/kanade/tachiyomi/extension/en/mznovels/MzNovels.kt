@@ -98,7 +98,7 @@ abstract class MzNovels :
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val response = client.get(buildLatestUpdatesUrl(page), headers)
-        return parseNovelList(response, 1) // page is already in URL
+        return parseNovelList(response.asJsoup(), 1) // page is already in URL
     }
     // ======================== Search ========================
 
@@ -136,11 +136,12 @@ abstract class MzNovels :
             return MangasPage(emptyList(), false)
         }
 
-        return parseNovelList(response, requestedPage)
+        // The response body can only be consumed once - reuse the Document already parsed
+        // above instead of calling response.asJsoup() again (throws once the body is closed).
+        return parseNovelList(doc, requestedPage)
     }
 
-    private fun parseNovelList(response: Response, pageNo: Int): MangasPage {
-        val doc = response.asJsoup()
+    private fun parseNovelList(doc: Document, pageNo: Int): MangasPage {
         checkCaptcha(doc)
 
         val novels = doc.select("ul.search-results-list > li.search-result-item:not(.ad-result-item)").mapNotNull { element ->
