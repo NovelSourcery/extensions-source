@@ -5,6 +5,7 @@ on:
     paths:
       - '**'
       - '!**.md'
+      - 'src/**.md'
       - '!.github/**'
       - '.github/workflows/build_pull_request.yml'
 

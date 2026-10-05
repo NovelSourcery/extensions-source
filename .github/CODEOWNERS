@@ -4,6 +4,3 @@
 *            @NovelSourcery/owners
 
 /src/        @NovelSourcery/maintainers @NovelSourcery/owners
-
-# Kept after /src/ so docs inside extension modules stay owner-gated.
-*.md         @NovelSourcery/owners
