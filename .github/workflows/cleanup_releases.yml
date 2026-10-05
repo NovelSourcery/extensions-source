@@ -17,6 +17,7 @@ jobs:
     name: Remove unreferenced release assets
     if: github.repository == 'novelsourcery/extensions-source'
     runs-on: ubuntu-latest
+    environment: Release
     timeout-minutes: 240
     steps:
       - name: Checkout main branch

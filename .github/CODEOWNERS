@@ -1,1 +1,24 @@
-/src/zh/ @stevenyomi
+# Paths here require owner approval. Unlisted paths (extension modules under
+# src/) have no code owner, so maintainers can merge them once checks pass.
+
+*.md                 @NovelSourcery/owners
+
+/.github/            @NovelSourcery/owners
+/scripts/            @NovelSourcery/owners
+
+/buildSrc/           @NovelSourcery/owners
+/gradle/             @NovelSourcery/owners
+/core/               @NovelSourcery/owners
+/compiler/           @NovelSourcery/owners
+/common/             @NovelSourcery/owners
+/lib/                @NovelSourcery/owners
+/lib-multisrc/       @NovelSourcery/owners
+
+/build.gradle.kts    @NovelSourcery/owners
+/settings.gradle.kts @NovelSourcery/owners
+/common.gradle       @NovelSourcery/owners
+/gradle.properties   @NovelSourcery/owners
+/gradlew             @NovelSourcery/owners
+/gradlew.bat         @NovelSourcery/owners
+/ext-bootstrap.py    @NovelSourcery/owners
+/.kei-sync*          @NovelSourcery/owners

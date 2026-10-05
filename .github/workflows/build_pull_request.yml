@@ -120,3 +120,23 @@ jobs:
             TASKS+=("${module}:lintRelease")
           done
           ./gradlew "${TASKS[@]}"
+
+  # Single required status check: matrix job names never expand when skipped,
+  # and chunk count varies, so rulesets can't target the build jobs directly.
+  result:
+    name: PR check result
+    needs: [prepare, build, lint-shared]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check job results
+        env:
+          PREPARE: ${{ needs.prepare.result }}
+          BUILD: ${{ needs.build.result }}
+          LINT: ${{ needs.lint-shared.result }}
+        run: |
+          [ "$PREPARE" = success ] || exit 1
+          for result in "$BUILD" "$LINT"; do
+            case "$result" in success|skipped) ;; *) exit 1 ;; esac
+          done
