@@ -1662,7 +1662,7 @@ The `id` also must be explicitly set to the old value in the `source {}` block i
 ##### Moving a source to a different directory
 
 The application ID is derived from the module path (`src/<lang>/<name>` becomes
-`eu.kanade.tachiyomi.extension.<lang>.<name>`). When moving a source to a different directory
+`eu.kanade.tachiyomi.novelextension.<lang>.<name>`). When moving a source to a different directory
 (e.g. `en` to `all`, or a rename of the module directory), set `pkgName` in the new
 module's `build.gradle.kts` to the old path-derived suffix so the package name stays the same:
 
@@ -1788,7 +1788,7 @@ keiyoushi {
 
 ```kotlin
 // MySource.kt
-package eu.kanade.tachiyomi.extension.en.mysource
+package eu.kanade.tachiyomi.novelextension.en.mysource
 
 import keiyoushi.annotation.Source
 
