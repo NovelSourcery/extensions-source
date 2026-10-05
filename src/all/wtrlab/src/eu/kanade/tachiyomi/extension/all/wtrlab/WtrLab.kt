@@ -323,9 +323,45 @@ abstract class WtrLab :
         }
 
         val dataObj = jsonResult["data"]?.jsonObject
-            ?.get("data")?.jsonObject
-            ?: throw Exception("Could not find chapter data in API response")
+    ?.get("data")?.jsonObject
+    ?: run {
+        val contentUrl = jsonResult["content_url"]
+            ?.jsonPrimitive
+            ?.contentOrNull
+            ?: throw Exception(
+                "Could not find chapter data or content URL in API response"
+            )
 
+        val resolvedUrl = if (
+            contentUrl.startsWith("http://") ||
+            contentUrl.startsWith("https://")
+        ) {
+            contentUrl
+        } else {
+            "$baseUrl/${contentUrl.trimStart('/')}"
+        }
+
+        val contentResponse = client.get(
+            resolvedUrl,
+            apiHeaders,
+        )
+
+        if (!contentResponse.isSuccessful) {
+            throw Exception(
+                "Chapter content request failed: ${contentResponse.code} ${contentResponse.message}"
+            )
+        }
+
+        val contentJson = json
+            .parseToJsonElement(contentResponse.body.string())
+            .jsonObject
+
+        contentJson["data"]?.jsonObject
+            ?.get("data")?.jsonObject
+            ?: throw Exception(
+                "Could not find chapter data in content URL response"
+            )
+    }
         val body = dataObj["body"]
             ?: throw Exception("Could not find chapter content in API response")
 
