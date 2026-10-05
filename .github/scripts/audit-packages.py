@@ -4,7 +4,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-EXTENSION_PREFIX = "eu.kanade.tachiyomi.extension"
+EXTENSION_PREFIX = "eu.kanade.tachiyomi.novelextension"
 PKG_NAME_REGEX = re.compile(r"""pkgName\s*=\s*["']([^"']+)["']""")
 SUFFIX_REGEX = re.compile(r"""^\w+(\.\w+)+$""", re.ASCII)
 
