@@ -2,7 +2,7 @@ import os
 import subprocess
 import time
 
-REPO_NAME = os.environ.get("TARGET_REPO", "novelsourcery/extensions")
+REPO_NAME = os.environ.get("TARGET_REPO", "NovelSourcery/extensions")
 RETRY_ATTEMPTS = 4
 RETRY_BASE_DELAY = 60
 
