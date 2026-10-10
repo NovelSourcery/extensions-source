@@ -29,7 +29,9 @@ import org.jsoup.nodes.Element
  * would otherwise win over the current default.
  */
 @Source
-abstract class OrvReader : KeiSource(), NovelSource {
+abstract class OrvReader :
+    KeiSource(),
+    NovelSource {
 
     override val supportsLatest = false
 
@@ -66,11 +68,9 @@ abstract class OrvReader : KeiSource(), NovelSource {
 
     // --- Unsupported endpoints -------------------------------------------------------------
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage =
-        throw UnsupportedOperationException("Latest is not supported for $name")
+    override suspend fun getLatestUpdates(page: Int): MangasPage = throw UnsupportedOperationException("Latest is not supported for $name")
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage =
-        throw UnsupportedOperationException("Search is not supported for $name")
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = throw UnsupportedOperationException("Search is not supported for $name")
 
     // --- URL builders ----------------------------------------------------------------------
 
@@ -297,20 +297,19 @@ abstract class OrvReader : KeiSource(), NovelSource {
         }
     }
 
-    private fun elementMatches(element: Element, selectorGroup: String): Boolean =
-        selectorGroup.split(",").any { raw ->
-            val selector = raw.trim()
-            when {
-                selector.isEmpty() -> false
-                selector == "*" -> true
-                selector == "body" -> false // applied to the wrapper instead
-                else -> try {
-                    element.`is`(selector)
-                } catch (e: Exception) {
-                    false
-                }
+    private fun elementMatches(element: Element, selectorGroup: String): Boolean = selectorGroup.split(",").any { raw ->
+        val selector = raw.trim()
+        when {
+            selector.isEmpty() -> false
+            selector == "*" -> true
+            selector == "body" -> false // applied to the wrapper instead
+            else -> try {
+                element.`is`(selector)
+            } catch (e: Exception) {
+                false
             }
         }
+    }
 
     /**
      * Appends `!important` to each declaration. Inline `!important` is the highest-
@@ -319,19 +318,18 @@ abstract class OrvReader : KeiSource(), NovelSource {
      * excluded — the first so the user's reader font survives, the second because a
      * declaration like `--x: 1` cannot carry `!important`.
      */
-    private fun markImportant(declarations: String): String =
-        declarations.split(";")
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .joinToString("; ") { decl ->
-                val prop = decl.substringBefore(":").trim().lowercase()
-                when {
-                    prop == "font-family" -> decl
-                    prop.startsWith("--") -> decl
-                    decl.endsWith("!important", ignoreCase = true) -> decl
-                    else -> "$decl !important"
-                }
+    private fun markImportant(declarations: String): String = declarations.split(";")
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .joinToString("; ") { decl ->
+            val prop = decl.substringBefore(":").trim().lowercase()
+            when {
+                prop == "font-family" -> decl
+                prop.startsWith("--") -> decl
+                decl.endsWith("!important", ignoreCase = true) -> decl
+                else -> "$decl !important"
             }
+        }
 
     /**
      * Parses a stylesheet into (`:root` variables, list of [CssRule]).
