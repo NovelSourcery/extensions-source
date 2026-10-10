@@ -24,9 +24,11 @@ import org.jsoup.nodes.Element
  *
  * The reader strips `<style>` tags but honors inline `style=""` attributes, so the site's
  * two stylesheets are fetched, parsed into rules, and merged into each element's inline
- * style. Theme classes are force-overridden to the site's own defaults, matching what
- * `reader.js` does at runtime — the raw HTML often carries stale `themeN` classes that
- * would otherwise win over the current default.
+ * style. Theme classes are force-overridden to the site's own defaults — the raw HTML
+ * often carries stale `themeN` classes that would otherwise win.
+ *
+ * Rules targeting `::before` / `::after` cannot be expressed as inline styles, so each
+ * matched element gets a synthetic `<span>` child styled to mimic the pseudo-element.
  */
 @Source
 abstract class OrvReader :
@@ -238,15 +240,18 @@ abstract class OrvReader :
 
         applyThemeClasses(main)
 
-        val (variables, rules) = parseCss(css)
-        applyInlineStyles(main, rules)
+        val parsed = parseCss(css)
+        applyInlineStyles(main, parsed.rules)
+        applyPseudoElements(main, parsed.pseudoRules)
 
         // The wrapper carries the `:root` variables and any `body { … }` defaults. Inline
         // custom properties inherit, so `var(--primary)` etc. resolve throughout.
-        val bodyDefaults = rules.filter { it.selector == "body" }.joinToString("; ") { it.declarations }
+        val bodyDefaults = parsed.rules
+            .filter { it.selector == "body" }
+            .joinToString("; ") { it.declarations }
         val wrapperStyle = buildString {
             if (bodyDefaults.isNotEmpty()) append(bodyDefaults).append("; ")
-            append(variables)
+            append(parsed.variables)
         }.trim().trimEnd(';')
 
         return "<div style=\"$wrapperStyle\">${main.outerHtml()}</div>"
@@ -279,12 +284,7 @@ abstract class OrvReader :
     }
 
     private fun applyInlineStyles(root: Element, rules: List<CssRule>) {
-        val elements = ArrayList<Element>(1 + root.select("*").size).apply {
-            add(root)
-            addAll(root.select("*"))
-        }
-
-        for (element in elements) {
+        for (element in allElements(root)) {
             val matched = rules.filter { elementMatches(element, it.selector) }
             if (matched.isEmpty()) continue
 
@@ -295,6 +295,67 @@ abstract class OrvReader :
                 if (existing.isEmpty()) newDeclarations else "$existing; $newDeclarations",
             )
         }
+    }
+
+    /**
+     * Injects a `<span>` child for every `::before` / `::after` rule that matches an
+     * element. The span is styled with the pseudo-element's declarations, so the visual
+     * effect matches the site's own rendering. `::before` spans are prepended, `::after`
+     * spans appended.
+     */
+    private fun applyPseudoElements(root: Element, rules: List<PseudoRule>) {
+        if (rules.isEmpty()) return
+
+        // Group by (baseSelector, pseudoType) so a single `::before` that receives
+        // declarations from multiple CSS rules gets all of them merged.
+        val grouped = LinkedHashMap<Pair<String, String>, StringBuilder>()
+        for (rule in rules) {
+            val key = rule.baseSelector to rule.pseudoType
+            val sb = grouped.getOrPut(key) { StringBuilder() }
+            if (sb.isNotEmpty()) sb.append("; ")
+            sb.append(rule.declarations)
+        }
+
+        for ((key, sb) in grouped) {
+            val (baseSelector, pseudoType) = key
+            val targets = allElements(root).filter { elementMatches(it, baseSelector) }
+            if (targets.isEmpty()) continue
+
+            val declarations = sb.toString()
+            for (target in targets) {
+                // Skip if this target already has a matching pseudo-element span. Jsoup
+                // does not support `:scope`, so inspect direct children directly.
+                val alreadyHas = target.children().any { it.attr(PSEUDO_ATTR) == pseudoType }
+                if (alreadyHas) continue
+
+                val span = Element("span")
+                span.attr(PSEUDO_ATTR, pseudoType)
+
+                // Extract any textual content from `content: "…"` so static pseudo-content
+                // (e.g. `content: "++"`) still renders. Empty content leaves the span bare.
+                val contentText = CONTENT_DECL.find(declarations)
+                    ?.groupValues?.get(1)
+                    ?.let(::decodeCssEscapes)
+                    .orEmpty()
+                if (contentText.isNotEmpty()) span.text(contentText)
+
+                // Strip `content:` — meaningless on a real element and would otherwise
+                // appear in the inline style string.
+                val cleanedDeclarations = CONTENT_DECL.replace(declarations, "").trim().trim(';', ' ')
+
+                span.attr("style", markImportant(cleanedDeclarations))
+
+                when (pseudoType) {
+                    "before" -> target.prependChild(span)
+                    else -> target.appendChild(span)
+                }
+            }
+        }
+    }
+
+    private fun allElements(root: Element): List<Element> = ArrayList<Element>(1 + root.select("*").size).apply {
+        add(root)
+        addAll(root.select("*"))
     }
 
     private fun elementMatches(element: Element, selectorGroup: String): Boolean = selectorGroup.split(",").any { raw ->
@@ -332,14 +393,14 @@ abstract class OrvReader :
         }
 
     /**
-     * Parses a stylesheet into (`:root` variables, list of [CssRule]).
+     * Parses a stylesheet into (`:root` variables, flat rules, pseudo-element rules).
      *
      * Jsoup has no CSS parser, and the site's stylesheets are flat rules with no nesting,
      * so a small regex-based extraction is sufficient. `@media` blocks are stripped first
-     * (see [stripMediaQueries]); pseudo-elements and interactive pseudo-classes cannot be
+     * (see [stripMediaQueries]); interactive pseudo-classes (`:hover` etc.) cannot be
      * expressed as inline styles and are dropped.
      */
-    private fun parseCss(css: String): Pair<String, List<CssRule>> {
+    private fun parseCss(css: String): ParsedCss {
         val noComments = css.replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "")
         val cleaned = stripMediaQueries(noComments)
 
@@ -350,26 +411,56 @@ abstract class OrvReader :
             ?.trimEnd(';')
             .orEmpty()
 
-        val ruleRegex = Regex("""([^{}@][^{}]*?)\s*\{([^{}]*)\}""")
-        val rules = ruleRegex.findAll(cleaned).mapNotNull { match ->
-            val selector = match.groupValues[1].trim()
-            val declarations = match.groupValues[2].trim().replace(Regex("\\s+"), " ")
-            when {
-                selector.isEmpty() || declarations.isEmpty() -> null
-                selector == ":root" -> null
-                selector.contains("::") -> null
-                selector.contains(":hover") -> null
-                selector.contains(":active") -> null
-                selector.contains(":focus") -> null
-                selector.contains(":checked") -> null
-                selector.contains(":disabled") -> null
-                selector.startsWith("@") -> null
-                else -> CssRule(selector, declarations)
-            }
-        }.toList()
+        val normalRules = ArrayList<CssRule>()
+        val pseudoRules = ArrayList<PseudoRule>()
 
-        return variables to rules
+        val ruleRegex = Regex("""([^{}@][^{}]*?)\s*\{([^{}]*)\}""")
+        ruleRegex.findAll(cleaned).forEach { match ->
+            val selectorGroup = match.groupValues[1].trim()
+            val declarations = match.groupValues[2].trim().replace(Regex("\\s+"), " ")
+
+            if (selectorGroup.isEmpty() || declarations.isEmpty()) return@forEach
+            if (selectorGroup == ":root") return@forEach
+            if (selectorGroup.startsWith("@")) return@forEach
+
+            selectorGroup.split(",").forEach { raw ->
+                val selector = raw.trim()
+                if (selector.isEmpty()) return@forEach
+
+                when {
+                    selector.contains("::before") -> {
+                        val base = selector.substringBefore("::before").trim()
+                        if (base.isNotEmpty() && !hasInteractivePseudo(base)) {
+                            pseudoRules += PseudoRule(base, "before", declarations)
+                        }
+                    }
+
+                    selector.contains("::after") -> {
+                        val base = selector.substringBefore("::after").trim()
+                        if (base.isNotEmpty() && !hasInteractivePseudo(base)) {
+                            pseudoRules += PseudoRule(base, "after", declarations)
+                        }
+                    }
+
+                    selector.contains("::") -> Unit // other pseudo-elements: unsupported
+                    hasInteractivePseudo(selector) -> Unit
+                    else -> normalRules += CssRule(selector, declarations)
+                }
+            }
+        }
+
+        return ParsedCss(variables, normalRules, pseudoRules)
     }
+
+    private fun hasInteractivePseudo(selector: String): Boolean = INTERACTIVE_PSEUDO.containsMatchIn(selector)
+
+    /** Decodes a CSS string escape (`\XXXX` or `\X`) inside a `content:` value. */
+    private fun decodeCssEscapes(raw: String): String = raw
+        .replace(Regex("""\\([0-9a-fA-F]{1,6})\s?""")) { m ->
+            runCatching { String(Character.toChars(m.groupValues[1].toInt(16))) }
+                .getOrDefault("")
+        }
+        .replace(Regex("""\\(.)""")) { it.groupValues[1] }
 
     /**
      * Removes `@media` (and any other brace-scoped at-rule) blocks. Their inner rules are
@@ -423,7 +514,17 @@ abstract class OrvReader :
 
     private class CssRule(val selector: String, val declarations: String)
 
+    private class PseudoRule(val baseSelector: String, val pseudoType: String, val declarations: String)
+
+    private class ParsedCss(
+        val variables: String,
+        val rules: List<CssRule>,
+        val pseudoRules: List<PseudoRule>,
+    )
+
     companion object {
+        private const val PSEUDO_ATTR = "data-orv-pseudo"
+
         /** Base class → theme class. Values mirror the site's own default form selections. */
         private val THEME_DEFAULTS = mapOf(
             "orv_system" to "theme5",
@@ -434,6 +535,9 @@ abstract class OrvReader :
             "orv_notice" to "theme2",
             "orv_box" to "theme2",
         )
+
+        private val INTERACTIVE_PSEUDO = Regex(""":(hover|active|focus|checked|disabled|visited|link|target|focus-within|focus-visible)\b""")
+        private val CONTENT_DECL = Regex("""content:\s*["']([^"']*)["'];?\s*""")
 
         private val META_AUTHOR = Regex("""Author:\s*(.+?)(?:\s+Chapters:|\s+Status:|$)""")
         private val META_STATUS = Regex("""Status:\s*(.+?)$""")
