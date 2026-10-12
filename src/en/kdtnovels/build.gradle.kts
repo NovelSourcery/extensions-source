@@ -7,7 +7,7 @@ plugins {
 keiyoushi {
     name = "KDT Novels"
     versionCode = 5
-    contentWarning = ContentWarning.SAFE
+    contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 
     source {

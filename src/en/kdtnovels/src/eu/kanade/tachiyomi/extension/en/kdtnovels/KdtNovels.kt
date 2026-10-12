@@ -18,16 +18,13 @@ import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.extractNextJs
+import keiyoushi.utils.firstInstanceOrNull
 import keiyoushi.utils.getPreferencesLazy
+import keiyoushi.utils.parseAs
+import keiyoushi.utils.toJsonElement
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.jsoup.nodes.Document
@@ -41,59 +38,44 @@ abstract class KdtNovels :
 
     override val supportsLatest = false
 
+    override val supportsFilterFetching = true
+
     private val preferences by getPreferencesLazy()
 
     private val mangaPath = SlugPath("/series/", "/")
     private val chapterPath = SlugPath("/", "/")
 
-    override suspend fun getPopularManga(page: Int): MangasPage = fetchListingPage(page)
-
-    override suspend fun getLatestUpdates(page: Int): MangasPage = fetchListingPage(page)
-
-    private suspend fun fetchListingPage(page: Int): MangasPage {
+    override suspend fun getPopularManga(page: Int): MangasPage {
         val document = client.get("$baseUrl/?page=$page", headers).asJsoup()
-        val mangas = document.extractSeriesGrid()
-        return MangasPage(mangas, mangas.isNotEmpty())
+        return document.parseSeriesPage(page)
     }
+
+    override suspend fun getLatestUpdates(page: Int): MangasPage = getPopularManga(page)
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val url = "$baseUrl/search/".toHttpUrl().newBuilder()
             .addQueryParameter("page", page.toString())
             .apply {
                 if (query.isNotBlank()) addQueryParameter("q", query)
-                filters.forEach { filter ->
-                    when (filter) {
-                        is GenreFilter -> filter.toValue()?.let { addQueryParameter("genre", it) }
-                        is StatusFilter -> filter.toValue()?.let { addQueryParameter("status", it) }
-                        is TypeFilter -> filter.toValue()?.let { addQueryParameter("novel_type", it) }
-                        else -> {}
-                    }
-                }
+                filters.firstInstanceOrNull<GenreFilter>()?.toValue()?.let { addQueryParameter("genre", it) }
+                filters.firstInstanceOrNull<StatusFilter>()?.toValue()?.let { addQueryParameter("status", it) }
+                filters.firstInstanceOrNull<TypeFilter>()?.toValue()?.let { addQueryParameter("novel_type", it) }
             }.build()
 
         val document = client.get(url, headers).asJsoup()
-        val mangas = document.extractSeriesGrid()
-        return MangasPage(mangas, mangas.isNotEmpty())
+        return document.parseSeriesPage(page)
     }
 
-    private fun Document.extractSeriesGrid(): List<SManga> {
-        val grid = extractNextJs<JsonElement>(SERIES_GRID_PREDICATE) ?: return emptyList()
-        val cards = (grid as? JsonObject)?.get("children")?.jsonArray ?: return emptyList()
-        return cards.mapNotNull(::parseSeriesCard)
-    }
-
-    private fun parseSeriesCard(card: JsonElement): SManga? {
-        val props = card.reactProps() ?: return null
-        val href = props["href"]?.jsonPrimitive?.contentOrNull ?: return null
-        val title = card.findReactElement("h3")?.reactProps()?.get("children")?.jsonPrimitive?.contentOrNull
-            ?: return null
-        val cover = card.findReactElement("img")?.reactProps()?.get("src")?.jsonPrimitive?.contentOrNull
-
-        return SManga.create().apply {
-            this.title = title
-            url = mangaPath.slug(href)
-            thumbnail_url = decodeImgSrc(cover)
+    private fun Document.parseSeriesPage(page: Int): MangasPage {
+        val mangas = select("a[href^=\"/series/\"]:has(h3)").map { card ->
+            SManga.create().apply {
+                title = card.selectFirst("h3")!!.text()
+                url = mangaPath.slug(card.attr("href"))
+                thumbnail_url = decodeImgSrc(card.selectFirst("img")?.attr("src"))
+            }
         }
+        val hasNextPage = selectFirst("a[href*=\"page=${page + 1}\"]") != null
+        return MangasPage(mangas, hasNextPage)
     }
 
     override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
@@ -125,10 +107,10 @@ abstract class KdtNovels :
         val infoParagraph = document.select("p")
             .firstOrNull { it.selectFirst("svg") == null && it.selectFirst("span") != null }
         val infoSpans = infoParagraph?.select("span").orEmpty()
-        author = infoSpans.getOrNull(0)?.text()?.takeIf { it.isNotBlank() }
-        artist = infoSpans.getOrNull(1)?.text()?.takeIf { it.isNotBlank() }
+        author = infoSpans.getOrNull(0)?.text()?.takeIf { it.isNotEmpty() }
+        artist = infoSpans.getOrNull(1)?.text()?.takeIf { it.isNotEmpty() }
 
-        genre = document.select("a[href*=\"/search/?genre=\"]").eachText().joinToString().takeIf { it.isNotBlank() }
+        genre = document.select("a[href*=\"/search/?genre=\"]").eachText().joinToString().takeIf { it.isNotEmpty() }
 
         val badge = document.selectFirst("h1")?.parent()?.selectFirst("span")?.ownText()
         status = when (badge?.lowercase()) {
@@ -162,19 +144,37 @@ abstract class KdtNovels :
         return content.html()
     }
 
-    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
-        GenreFilter(),
-        StatusFilter(),
-        TypeFilter(),
-    )
-
-    private open class SelectFilter(name: String, private val options: List<Pair<String, String>>) : Filter.Select<String>(name, options.map { it.second }.toTypedArray()) {
-        fun toValue(): String? = options.getOrNull(state)?.first?.takeIf { it.isNotEmpty() }
+    override suspend fun fetchFilterData(): JsonElement {
+        val document = client.get("$baseUrl/search/", headers).asJsoup()
+        return FilterDataDto(
+            genres = document.select("select[aria-label*=genre] option[value]:not([value=\"\"])").map {
+                FilterOptionDto(it.attr("value"), it.text().replace(COUNT_SUFFIX_REGEX, ""))
+            },
+            statuses = document.linkOptions("status"),
+            types = document.linkOptions("novel_type"),
+        ).toJsonElement()
     }
 
-    private class GenreFilter : SelectFilter("Genre", genreOptions)
-    private class StatusFilter : SelectFilter("Status", statusOptions)
-    private class TypeFilter : SelectFilter("Type", typeOptions)
+    private fun Document.linkOptions(param: String): List<FilterOptionDto> = select("a[href^=\"/search/?$param=\"]")
+        .map { FilterOptionDto(it.attr("href").substringAfter("$param="), it.text()) }
+        .distinctBy { it.value }
+
+    override fun getFilterList(data: JsonElement?): FilterList {
+        val filterData = data?.parseAs<FilterDataDto>() ?: return FilterList()
+        return FilterList(
+            GenreFilter(filterData.genres),
+            StatusFilter(filterData.statuses),
+            TypeFilter(filterData.types),
+        )
+    }
+
+    private open class SelectFilter(name: String, private val options: List<FilterOptionDto>) : Filter.Select<String>(name, arrayOf("All") + options.map { it.name }) {
+        fun toValue(): String? = options.getOrNull(state - 1)?.value
+    }
+
+    private class GenreFilter(options: List<FilterOptionDto>) : SelectFilter("Genre", options)
+    private class StatusFilter(options: List<FilterOptionDto>) : SelectFilter("Status", options)
+    private class TypeFilter(options: List<FilterOptionDto>) : SelectFilter("Type", options)
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         SwitchPreferenceCompat(screen.context).apply {
@@ -188,85 +188,8 @@ abstract class KdtNovels :
     companion object {
         private const val PREF_SHOW_LOCKED = "show_locked_chapters"
         private const val COVER_SELECTOR = "button[aria-label*=\"view full size\"] img[src]"
-
-        private val SERIES_GRID_PREDICATE: (JsonElement) -> Boolean = { element ->
-            element is JsonObject &&
-                (element["children"] as? JsonArray)
-                    ?.firstOrNull()
-                    ?.reactProps()
-                    ?.get("href")
-                    ?.jsonPrimitive
-                    ?.contentOrNull
-                    ?.startsWith("/series/") == true
-        }
-
-        private val statusOptions = listOf(
-            "" to "All",
-            "ongoing" to "Ongoing",
-            "completed" to "Completed",
-        )
-
-        private val typeOptions = listOf(
-            "" to "All",
-            "light-novel-jp" to "Light Novel (JP)",
-            "web-novel" to "Web Novel",
-        )
-
-        private val genreOptions = listOf("" to "All") + listOf(
-            "action" to "Action",
-            "adult" to "Adult",
-            "adventure" to "Adventure",
-            "comedy" to "Comedy",
-            "drama" to "Drama",
-            "ecchi" to "Ecchi",
-            "fantasy" to "Fantasy",
-            "gender-bender" to "Gender Bender",
-            "genderswap" to "Genderswap",
-            "harem" to "Harem",
-            "horror" to "Horror",
-            "isekai" to "Isekai",
-            "magic" to "Magic",
-            "martial-arts" to "Martial Arts",
-            "mature" to "Mature",
-            "mecha" to "Mecha",
-            "monster-girls" to "Monster Girls",
-            "monsters" to "Monsters",
-            "mystery" to "Mystery",
-            "psychological" to "Psychological",
-            "reincarnation" to "Reincarnation",
-            "romance" to "Romance",
-            "school-life" to "School Life",
-            "sci-fi" to "Sci-fi",
-            "seinen" to "Seinen",
-            "shounen" to "Shounen",
-            "slice-of-life" to "Slice of Life",
-            "smut" to "Smut",
-            "supernatural" to "Supernatural",
-            "survival" to "Survival",
-            "time-travel" to "Time Travel",
-            "tragedy" to "Tragedy",
-            "yuri" to "Yuri",
-        )
+        private val COUNT_SUFFIX_REGEX = Regex("""\s*\(\d+\)$""")
     }
-}
-
-private fun JsonElement.reactProps(): JsonObject? = (this as? JsonArray)
-    ?.takeIf { it.size >= 4 && (it[0] as? JsonPrimitive)?.contentOrNull == "$" }
-    ?.get(3) as? JsonObject
-
-private fun JsonElement.reactType(): String? = (this as? JsonArray)?.takeIf { it.size >= 4 }?.get(1)?.jsonPrimitive?.contentOrNull
-
-private fun JsonElement.findReactElement(type: String): JsonElement? {
-    if (reactType() == type) return this
-    val children: Iterable<JsonElement> = when (this) {
-        is JsonArray -> this
-        is JsonObject -> this.values
-        else -> return null
-    }
-    for (child in children) {
-        child.findReactElement(type)?.let { return it }
-    }
-    return null
 }
 
 private fun Element.formattedText(): String {
@@ -295,6 +218,16 @@ private fun decodeImgSrc(src: String?): String? {
 }
 
 @Serializable
+private class FilterDataDto(
+    val genres: List<FilterOptionDto>,
+    val statuses: List<FilterOptionDto>,
+    val types: List<FilterOptionDto>,
+)
+
+@Serializable
+private class FilterOptionDto(val value: String, val name: String)
+
+@Serializable
 private class ChapterVolumesDto(val groups: List<VolumeGroupDto>)
 
 @Serializable
@@ -302,25 +235,25 @@ private class VolumeGroupDto(val label: String = "", val chapters: List<ChapterD
 
 @Serializable
 private class ChapterDto(
-    val slug: String,
-    @SerialName("chapter_no") val chapterNo: String,
-    val subtitle: String = "",
-    val locked: Boolean = false,
-)
-
-private fun ChapterDto.toSChapter(volume: String, number: Float, showLocked: Boolean): SChapter? {
-    if (locked && !showLocked) return null
-    return SChapter.create().apply {
-        url = slug
-        chapter_number = number
-        name = buildString {
-            if (locked) append("🔒 ")
-            if (volume.isNotBlank()) append(volume).append(" ")
-            append("Ch. ")
-            append(chapterNo)
-            if (subtitle.isNotBlank()) {
-                append(": ")
-                append(subtitle)
+    private val slug: String,
+    @SerialName("chapter_no") private val chapterNo: String,
+    private val subtitle: String = "",
+    private val locked: Boolean = false,
+) {
+    fun toSChapter(volume: String, number: Float, showLocked: Boolean): SChapter? {
+        if (locked && !showLocked) return null
+        return SChapter.create().apply {
+            url = slug
+            chapter_number = number
+            name = buildString {
+                if (locked) append("🔒 ")
+                if (volume.isNotBlank()) append(volume).append(" ")
+                append("Ch. ")
+                append(chapterNo)
+                if (subtitle.isNotBlank()) {
+                    append(": ")
+                    append(subtitle)
+                }
             }
         }
     }
