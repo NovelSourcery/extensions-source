@@ -31,6 +31,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 
 @Source
 abstract class KdtNovels :
@@ -137,14 +138,16 @@ abstract class KdtNovels :
             else -> SManga.ONGOING
         }
 
-        description = document.extractNextJs<SynopsisDto>()?.html?.replace("\r\n", "\n")?.trim()
+        // The RSC synopsis is sometimes an outlined text chunk split across scripts, so read the rendered DOM.
+        description = document.selectFirst("div.reader-content")?.formattedText()
     }
 
     private fun parseChapterList(data: ChapterVolumesDto): List<SChapter> {
         val showLocked = preferences.getBoolean(PREF_SHOW_LOCKED, false)
+        // Chapter numbers restart every volume, so number by overall position to keep volumes ordered.
         return data.groups
-            .flatMap { it.chapters }
-            .mapNotNull { it.toSChapter(showLocked) }
+            .flatMap { group -> group.chapters.map { group.label to it } }
+            .mapIndexedNotNull { index, (volume, chapter) -> chapter.toSChapter(volume, index + 1f, showLocked) }
             .reversed()
     }
 
@@ -266,6 +269,21 @@ private fun JsonElement.findReactElement(type: String): JsonElement? {
     return null
 }
 
+private fun Element.formattedText(): String {
+    val node = clone()
+    node.select("br").forEach { it.after(BREAK_TOKEN) }
+    node.select("p, div, li").filter { it !== node }.forEach { it.after(PARAGRAPH_TOKEN) }
+    return node.text()
+        .replace("​", "")
+        .replace(Regex("""\s*$PARAGRAPH_TOKEN\s*"""), "\n\n")
+        .replace(Regex("""\s*$BREAK_TOKEN\s*"""), "\n")
+        .replace(Regex("\n{3,}"), "\n\n")
+        .trim()
+}
+
+private const val BREAK_TOKEN = "__KDT_BR__"
+private const val PARAGRAPH_TOKEN = "__KDT_P__"
+
 private fun decodeImgSrc(src: String?): String? {
     val encoded = src?.substringAfter("/img/", "")?.takeIf { it.isNotEmpty() } ?: return null
     val padded = encoded + "=".repeat((4 - encoded.length % 4) % 4)
@@ -277,13 +295,10 @@ private fun decodeImgSrc(src: String?): String? {
 }
 
 @Serializable
-private class SynopsisDto(val html: String)
-
-@Serializable
 private class ChapterVolumesDto(val groups: List<VolumeGroupDto>)
 
 @Serializable
-private class VolumeGroupDto(val chapters: List<ChapterDto>)
+private class VolumeGroupDto(val label: String = "", val chapters: List<ChapterDto>)
 
 @Serializable
 private class ChapterDto(
@@ -293,13 +308,14 @@ private class ChapterDto(
     val locked: Boolean = false,
 )
 
-private fun ChapterDto.toSChapter(showLocked: Boolean): SChapter? {
+private fun ChapterDto.toSChapter(volume: String, number: Float, showLocked: Boolean): SChapter? {
     if (locked && !showLocked) return null
     return SChapter.create().apply {
         url = slug
-        chapter_number = chapterNo.toFloatOrNull() ?: -1f
+        chapter_number = number
         name = buildString {
             if (locked) append("🔒 ")
+            if (volume.isNotBlank()) append(volume).append(" ")
             append("Ch. ")
             append(chapterNo)
             if (subtitle.isNotBlank()) {
