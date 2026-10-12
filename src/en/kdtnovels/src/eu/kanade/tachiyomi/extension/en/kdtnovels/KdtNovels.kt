@@ -139,8 +139,14 @@ abstract class KdtNovels :
 
     override suspend fun fetchPageText(page: Page): String {
         val document = client.get(page.url, headers).asJsoup()
-        val content = document.selectFirst("div.text-content")
+        // Illustration-only chapters have no div.text-content, just image placeholders in the article.
+        val content = document.selectFirst("article.reader-content div.text-content")
+            ?: document.selectFirst("article.reader-content")
             ?: throw Exception("Chapter content is locked or unavailable on KDT Novels")
+        // Illustrations are JS-rendered placeholders; the CDN rejects requests without a Referer, the site's /img/ proxy doesn't.
+        content.select("span.kdt-ilus[data-ilus]").forEach { span ->
+            span.replaceWith(Element("img").attr("src", baseUrl + span.attr("data-ilus")))
+        }
         return content.html()
     }
 
