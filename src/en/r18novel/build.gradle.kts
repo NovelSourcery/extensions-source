@@ -6,18 +6,18 @@ plugins {
 
 keiyoushi {
     name = "R18Novel"
-    theme = "readnovelfull"
-    versionCode = 1
+    versionCode = 15
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 
     source {
         name = "R18Novel"
-        baseUrl = "https://www.r18novel.com"
+        baseUrl = "https://r18novel.com"
         lang = "en"
     }
 
     deeplink {
+        host("r18novel.com")
         host("www.r18novel.com")
         path("/webnovel/..*")
     }
