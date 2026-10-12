@@ -6,9 +6,9 @@ plugins {
 
 keiyoushi {
     name = "Requiem Translations"
-    versionCode = 3
-    contentWarning = ContentWarning.SAFE
-    theme = "lightnovelwpnovel"
+    versionCode = 9
+    contentWarning = ContentWarning.MIXED
+    libVersion = "1.6"
 
     source {
         lang = "en"
@@ -18,5 +18,6 @@ keiyoushi {
     deeplink {
         host("requiemtls.com")
         path("/series/..*")
+        path("/..*-episode-..*")
     }
 }
