@@ -316,17 +316,15 @@ abstract class ReadWN :
 
     // ======================== Pages ========================
 
-    // Novel: single text page fetched once in fetchPageText. The app's getPageList short-circuit
-    // returns the stub without calling this, so it never double-fetches.
-    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, imageUrl = chapterPathTemplate.absolute(baseUrl, chapter.url)))
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     // ======================== Novel Content ========================
 
     override suspend fun fetchPageText(page: Page): String {
         val response = client.newCall(GET(chapterPathTemplate.absolute(baseUrl, page.url), headers)).execute()
-        val document = response.asJsoup()
-
-        return document.selectFirst(".chapter-content")?.html() ?: ""
+        val content = response.asJsoup().selectFirst(".chapter-content") ?: return ""
+        content.select("script, div[align=center]:has(script)").remove()
+        return content.html()
     }
 
     // ======================== Filters ========================
