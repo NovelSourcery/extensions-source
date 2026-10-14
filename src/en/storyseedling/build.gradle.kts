@@ -6,17 +6,12 @@ plugins {
 
 keiyoushi {
     name = "StorySeedling"
+    theme = "nzoseries"
     versionCode = 7
     contentWarning = ContentWarning.SAFE
-    libVersion = "1.6"
 
     source {
         lang = "en"
         baseUrl = "https://storyseedling.com"
-    }
-
-    deeplink {
-        host("storyseedling.com")
-        path("/series/..*")
     }
 }
