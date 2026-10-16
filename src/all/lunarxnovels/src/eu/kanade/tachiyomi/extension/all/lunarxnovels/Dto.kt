@@ -58,8 +58,7 @@ class NovelDto(
             addAll(themes.toStringList())
         }.filter { it.isNotBlank() }.distinct().joinToString().ifEmpty { null }
 
-        val altTitles = alternativeTitles.toStringList().filter { it != this@NovelDto.title }
-        setAltTitles(altTitles)
+        setAltTitles(alternativeTitles.toStringList().filter { it != this@NovelDto.title })
         description = buildString {
             description?.trim()?.let(::append)
             val stats = listOfNotNull(
@@ -71,11 +70,6 @@ class NovelDto(
             if (stats.isNotEmpty()) {
                 if (isNotEmpty()) append("\n\n")
                 append(stats.joinToString("\n"))
-            }
-            if (altTitles.isNotEmpty()) {
-                if (isNotEmpty()) append("\n\n")
-                append("Alternative Titles:\n")
-                append(altTitles.joinToString("\n") { "• $it" })
             }
         }
     }
@@ -209,17 +203,12 @@ class LegacyNovelDto(
         status = parseStatus(this@LegacyNovelDto.status)
         // genres arrive as a Python list repr: "['Action', 'Fantasy']"
         genre = genres?.let { PYTHON_STRING.findAll(it).map { m -> m.groupValues[1] }.joinToString() }?.ifEmpty { null }
-        val altTitles = listOfNotNull(alternativeTitle?.trim()?.takeIf { it.isNotEmpty() && it != this@LegacyNovelDto.title })
-        setAltTitles(altTitles)
+        setAltTitles(listOfNotNull(alternativeTitle?.trim()?.takeIf { it.isNotEmpty() && it != this@LegacyNovelDto.title }))
         description = buildString {
             this@LegacyNovelDto.description?.trim()?.let(::append)
             chapters?.toIntOrNull()?.takeIf { it > 0 }?.let {
                 if (isNotEmpty()) append("\n\n")
                 append("Chapters: $it")
-            }
-            if (altTitles.isNotEmpty()) {
-                append("\n\nAlternative Titles:\n")
-                append(altTitles.joinToString("\n") { "• $it" })
             }
         }
     }

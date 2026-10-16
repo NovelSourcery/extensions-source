@@ -20,8 +20,7 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import kotlin.random.Random
 
-// Seed decoding and token minting are shared with the site's manga reader (see Lunar Manga in
-// keiyoushi/extensions-source); only the chapter endpoint and session key differ for novels.
+// Ported from keiyoushi (Lunar Manga); only the chapter endpoint and session key differ for novels.
 
 /**
  * The two seed strings every chapter token and session key is derived from.

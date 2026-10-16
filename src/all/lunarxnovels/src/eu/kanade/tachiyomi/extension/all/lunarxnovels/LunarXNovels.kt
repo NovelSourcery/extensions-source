@@ -50,8 +50,6 @@ abstract class LunarXNovels :
         ?.let { URLDecoder.decode(it, "UTF-8") }
         ?.ifBlank { null }
 
-    // ============================== Browse ================================
-
     override suspend fun getPopularManga(page: Int): MangasPage = getSearchMangaList(page, "", FilterList())
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
@@ -98,8 +96,6 @@ abstract class LunarXNovels :
         GenreFilter(),
     )
 
-    // ============================== Details ===============================
-
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.url}"
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
@@ -135,8 +131,6 @@ abstract class LunarXNovels :
         return client.get(url).parseAs<LegacyNovelResponse>().novel
             ?.takeUnless { it.title == "Error fetching novel" }
     }
-
-    // ============================== Chapters ==============================
 
     private suspend fun fetchChapters(slug: String): List<SChapter> {
         val all = client.get("$API_URL/api/novels/chapters/$slug").parseAs<ChapterListResponse>().chapters
@@ -216,8 +210,6 @@ abstract class LunarXNovels :
         }
     }
 
-    // =============================== Pages ================================
-
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
@@ -271,8 +263,6 @@ abstract class LunarXNovels :
             val html = paragraph.replace(BOLD, "<strong>$1</strong>").replace("\n", "<br>")
             if (html.startsWith("<center>")) html else "<p>$html</p>"
         }
-
-    // ============================= Preferences ============================
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         SwitchPreferenceCompat(screen.context).apply {
