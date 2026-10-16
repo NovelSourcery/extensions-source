@@ -26,6 +26,7 @@ import keiyoushi.network.get
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.formattedText
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.toJsonString
 import keiyoushi.utils.tryParseDateTime
@@ -94,8 +95,6 @@ abstract class NovelFire :
 
     // Custom error for AJAX not found
     private class NovelFireAjaxNotFound(message: String = "Novel Fire says its Ajax interface is not found") : Exception(message)
-
-    // ======================== Tag Caching ========================
 
     @Serializable
     class TagItem(val id: Int, val name: String)
@@ -220,8 +219,6 @@ abstract class NovelFire :
         val path = absoluteUrl(chapter.url).toHttpUrl().encodedPath
         return listOf(Page(0, path))
     }
-
-    // ======================== Popular/Browse/Search ========================
 
     private suspend fun fetchNovelList(request: Request): MangasPage {
         val response = client.get(request.url, request.headers)
@@ -363,8 +360,6 @@ abstract class NovelFire :
         return MangasPage(novels, hasNextPage)
     }
 
-    // ======================== Novel Details ========================
-
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath.toNovelPath()
         val response = client.get(absoluteUrl(path), headers, ensureSuccess = false)
@@ -397,8 +392,10 @@ abstract class NovelFire :
             .joinToString { it.text() }
 
         // Get summary
-        val summary = doc.selectFirst(".summary .content")?.text()
-        description = summary?.replace("Show More", "") ?: "No Summary Found"
+        description = doc.selectFirst(".summary .content")?.let { content ->
+            content.select(".expand").remove()
+            content.formattedText()
+        }
 
         // Get author
         author = doc.selectFirst(".author .property-item > span")?.text() ?: doc.selectFirst(".author .property-item")?.text() ?: "No Author Found"
@@ -411,8 +408,6 @@ abstract class NovelFire :
             else -> SManga.UNKNOWN
         }
     }
-
-    // ======================== Chapters ========================
 
     // JSON response data classes
     @Serializable
@@ -464,6 +459,10 @@ abstract class NovelFire :
             return existingChapters
         }
 
+        if (preferences.getBoolean(QUICK_CHAPTER_LIST_KEY, false) && totalChapters > 0) {
+            return generateChapterList(novelPath, totalChapters, existingChapters)
+        }
+
         val postId = extractPostId(doc)
         val fetchMethod = preferences.getString(CHAPTER_FETCH_METHOD_KEY, "auto") ?: "auto"
         Log.d(TAG, "fetchMangaUpdate: fetch needed (method=$fetchMethod postId=$postId)")
@@ -503,6 +502,20 @@ abstract class NovelFire :
                         fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
                     ).reversed()
                 }
+            }
+        }
+    }
+
+    // Chapter urls are /<novel>/chapter-<n> for n in 1..total, so the list can be built without
+    // paging through the site; only already-stored chapters keep their real titles.
+    private fun generateChapterList(novelPath: String, total: Int, existingChapters: List<SChapter>): List<SChapter> {
+        val existingByUrl = existingChapters.associateBy { it.url }
+        return (total downTo 1).map { n ->
+            val url = "/$novelPath/chapter-$n"
+            existingByUrl[url] ?: SChapter.create().apply {
+                this.url = url
+                name = "Chapter $n"
+                chapter_number = n.toFloat()
             }
         }
     }
@@ -610,12 +623,11 @@ abstract class NovelFire :
                 }
             }
         }
-        val hasNextPage = doc.selectFirst("a[rel=\"next\"]") != null
+        // The chapter-range pager has no rel="next"; its "next" arrow is aria-disabled on the last page.
+        val hasNextPage = doc.selectFirst("a[rel=\"next\"], .chapter-range-pager a[aria-label^=Next]:not([aria-disabled=true])") != null
         Log.d(TAG, "html fetch: page $page parsed ${chapters.size} chapters (hasNext=$hasNextPage)")
         return Pair(chapters, hasNextPage)
     }
-
-    // ======================== Chapter Content ========================
 
     private fun parseChapterContent(response: Response): String {
         val doc = response.asJsoup()
@@ -637,8 +649,6 @@ abstract class NovelFire :
 
         return content ?: ""
     }
-
-    // ======================== Filters ========================
 
     override fun getFilterList(data: JsonElement?): FilterList {
         val cachedTags = loadCachedTags()
@@ -664,8 +674,6 @@ abstract class NovelFire :
         )
     }
 
-    // ======================== Preferences ========================
-
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         ListPreference(screen.context).apply {
             key = CHAPTER_FETCH_METHOD_KEY
@@ -674,6 +682,13 @@ abstract class NovelFire :
             entries = arrayOf("Auto (HTML → Ajax fallback)", "Ajax only", "HTML only")
             entryValues = arrayOf("auto", "ajax", "html")
             setDefaultValue("auto")
+        }.also(screen::addPreference)
+
+        SwitchPreferenceCompat(screen.context).apply {
+            key = QUICK_CHAPTER_LIST_KEY
+            title = "Quick chapter list"
+            summary = "Generate the chapter list from the chapter count instead of fetching every chapter page. New chapters get generic titles (\"Chapter N\")."
+            setDefaultValue(false)
         }.also(screen::addPreference)
 
         SwitchPreferenceCompat(screen.context).apply {
@@ -903,6 +918,7 @@ abstract class NovelFire :
         private const val TAGS_CACHE_TIME_KEY = "novelfire_tags_cache_time"
         private const val CLEAR_TAG_CACHE_KEY = "novelfire_clear_tag_cache"
         private const val CHAPTER_FETCH_METHOD_KEY = "novelfire_chapter_fetch_method"
+        private const val QUICK_CHAPTER_LIST_KEY = "novelfire_quick_chapter_list"
         private const val LEGACY_CACHE_CLEANED_KEY = "novelfire_legacy_cache_cleaned"
     }
 }
