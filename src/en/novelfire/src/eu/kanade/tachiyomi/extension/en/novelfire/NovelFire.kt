@@ -464,6 +464,10 @@ abstract class NovelFire :
             return existingChapters
         }
 
+        if (preferences.getBoolean(QUICK_CHAPTER_LIST_KEY, false) && totalChapters > 0) {
+            return generateChapterList(novelPath, totalChapters, existingChapters)
+        }
+
         val postId = extractPostId(doc)
         val fetchMethod = preferences.getString(CHAPTER_FETCH_METHOD_KEY, "auto") ?: "auto"
         Log.d(TAG, "fetchMangaUpdate: fetch needed (method=$fetchMethod postId=$postId)")
@@ -503,6 +507,20 @@ abstract class NovelFire :
                         fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
                     ).reversed()
                 }
+            }
+        }
+    }
+
+    // Chapter urls are /<novel>/chapter-<n> for n in 1..total, so the list can be built without
+    // paging through the site; only already-stored chapters keep their real titles.
+    private fun generateChapterList(novelPath: String, total: Int, existingChapters: List<SChapter>): List<SChapter> {
+        val existingByUrl = existingChapters.associateBy { it.url }
+        return (total downTo 1).map { n ->
+            val url = "/$novelPath/chapter-$n"
+            existingByUrl[url] ?: SChapter.create().apply {
+                this.url = url
+                name = "Chapter $n"
+                chapter_number = n.toFloat()
             }
         }
     }
@@ -610,7 +628,8 @@ abstract class NovelFire :
                 }
             }
         }
-        val hasNextPage = doc.selectFirst("a[rel=\"next\"]") != null
+        // The chapter-range pager has no rel="next"; its "next" arrow is aria-disabled on the last page.
+        val hasNextPage = doc.selectFirst("a[rel=\"next\"], .chapter-range-pager a[aria-label^=Next]:not([aria-disabled=true])") != null
         Log.d(TAG, "html fetch: page $page parsed ${chapters.size} chapters (hasNext=$hasNextPage)")
         return Pair(chapters, hasNextPage)
     }
@@ -674,6 +693,13 @@ abstract class NovelFire :
             entries = arrayOf("Auto (HTML → Ajax fallback)", "Ajax only", "HTML only")
             entryValues = arrayOf("auto", "ajax", "html")
             setDefaultValue("auto")
+        }.also(screen::addPreference)
+
+        SwitchPreferenceCompat(screen.context).apply {
+            key = QUICK_CHAPTER_LIST_KEY
+            title = "Quick chapter list"
+            summary = "Generate the chapter list from the chapter count instead of fetching every chapter page. New chapters get generic titles (\"Chapter N\")."
+            setDefaultValue(false)
         }.also(screen::addPreference)
 
         SwitchPreferenceCompat(screen.context).apply {
@@ -903,6 +929,7 @@ abstract class NovelFire :
         private const val TAGS_CACHE_TIME_KEY = "novelfire_tags_cache_time"
         private const val CLEAR_TAG_CACHE_KEY = "novelfire_clear_tag_cache"
         private const val CHAPTER_FETCH_METHOD_KEY = "novelfire_chapter_fetch_method"
+        private const val QUICK_CHAPTER_LIST_KEY = "novelfire_quick_chapter_list"
         private const val LEGACY_CACHE_CLEANED_KEY = "novelfire_legacy_cache_cleaned"
     }
 }
