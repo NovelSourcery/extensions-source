@@ -26,6 +26,7 @@ import keiyoushi.network.get
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.formattedText
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.toJsonString
 import keiyoushi.utils.tryParseDateTime
@@ -94,8 +95,6 @@ abstract class NovelFire :
 
     // Custom error for AJAX not found
     private class NovelFireAjaxNotFound(message: String = "Novel Fire says its Ajax interface is not found") : Exception(message)
-
-    // ======================== Tag Caching ========================
 
     @Serializable
     class TagItem(val id: Int, val name: String)
@@ -220,8 +219,6 @@ abstract class NovelFire :
         val path = absoluteUrl(chapter.url).toHttpUrl().encodedPath
         return listOf(Page(0, path))
     }
-
-    // ======================== Popular/Browse/Search ========================
 
     private suspend fun fetchNovelList(request: Request): MangasPage {
         val response = client.get(request.url, request.headers)
@@ -363,8 +360,6 @@ abstract class NovelFire :
         return MangasPage(novels, hasNextPage)
     }
 
-    // ======================== Novel Details ========================
-
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath.toNovelPath()
         val response = client.get(absoluteUrl(path), headers, ensureSuccess = false)
@@ -397,8 +392,10 @@ abstract class NovelFire :
             .joinToString { it.text() }
 
         // Get summary
-        val summary = doc.selectFirst(".summary .content")?.text()
-        description = summary?.replace("Show More", "") ?: "No Summary Found"
+        description = doc.selectFirst(".summary .content")?.let { content ->
+            content.select(".expand").remove()
+            content.formattedText()
+        }
 
         // Get author
         author = doc.selectFirst(".author .property-item > span")?.text() ?: doc.selectFirst(".author .property-item")?.text() ?: "No Author Found"
@@ -411,8 +408,6 @@ abstract class NovelFire :
             else -> SManga.UNKNOWN
         }
     }
-
-    // ======================== Chapters ========================
 
     // JSON response data classes
     @Serializable
@@ -634,8 +629,6 @@ abstract class NovelFire :
         return Pair(chapters, hasNextPage)
     }
 
-    // ======================== Chapter Content ========================
-
     private fun parseChapterContent(response: Response): String {
         val doc = response.asJsoup()
         checkCloudflare(doc)
@@ -656,8 +649,6 @@ abstract class NovelFire :
 
         return content ?: ""
     }
-
-    // ======================== Filters ========================
 
     override fun getFilterList(data: JsonElement?): FilterList {
         val cachedTags = loadCachedTags()
@@ -682,8 +673,6 @@ abstract class NovelFire :
             if (tagList.isNotEmpty()) TagFilter(tagList) else TagFilter(emptyList()),
         )
     }
-
-    // ======================== Preferences ========================
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         ListPreference(screen.context).apply {
