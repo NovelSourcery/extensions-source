@@ -1,6 +1,8 @@
 package eu.kanade.tachiyomi.novelextension.en.fenrirealm
 
 import android.content.SharedPreferences
+import android.util.Base64
+import android.webkit.CookieManager
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.GET
@@ -13,15 +15,19 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
+import keiyoushi.network.post
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.getPreferencesLazy
+import keiyoushi.utils.parseAs
+import keiyoushi.utils.runWebView
 import keiyoushi.utils.setAltTitles
 import keiyoushi.utils.setNumber
 import keiyoushi.utils.setVolume
+import keiyoushi.utils.toJsonElement
+import keiyoushi.utils.toJsonRequestBody
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.KSerializer
@@ -32,23 +38,30 @@ import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
-import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import org.jsoup.nodes.Node
 import org.jsoup.nodes.TextNode
-import uy.kohesive.injekt.injectLazy
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Locale
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
+import kotlin.time.Duration.Companion.seconds
 
 private val INVISIBLE_CHARS = Regex("[\\u200B\\u200C\\u200D\\u2060\\uFEFF]")
 
@@ -132,15 +145,12 @@ abstract class Fenrirealm :
     ConfigurableSource {
 
     override val supportsLatest = true
+    override val supportsFilterFetching = true
 
-    private val json: Json by injectLazy()
     private val preferences: SharedPreferences by getPreferencesLazy()
 
     private val hideLockedChapters: Boolean
         get() = preferences.getBoolean(PREF_HIDE_LOCKED_CHAPTERS, true)
-
-    private val fetchChapterWithAPI: Boolean
-        get() = preferences.getBoolean(PREF_FETCH_API_CHAPTER, false)
 
     // API base URL - from instructions.txt: /api/new/v2
     private val apiBaseUrl = "$baseUrl/api/new/v2"
@@ -160,7 +170,7 @@ abstract class Fenrirealm :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = buildPopularMangaRequest(page)
-        val novels = json.decodeFromString<List<NovelDto>>(client.get(request.url, request.headers).body.string())
+        val novels = client.get(request.url, request.headers).parseAs<List<NovelDto>>()
         return MangasPage(novels.map { it.toSManga(baseUrl, mangaPathTemplate) }, false)
     }
 
@@ -172,7 +182,7 @@ abstract class Fenrirealm :
     }
 
     private fun parseSearchResultsResponse(response: Response): MangasPage {
-        val result = json.decodeFromString<SearchResponse>(response.body.string())
+        val result = response.parseAs<SearchResponse>()
         val hasNextPage = result.meta.currentPage < result.meta.lastPage
         return MangasPage(result.data.map { it.toSManga(baseUrl, mangaPathTemplate) }, hasNextPage)
     }
@@ -184,7 +194,7 @@ abstract class Fenrirealm :
         val slug = url.encodedPath.substringAfter("/series/").trim('/').substringBefore('/')
         if (slug.isBlank()) return null
         val response = client.get("$apiBaseUrl/series/$slug", headers)
-        return runCatching { json.decodeFromString<NovelDto>(response.body.string()).toSManga(baseUrl, mangaPathTemplate) }.getOrNull()
+        return runCatching { response.parseAs<NovelDto>().toSManga(baseUrl, mangaPathTemplate) }.getOrNull()
     }
 
     private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
@@ -197,16 +207,11 @@ abstract class Fenrirealm :
 
             filters.forEach { filter ->
                 when (filter) {
-                    is StatusFilter -> addQueryParameter("status", filter.toUriPart())
+                    is StatusFilter -> filter.value.takeIf(String::isNotEmpty)?.let { addQueryParameter("statuses[]", it) }
 
-                    is SortFilter -> addQueryParameter("sort", filter.toUriPart())
+                    is SortFilter -> addQueryParameter("sort", filter.value)
 
-                    is TypeFilter -> {
-                        val type = filter.toUriPart()
-                        if (type.isNotEmpty()) {
-                            addQueryParameter("type", type)
-                        }
-                    }
+                    is TypeFilter -> filter.value.takeIf(String::isNotEmpty)?.let { addQueryParameter("type", it) }
 
                     is GenreFilter -> {
                         filter.state.filter { it.isIncluded() }.forEach { genre ->
@@ -289,16 +294,16 @@ abstract class Fenrirealm :
         val body = response.body.string()
 
         return runCatching {
-            json.decodeFromString<NovelDto>(body).toSManga(baseUrl, mangaPathTemplate)
+            body.parseAs<NovelDto>().toSManga(baseUrl, mangaPathTemplate)
         }.getOrElse {
             runCatching {
-                json.decodeFromString<SearchResponse>(body).data.firstOrNull()?.toSManga(baseUrl, mangaPathTemplate)
+                body.parseAs<SearchResponse>().data.firstOrNull()?.toSManga(baseUrl, mangaPathTemplate)
             }.getOrNull() ?: fallbackMangaDetails(response)
         }
     }
 
     private fun parseChapterList(response: Response): List<SChapter> {
-        val chapters = json.decodeFromString<List<ChapterApiDto>>(response.body.string())
+        val chapters = response.parseAs<List<ChapterApiDto>>()
         val slug = response.request.url.pathSegments.dropLast(1).lastOrNull() ?: ""
 
         return chapters.sortedWith(
@@ -355,85 +360,174 @@ abstract class Fenrirealm :
             summary = "Exclude chapters that require payment"
             setDefaultValue(true)
         }.also(screen::addPreference)
-
-        SwitchPreferenceCompat(screen.context).apply {
-            key = PREF_FETCH_API_CHAPTER
-            title = "Fetch chapter with API"
-            summary = "Fetch chapter content via REST API"
-            setDefaultValue(false)
-        }.also(screen::addPreference)
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
+    // Read token + decryption flow copied from the LNReader plugin:
+    // https://github.com/7ui77/lnreader-plugins/blob/f00c4858b46a737a7157ce2e5844808a7476800f/plugins/english/fenrirrealm.ts
     override suspend fun fetchPageText(page: Page): String {
-        val doc = if (fetchChapterWithAPI) {
-            val response = client.get(
-                buildString {
-                    append(apiBaseUrl)
-                    page.url
-                        .substringBeforeLast('/')
-                        .let { append("$it") }
-                    page.url
-                        .substringAfterLast('/')
-                        .removePrefix("chapter-")
-                        .replace('-', '.')
-                        .let { append("/$it") }
-                },
-                headers,
-            )
-            val chapter = json.decodeFromString<ChapterDto>(response.body.string())
-            Jsoup.parseBodyFragment(chapter.content)
-        } else {
-            val response = client.get(baseUrl + page.url, headers)
-            response.asJsoup()
+        val apiUrl = buildString {
+            append(apiBaseUrl)
+            append(page.url.substringBeforeLast('/'))
+            append('/')
+            append(page.url.substringAfterLast('/').removePrefix("chapter-").replace('-', '.'))
         }
 
-        // Try DOM extraction first (more reliable for rendered HTML)
-        val chapterContent = extractChapterContentFromDOM(doc)
-        if (chapterContent.isNotBlank()) {
-            return chapterContent
+        var (chapter, issuedToken) = fetchChapter(apiUrl)
+        if (chapter.contentFormat == "locked") {
+            if (chapter.isPaid) throw Exception("This chapter is locked. Unlock it on Fenrir Realm first.")
+            if (!mintReadToken(chapter)) {
+                solveReadChallenge(baseUrl + page.url)
+                if (!mintReadToken(chapter)) throw Exception(VERIFY_MESSAGE)
+            }
+            fetchChapter(apiUrl).let {
+                chapter = it.first
+                issuedToken = it.second
+            }
         }
 
-        return ""
+        val content = when (chapter.contentFormat) {
+            "locked" -> throw Exception(VERIFY_MESSAGE)
+            "encrypted" -> {
+                val token = issuedToken ?: activeReadToken() ?: throw Exception(VERIFY_MESSAGE)
+                chapter.decrypt(token) ?: throw Exception(VERIFY_MESSAGE)
+            }
+            else -> (chapter.content as? JsonPrimitive)?.content.orEmpty()
+        }
+        return formatChapterContent(content)
     }
 
-    private fun extractChapterContentFromDOM(doc: Document): String {
-        // Prefer the actual chapter body over the outer reader wrapper.
-        val readerArea = if (fetchChapterWithAPI) {
-            doc.body()
-        } else {
-            doc.selectFirst("div.reader-area[id^=reader-area]")
-                ?: doc.selectFirst("div.reader-area")
-                ?: doc.selectFirst("div[role=region][id^=reader-area]")
-                ?: return ""
+    private suspend fun fetchChapter(apiUrl: String): Pair<ChapterDto, String?> {
+        val response = client.get(apiUrl, chapterHeaders, ensureSuccess = false)
+        if (!response.isSuccessful) {
+            response.close()
+            if (response.code == 429) throw Exception(RATE_LIMIT_MESSAGE)
+            throw Exception("HTTP error ${response.code}")
         }
-
-        // Strip real comment/reaction sections structurally. Never match on prose
-        // text: a chapter sentence containing the word "comment" used to cut the
-        // rest of the chapter off.
-        readerArea.select("#comments").forEach { it.remove() }
-        readerArea.select("h3:containsOwn(What do you think)").forEach { heading ->
-            val section = heading.parents().firstOrNull { it.parent() === readerArea }
-            (section ?: heading).remove()
-        }
-
-        // Remove invisible garbage divs
-        val garbagePattern = "^((?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4}))(.{1,4})?$"
-        readerArea.select("div[aria-hidden=true]:matchesOwn($garbagePattern)").forEach { it.remove() }
-
-        return readerArea.children().joinToString("") { it.outerHtml() }
+        val issuedToken = response.header("x-read-token-issued")?.takeIf(String::isNotEmpty)
+        return response.parseAs<ChapterDto>() to issuedToken
     }
 
-    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
-        StatusFilter(),
-        SortFilter(),
-        TypeFilter(),
-        Filter.Header("Include/Exclude Genres (Tap to toggle)"),
-        GenreFilter(),
-        Filter.Header("Include/Exclude Tags (Tap to toggle)"),
-        TagFilter(),
-    )
+    private val chapterHeaders: Headers by lazy {
+        headers.newBuilder()
+            .set("Accept", "application/json")
+            .set("X-Accepts-Encrypted-Content", "3")
+            .build()
+    }
+
+    private suspend fun mintReadToken(chapter: ChapterDto): Boolean {
+        val target = chapter.remintChapterUuid ?: chapter.remintChapterId?.toString() ?: chapter.uuid ?: chapter.id.toString()
+        val response = client.post(
+            "$baseUrl/api/read-token",
+            headers,
+            ReadTokenRequest(target).toJsonRequestBody(),
+            ensureSuccess = false,
+        )
+        if (!response.isSuccessful) {
+            response.close()
+            return false
+        }
+        return response.parseAs<ReadTokenDto>().isActive
+    }
+
+    private suspend fun activeReadToken(): String? {
+        val response = client.get("$baseUrl/api/read-token", headers, ensureSuccess = false)
+        if (!response.isSuccessful) {
+            response.close()
+            return null
+        }
+        return response.parseAs<ReadTokenDto>().takeIf { it.isActive }?.token
+    }
+
+    // Lets the site's Turnstile set the fr_read cookie.
+    private suspend fun solveReadChallenge(chapterUrl: String) {
+        val cookieManager = CookieManager.getInstance()
+        val initialCookie = readCookie(cookieManager)
+        runCatching {
+            runWebView<Unit>(timeout = 45.seconds) {
+                headers["User-Agent"]?.let { userAgent = it }
+                blockImages = true
+                poll {
+                    val cookie = readCookie(cookieManager)
+                    if (cookie != null && cookie != initialCookie) resolve(Unit)
+                }
+                loadUrl(chapterUrl)
+            }
+        }.onFailure { throw Exception(VERIFY_MESSAGE) }
+    }
+
+    private fun readCookie(cookieManager: CookieManager): String? = cookieManager.getCookie(baseUrl)
+        ?.split(';')
+        ?.map(String::trim)
+        ?.firstOrNull { it.startsWith("fr_read=") }
+
+    private fun formatChapterContent(content: String): String {
+        val html = runCatching { content.parseAs<TipTapNode>() }.getOrNull()
+            ?.takeIf { it.type == "doc" || it.type == "systemWindow" }
+            ?.let(::tipTapToHtml)
+            ?: Jsoup.parseBodyFragment(content).body().apply {
+                select("[aria-hidden=true], .reader-attribution, [data-fr-attr], style, script").remove()
+                select("p, div, span, small")
+                    .filter { el -> el.text().trim().let { it.startsWith("Copy reference:") || it.startsWith("Bookmark:") } }
+                    .forEach { it.remove() }
+            }.html()
+        return html.replace(INVISIBLE_CHARS, "")
+    }
+
+    private fun tipTapToHtml(doc: TipTapNode): String = doc.content.orEmpty().joinToString("\n") { node ->
+        when (node.type) {
+            "paragraph" -> "<p>${node.content.orEmpty().joinToString("", transform = ::tipTapInline)}</p>"
+            "heading" -> {
+                val level = node.attrs?.level ?: 1
+                "<h$level>${node.content.orEmpty().joinToString("") { it.text.orEmpty() }}</h$level>"
+            }
+            else -> ""
+        }
+    }
+
+    private fun tipTapInline(node: TipTapNode): String = when (node.type) {
+        "hardBreak" -> "<br>"
+        "text" -> node.marks.orEmpty().fold(node.text.orEmpty()) { text, mark ->
+            when (mark.type) {
+                "bold" -> "<b>$text</b>"
+                "italic" -> "<i>$text</i>"
+                "underline" -> "<u>$text</u>"
+                "strike" -> "<s>$text</s>"
+                "link" -> "<a href=\"${mark.attrs?.href.orEmpty()}\">$text</a>"
+                else -> text
+            }
+        }
+        else -> ""
+    }
+
+    override suspend fun fetchFilterData(): JsonElement = coroutineScope {
+        val genres = async { client.get("$apiBaseUrl/taxonomies/genres", headers).parseAs<List<TaxonomyDto>>() }
+        val tags = async { client.get("$apiBaseUrl/taxonomies/tags", headers).parseAs<List<TaxonomyDto>>() }
+        FilterDataDto(
+            genres = genres.await().map { TaxonomyDto(it.id, it.name) },
+            tags = tags.await().filter { (it.seriesCount ?: 0) > 0 }.map { TaxonomyDto(it.id, it.name) }.sortedBy { it.name },
+        ).toJsonElement()
+    }
+
+    override fun getFilterList(data: JsonElement?): FilterList {
+        val filterData = data?.let { runCatching { it.parseAs<FilterDataDto>() }.getOrNull() }
+        return FilterList(
+            buildList {
+                add(StatusFilter())
+                add(SortFilter())
+                add(TypeFilter())
+                if (filterData == null) {
+                    add(Filter.Header("Press 'Reset' to load genres and tags"))
+                } else {
+                    add(Filter.Header("Include/Exclude Genres (Tap to toggle)"))
+                    add(GenreFilter(filterData.genres.map { TaxonomyTriState(it.id, it.name) }))
+                    add(Filter.Header("Include/Exclude Tags (Tap to toggle)"))
+                    add(TagFilter(filterData.tags.map { TaxonomyTriState(it.id, it.name) }))
+                }
+            },
+        )
+    }
 
     private fun parseDate(dateStr: String?): Long {
         if (dateStr == null) return 0L
@@ -636,10 +730,120 @@ abstract class Fenrirealm :
     @Serializable
     class ChapterDto(
         val id: Int,
-        val name: String? = null,
-        val title: String? = null,
-        val content: String,
-        val has_illustration: Boolean,
+        val uuid: String? = null,
+        val content: JsonElement = JsonNull,
+        @SerialName("content_format") val contentFormat: String? = null,
+        @SerialName("content_scheme") private val contentScheme: String? = null,
+        @SerialName("remint_chapter_id") val remintChapterId: Int? = null,
+        @SerialName("remint_chapter_uuid") val remintChapterUuid: String? = null,
+        private val locked: LockedDto? = null,
+        private val bought: BoughtDto? = null,
+        private val bypass: Boolean = false,
+    ) {
+        val isPaid: Boolean
+            get() = (locked?.price ?: 0) > 0 && bought?.boughtAt == null && !bypass
+
+        fun decrypt(token: String): String? = runCatching {
+            val isV2 = contentScheme == "fragmented-v2"
+            val vid = if (isV2) tokenVid(token) else ""
+            val cipherText = when (content) {
+                is JsonArray -> unshuffle(
+                    content.map { it.jsonPrimitive.content },
+                    if (isV2) "$token:$vid:$id:fr-frag-v2" else "$token:$id:fr-frag-v1",
+                )
+                is JsonPrimitive -> content.content
+                else -> return null
+            }
+            val raw = Base64.decode(cipherText, Base64.DEFAULT)
+            val keySeed = if (isV2 && vid.isNotEmpty()) "$token:$vid:$id:fr-content-v2" else "$token:$id:fr-content-v1"
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(sha256(keySeed), "AES"), GCMParameterSpec(128, raw, 0, 12))
+            String(cipher.doFinal(raw, 12, raw.size - 12), Charsets.UTF_8)
+        }.getOrNull()
+
+        private fun tokenVid(token: String): String = runCatching {
+            val payload = Base64.decode(token.substringBefore('.'), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+            String(payload, Charsets.UTF_8).parseAs<ReadTokenPayloadDto>().vid
+        }.getOrNull().orEmpty()
+
+        private fun unshuffle(fragments: List<String>, seed: String): String {
+            if (fragments.size < 2) return fragments.joinToString("")
+            val digest = ByteBuffer.wrap(sha256(seed)).order(ByteOrder.LITTLE_ENDIAN)
+            val state = IntArray(4) { digest.getInt(it * 4) }
+            val perm = IntArray(fragments.size) { it }
+            for (i in perm.lastIndex downTo 1) {
+                val j = ((xorshift128(state).toLong() and 0xFFFFFFFFL) % (i + 1)).toInt()
+                perm[i] = perm[j].also { perm[j] = perm[i] }
+            }
+            val restored = arrayOfNulls<String>(fragments.size)
+            fragments.forEachIndexed { i, fragment -> restored[perm[i]] = fragment }
+            return restored.joinToString("")
+        }
+
+        private fun xorshift128(state: IntArray): Int {
+            val t = state[0]
+            var r = t xor (t shl 11)
+            r = r xor (r ushr 8)
+            val o = state[3]
+            state[0] = state[1]
+            state[1] = state[2]
+            state[2] = o
+            return (o xor (o ushr 19) xor r).also { state[3] = it }
+        }
+
+        private fun sha256(input: String): ByteArray = MessageDigest.getInstance("SHA-256").digest(input.toByteArray(Charsets.UTF_8))
+    }
+
+    @Serializable
+    class BoughtDto(
+        @SerialName("bought_at") val boughtAt: String? = null,
+    )
+
+    @Serializable
+    class ReadTokenRequest(
+        @SerialName("chapter_id") private val chapterId: String,
+    )
+
+    @Serializable
+    class ReadTokenDto(
+        private val active: Boolean = false,
+        val token: String? = null,
+    ) {
+        val isActive: Boolean
+            get() = active && !token.isNullOrEmpty()
+    }
+
+    @Serializable
+    class ReadTokenPayloadDto(
+        val vid: String = "",
+    )
+
+    @Serializable
+    class TipTapNode(
+        val type: String? = null,
+        val text: String? = null,
+        val attrs: TipTapAttrs? = null,
+        val marks: List<TipTapNode>? = null,
+        val content: List<TipTapNode>? = null,
+    )
+
+    @Serializable
+    class TipTapAttrs(
+        val level: Int? = null,
+        val href: String? = null,
+    )
+
+    @Serializable
+    class TaxonomyDto(
+        val id: Int,
+        val name: String,
+        @SerialName("series_count") val seriesCount: Int? = null,
+    )
+
+    @Serializable
+    class FilterDataDto(
+        val genres: List<TaxonomyDto>,
+        val tags: List<TaxonomyDto>,
     )
 
     @Serializable
@@ -741,128 +945,58 @@ abstract class Fenrirealm :
 
     companion object {
         private const val PREF_HIDE_LOCKED_CHAPTERS = "fenrirealm_hide_locked_chapters"
-        private const val PREF_FETCH_API_CHAPTER = "fenrirealm_fetch_chapter_via_api"
+        private const val RATE_LIMIT_MESSAGE = "Rate limited by Fenrir Realm. Open the chapter in WebView, solve the check, then retry."
+        private const val VERIFY_MESSAGE = "Couldn't verify access. Open the chapter in WebView, wait for it to load, then retry."
+    }
+
+    private open class UriSelectFilter(name: String, private val options: Array<Pair<String, String>>, state: Int = 0) : Filter.Select<String>(name, options.map { it.first }.toTypedArray(), state) {
+        val value: String
+            get() = options[state].second
     }
 
     private class StatusFilter :
-        Filter.Select<String>(
+        UriSelectFilter(
             "Status",
-            arrayOf("Any", "Ongoing", "Completed"),
-        ) {
-        fun toUriPart() = when (state) {
-            0 -> "any"
-            1 -> "on-going"
-            2 -> "completed"
-            else -> "any"
-        }
-    }
+            arrayOf(
+                "All" to "",
+                "Ongoing" to "on-going",
+                "Completed" to "completed",
+                "Hiatus" to "hiatus",
+                "On Hold" to "on-hold",
+                "Dropped" to "dropped",
+            ),
+        )
 
     private class SortFilter :
-        Filter.Select<String>(
+        UriSelectFilter(
             "Sort",
-            arrayOf("Latest", "Popular"),
-        ) {
-        fun toUriPart() = when (state) {
-            0 -> "latest"
-            1 -> "popular"
-            else -> "latest"
-        }
-    }
+            arrayOf(
+                "Latest" to "latest",
+                "Trending" to "trending",
+                "Popular" to "popular",
+                "Updated" to "updated",
+                "Free" to "free",
+                "Premium" to "premium",
+                "A-Z" to "title",
+                "Oldest" to "oldest",
+            ),
+        )
 
     private class TypeFilter :
-        Filter.Select<String>(
+        UriSelectFilter(
             "Type",
-            arrayOf("All", "Light Novel", "Web Novel", "Novel", "Original Novel"),
-        ) {
-        fun toUriPart() = when (state) {
-            0 -> ""
-            1 -> "light_novel"
-            2 -> "web_novel"
-            3 -> "novel"
-            4 -> "original_novel"
-            else -> ""
-        }
-    }
-
-    private class GenreCheckBox(val id: Int, name: String) : Filter.TriState(name)
-
-    private class GenreFilter :
-        Filter.Group<GenreCheckBox>(
-            "Genres",
-            listOf(
-                GenreCheckBox(1, "Action"),
-                GenreCheckBox(2, "Adult"),
-                GenreCheckBox(3, "Adventure"),
-                GenreCheckBox(4, "Comedy"),
-                GenreCheckBox(5, "Drama"),
-                GenreCheckBox(6, "Ecchi"),
-                GenreCheckBox(7, "Fantasy"),
-                GenreCheckBox(8, "Gender Bender"),
-                GenreCheckBox(9, "Harem"),
-                GenreCheckBox(10, "Historical"),
-                GenreCheckBox(11, "Horror"),
-                GenreCheckBox(12, "Josei"),
-                GenreCheckBox(13, "Martial Arts"),
-                GenreCheckBox(14, "Mature"),
-                GenreCheckBox(15, "Mecha"),
-                GenreCheckBox(16, "Mystery"),
-                GenreCheckBox(17, "Psychological"),
-                GenreCheckBox(18, "Romance"),
-                GenreCheckBox(19, "School Life"),
-                GenreCheckBox(20, "Sci-fi"),
-                GenreCheckBox(21, "Seinen"),
-                GenreCheckBox(22, "Shoujo"),
-                GenreCheckBox(23, "Shoujo Ai"),
-                GenreCheckBox(24, "Shounen"),
-                GenreCheckBox(25, "Shounen Ai"),
-                GenreCheckBox(26, "Slice of Life"),
-                GenreCheckBox(27, "Smut"),
-                GenreCheckBox(28, "Sports"),
-                GenreCheckBox(29, "Supernatural"),
-                GenreCheckBox(30, "Tragedy"),
-                GenreCheckBox(31, "Wuxia"),
-                GenreCheckBox(32, "Xianxia"),
-                GenreCheckBox(33, "Xuanhuan"),
-                GenreCheckBox(34, "Yaoi"),
-                GenreCheckBox(35, "Yuri"),
+            arrayOf(
+                "All" to "",
+                "Light Novel" to "light_novel",
+                "Web Novel" to "web_novel",
+                "Novel" to "novel",
+                "Original" to "original_novel",
             ),
         )
 
-    private class TagCheckBox(val id: Int, name: String) : Filter.TriState(name)
+    private class TaxonomyTriState(val id: Int, name: String) : Filter.TriState(name)
 
-    private class TagFilter :
-        Filter.Group<TagCheckBox>(
-            "Tags",
-            listOf(
-                TagCheckBox(5, "Academy"),
-                TagCheckBox(22, "Adventurers"),
-                TagCheckBox(47, "Apocalypse"),
-                TagCheckBox(75, "Battle Academy"),
-                TagCheckBox(111, "Calm Protagonist"),
-                TagCheckBox(118, "Character Growth"),
-                TagCheckBox(122, "Cheats"),
-                TagCheckBox(169, "Cultivation"),
-                TagCheckBox(191, "Demons"),
-                TagCheckBox(215, "Dragons"),
-                TagCheckBox(265, "Fantasy World"),
-                TagCheckBox(298, "Game Elements"),
-                TagCheckBox(307, "Genius Protagonist"),
-                TagCheckBox(317, "Gods"),
-                TagCheckBox(324, "Guilds"),
-                TagCheckBox(341, "Heroes"),
-                TagCheckBox(392, "Level System"),
-                TagCheckBox(413, "Magic"),
-                TagCheckBox(420, "Male Protagonist"),
-                TagCheckBox(456, "Monsters"),
-                TagCheckBox(510, "Overpowered Protagonist"),
-                TagCheckBox(582, "Reincarnation"),
-                TagCheckBox(610, "Second Chance"),
-                TagCheckBox(671, "Special Abilities"),
-                TagCheckBox(696, "Survival"),
-                TagCheckBox(699, "Sword Wielder"),
-                TagCheckBox(725, "Transported to Another World"),
-                TagCheckBox(746, "Virtual Reality"),
-                TagCheckBox(754, "Weak to Strong"),
-            ),
-        )
+    private class GenreFilter(genres: List<TaxonomyTriState>) : Filter.Group<TaxonomyTriState>("Genres", genres)
+
+    private class TagFilter(tags: List<TaxonomyTriState>) : Filter.Group<TaxonomyTriState>("Tags", tags)
 }
