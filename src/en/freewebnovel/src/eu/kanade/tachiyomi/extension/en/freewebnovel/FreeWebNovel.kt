@@ -1,11 +1,14 @@
-﻿package eu.kanade.tachiyomi.novelextension.en.freewebnovel
+package eu.kanade.tachiyomi.novelextension.en.freewebnovel
 
 import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SManga
 import keiyoushi.annotation.Source
 import keiyoushi.utils.SlugPath
 import okhttp3.Request
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Comment
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
@@ -113,6 +116,28 @@ abstract class FreeWebNovel : ReadNovelFull() {
         return manga
     }
 
+    // The server can ship #article's paragraphs shuffled, with their real position in
+    // data-reader-order-index (or a CSS `order` fallback); reader-content-order.js re-sorts them in
+    // the browser. Mirror that: sort the indexed nodes back into the slots they occupy.
+    override suspend fun fetchPageText(page: Page): String {
+        val html = super.fetchPageText(page)
+        if (!html.contains("data-reader-order") && !html.contains("order:")) return html
+        val article = Jsoup.parseBodyFragment(html).body()
+        article.children().filter { it.hasAttr("data-reader-order-anchor") }.forEach { it.remove() }
+        val slots = article.children().mapNotNull { el -> readerOrderIndex(el)?.let { it to el } }
+        val sorted = slots.sortedBy { it.first }.map { it.second }
+        val markers = slots.map { (_, el) -> Comment("").also { el.before(it) } }
+        slots.forEach { it.second.remove() }
+        markers.zip(sorted).forEach { (marker, el) ->
+            el.removeAttr("data-reader-order-index").removeAttr("style")
+            marker.replaceWith(el)
+        }
+        return article.html()
+    }
+
+    private fun readerOrderIndex(el: Element): Int? = el.attr("data-reader-order-index").toIntOrNull()
+        ?: CSS_ORDER.findAll(el.attr("style")).lastOrNull()?.groupValues?.get(1)?.toIntOrNull()
+
     override fun mangaDetailsParse(document: Document): SManga {
         val manga = super.mangaDetailsParse(document)
 
@@ -141,5 +166,9 @@ abstract class FreeWebNovel : ReadNovelFull() {
         }
 
         return manga
+    }
+
+    companion object {
+        private val CSS_ORDER = Regex("""(?:^|;)\s*order\s*:\s*(\d+)""", RegexOption.IGNORE_CASE)
     }
 }
