@@ -26,6 +26,8 @@ import novelsourcery.lib.siteparsers.SiteParserRegistry
 import okhttp3.FormBody
 import okhttp3.Headers
 import okhttp3.HttpUrl
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
@@ -58,10 +60,24 @@ abstract class NovelUpdates :
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
 
+    private val http11OnlyHosts = setOf(
+        "noicetranslations.com",
+    )
+
+    private val http11Client: OkHttpClient by lazy {
+        client.newBuilder()
+            .protocols(listOf(Protocol.HTTP_1_1))
+            .build()
+    }
+
     override suspend fun fetchPageText(page: Page): String {
         val chapterUrl = if (page.url.startsWith("http")) page.url else baseUrl + page.url
 
-        val response = client.get(chapterUrl, headers, ensureSuccess = false)
+        var response = client.get(chapterUrl, headers, ensureSuccess = false)
+        if (response.code == 403 && response.request.url.host in http11OnlyHosts) {
+            response.close()
+            response = http11Client.get(response.request.url, headers, ensureSuccess = false)
+        }
         val body = response.body.string()
         val resolvedUrl = response.request.url
 
