@@ -23,6 +23,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import org.jsoup.nodes.Comment
 import org.jsoup.nodes.Document
 import java.time.LocalDateTime
 import java.time.ZoneOffset
@@ -148,8 +149,23 @@ abstract class Indratranslations :
         val doc = client.get(baseUrl + page.url, headers).asJsoup()
         val content = doc.selectFirst("#chapter-content-text")
             ?: throw Exception("Chapter content unavailable (locked or removed)")
-        content.select("span.td-s-noise").remove()
-        return zeroWidthRegex.replace(content.html(), "")
+        content.select(JUNK_SELECTOR).remove()
+        content.select(".td-reading-flow [translate=no]").remove()
+
+        content.selectFirst(".td-reading-flow")?.let { flow ->
+            val slots = flow.children().filter { it.hasAttr("data-order") }
+            val markers = slots.map { el -> Comment("").also { el.before(it) } }
+            slots.forEach { it.remove() }
+            markers.zip(slots.sortedBy { it.attr("data-order").toFloatOrNull() ?: 0f }).forEach { (marker, el) ->
+                el.removeAttr("data-order").removeAttr("style")
+                marker.replaceWith(el)
+            }
+            flow.unwrap()
+        }
+
+        val sysboxCss = doc.selectFirst("style#td-sysbox-styles")?.data().orEmpty()
+        val html = "<style>$sysboxCss\n$HIDE_CSS</style>" + content.html()
+        return zeroWidthRegex.replace(html, "")
     }
 
     override fun getFilterList(data: JsonElement?) = FilterList(
@@ -269,7 +285,7 @@ abstract class Indratranslations :
 
     @Serializable
     private class ChapterDto(
-        private val num: Int,
+        private val num: Float,
         private val price: Int,
         private val title: String,
         private val date: String,
@@ -282,7 +298,7 @@ abstract class Indratranslations :
             return SChapter.create().apply {
                 url = link.toHttpUrl().encodedPath
                 name = if (locked) "🔒 $title" else title
-                chapter_number = num.toFloat()
+                chapter_number = num
                 date_upload = runCatching {
                     LocalDateTime.parse(date, dateFormat).toInstant(ZoneOffset.UTC).toEpochMilli()
                 }.getOrDefault(0L)
@@ -296,6 +312,12 @@ abstract class Indratranslations :
 
         private val onclickUrlRegex = Regex("""location\.href='([^']+)'""")
         private val chapterArrayRegex = Regex("""TD_Story_Chapters\s*=\s*(\[.*?\]);""", RegexOption.DOT_MATCHES_ALL)
+
+        private const val JUNK_SELECTOR = ".td-s-noise, .td-s-para-noise, .td-hidden-watermark, .td-visible-watermark, " +
+            ".td-canary-trap, .td-copy-honeypot, .td-ad-container, .td-ad-wrapper, .para-comment-badge, " +
+            "ins.adsbygoogle, script, noscript, iframe"
+        private const val HIDE_CSS = ".td-s-noise, .td-s-para-noise, .td-hidden-watermark, .td-visible-watermark, " +
+            ".td-canary-trap, .td-ad-container, .para-comment-badge { display: none !important; }"
 
         private val zeroWidthRegex = Regex("[\u200B\u200C\u200D\u2060\uFEFF]")
 
