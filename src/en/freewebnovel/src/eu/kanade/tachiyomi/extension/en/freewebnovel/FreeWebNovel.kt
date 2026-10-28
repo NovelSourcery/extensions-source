@@ -2,10 +2,14 @@ package eu.kanade.tachiyomi.novelextension.en.freewebnovel
 
 import eu.kanade.tachiyomi.multisrc.readnovelfull.ReadNovelFull
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.source.model.Filter
+import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SManga
 import keiyoushi.annotation.Source
 import keiyoushi.utils.SlugPath
+import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Comment
@@ -22,12 +26,8 @@ abstract class FreeWebNovel : ReadNovelFull() {
 
     // freewebnovel uses "latest-release" for the latest-release listing
     override val latestPage = "sort/latest-release"
-    override val searchPage = "search"
-    override val searchKey = "keyword"
-    override val postSearch = false
     override val noAjax = true
     override val pageAsPath = true
-    override val noPages = listOf("sort/most-popular")
 
     // freewebnovel paginates the chapter list at /novel/<slug>?page=N (page 1 is the novel page);
     // page count and total come from #indexselect (options are "C.1 - C.40" ranges).
@@ -50,23 +50,39 @@ abstract class FreeWebNovel : ReadNovelFull() {
         return "$path/chapter-$number"
     }
 
-    override fun getTypeOptions() = listOf(
-        "All" to "all",
-        "Most Popular" to "sort/most-popular",
-        "Latest Novels" to "sort/latest-novels",
-        "Chinese Novel" to "sort/latest-novels/chinese-novel",
-        "Korean Novel" to "sort/latest-novels/korean-novel",
-        "Japanese Novel" to "sort/latest-novels/japanese-novel",
-        "English Novel" to "sort/latest-novels/english-novel",
+    // Keyword search ignores every other parameter, and /search-adv ignores the keyword
+    override fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+        val url = if (query.isNotBlank()) {
+            "$baseUrl/search".toHttpUrl().newBuilder()
+                .addQueryParameter("keyword", query.trim())
+        } else {
+            "$baseUrl/search-adv".toHttpUrl().newBuilder().apply {
+                addQueryParameter("apply", "1")
+                filters.filterIsInstance<UrlFilter>().forEach { it.addToUrl(this) }
+            }
+        }
+        // Page 1 must not carry the param: the site 301s it away
+        if (page > 1) url.addQueryParameter(pageParam, page.toString())
+        return GET(url.build(), headers)
+    }
+
+    override fun getFilterList(data: JsonElement?) = FilterList(
+        Filter.Header("Filters are ignored when searching by text"),
+        SortFilter(),
+        LanguageFilter(),
+        GenresFilter(),
+        GenreMatchFilter(),
+        NovelStatusFilter(),
+        ContentRatingFilter(),
+        LastUpdatedFilter(),
+        ChaptersFilter(),
+        RatingFilter(),
     )
 
-    override fun popularMangaNextPageSelector() = "li.next:not(.disabled), ul.pagination li.active + li a, div.pages ul li a"
+    // The current page is a <strong>; on the last page the link after it is a javascript: no-op
+    override fun popularMangaNextPageSelector() = "div.pages .jump-pc strong + a[href^=/]"
 
-    override fun latestUpdatesNextPageSelector() = popularMangaNextPageSelector()
-
-    override fun searchMangaNextPageSelector() = popularMangaNextPageSelector()
-
-    override fun popularMangaFromElement(element: org.jsoup.nodes.Element): SManga = listElementToSManga(element)
+    override fun popularMangaFromElement(element: Element): SManga = listElementToSManga(element)
 
     override fun latestUpdatesFromElement(element: Element): SManga = listElementToSManga(element)
 
