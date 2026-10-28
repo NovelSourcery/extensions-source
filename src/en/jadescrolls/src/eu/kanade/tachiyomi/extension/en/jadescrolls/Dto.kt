@@ -4,6 +4,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import keiyoushi.utils.formattedText
 import keiyoushi.utils.setNumber
+import keiyoushi.utils.stripChapterNumberPrefix
 import keiyoushi.utils.tryParse
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -129,7 +130,8 @@ class ChapterDto(
 
     fun toSChapter(novelSlug: String) = SChapter.create().apply {
         url = "$novelSlug/$slug"
-        name = if (isLocked) "🔒 $title" else title
+        val chapterName = title.stripChapterNumberPrefix()
+        name = if (isLocked) "🔒 $chapterName" else chapterName
         chapterNumber?.let {
             chapter_number = it
             setNumber(it.toString().removeSuffix(".0"))
