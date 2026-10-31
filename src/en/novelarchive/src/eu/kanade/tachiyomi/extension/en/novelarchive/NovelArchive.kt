@@ -95,7 +95,10 @@ abstract class NovelArchive :
         genre = cleanGenres(genres)
     }
 
-    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.slug())
+
+    // Entries imported from a page url carry the full page path instead of the bare slug.
+    private fun SManga.slug(): String = url.substringBefore('?').trimEnd('/').substringAfterLast("/novel/").trim('/')
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val id = mangaPathTemplate.slug(url.encodedPath).trim('/')
@@ -132,7 +135,7 @@ abstract class NovelArchive :
         }.trim()
     }
 
-    private fun buildMangaDetailsUrl(manga: SManga): String = "$baseUrl/api/novels/${manga.url}"
+    private fun buildMangaDetailsUrl(manga: SManga): String = "$baseUrl/api/novels/${manga.slug()}"
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
