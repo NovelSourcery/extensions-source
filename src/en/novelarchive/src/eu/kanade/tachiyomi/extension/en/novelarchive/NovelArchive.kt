@@ -14,6 +14,7 @@ import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.parseAs
 import kotlinx.serialization.json.JsonElement
+import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
@@ -23,6 +24,9 @@ abstract class NovelArchive :
     NovelSource {
 
     override val supportsLatest = true
+
+    // Cloudflare blocks API requests that carry no Accept-Language.
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = set("Accept-Language", "en-US,en;q=0.9")
 
     // manga.url is stored as a bare opaque id; this template covers only the webview/deeplink
     // shape ("/novel/<id>") - the API endpoint uses a different prefix ("/api/novels/<id>") built
