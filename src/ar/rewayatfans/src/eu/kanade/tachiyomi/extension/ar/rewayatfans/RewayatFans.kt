@@ -14,7 +14,10 @@ import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import okhttp3.Headers
 import okhttp3.HttpUrl
+import okhttp3.Interceptor
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -25,6 +28,47 @@ abstract class RewayatFans :
     NovelSource {
 
     override val supportsLatest = true
+
+    private companion object {
+        /**
+         * WordPress.com's edge answers 403 to the app's default (OkHttp / random mobile)
+         * User-Agent for this host. Forcing a desktop Chrome UA and the matching navigation
+         * headers keeps every request on the 200 path. See [BrowserHeadersInterceptor].
+         */
+        const val BROWSER_USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+
+        const val HTML_ACCEPT =
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+
+        const val ACCEPT_LANGUAGE = "ar,en-US;q=0.9,en;q=0.8"
+
+        const val CLIENT_HINTS = "\"Chromium\";v=\"140\", \"Not=A?Brand\";v=\"24\", \"Google Chrome\";v=\"140\""
+    }
+
+    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(BrowserHeadersInterceptor())
+
+    private class BrowserHeadersInterceptor : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): okhttp3.Response = chain.proceed(
+            chain.request().newBuilder()
+                .header("User-Agent", BROWSER_USER_AGENT)
+                .header("Accept", HTML_ACCEPT)
+                .header("Accept-Language", ACCEPT_LANGUAGE)
+                .header("sec-ch-ua", CLIENT_HINTS)
+                .header("sec-ch-ua-mobile", "?0")
+                .header("sec-ch-ua-platform", "\"Windows\"")
+                .header("Upgrade-Insecure-Requests", "1")
+                .build(),
+        )
+    }
+
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = set("User-Agent", BROWSER_USER_AGENT)
+        .set("Accept", HTML_ACCEPT)
+        .set("Accept-Language", ACCEPT_LANGUAGE)
+        .set("sec-ch-ua", CLIENT_HINTS)
+        .set("sec-ch-ua-mobile", "?0")
+        .set("sec-ch-ua-platform", "\"Windows\"")
+        .set("Upgrade-Insecure-Requests", "1")
 
     /** [SManga.url] stored as a bare slug (root-level WP post permalink, no fixed prefix). */
     private val mangaPathTemplate = SlugPath("/")
@@ -49,22 +93,29 @@ abstract class RewayatFans :
     private fun parseNovelList(document: Document): List<SManga> {
         return document.select("figure.wp-block-image").mapNotNull { figure ->
             val captionLink = figure.selectFirst("figcaption a[href]")
-                ?: return@mapNotNull null
-            val imgElement = figure.selectFirst("img")
-            val href = captionLink.attr("href")
-            val title = captionLink.text()
+            val link = captionLink ?: figure.selectFirst("a[href]") ?: return@mapNotNull null
+            val href = link.attr("href")
             val relativeUrl = href.toRelativeUrl()
-            if (relativeUrl.isNotEmpty() && title.isNotEmpty()) {
-                SManga.create().apply {
-                    url = mangaPathTemplate.slug(relativeUrl)
-                    this.title = title
-                    thumbnail_url = figure.thumbnailUrl()
-                }
-            } else {
-                null
+            if (relativeUrl.isEmpty()) return@mapNotNull null
+            // A handful of figures on the archive omit the caption; their title is the heading
+            // rendered right after the figure, or the decoded slug as a last resort.
+            val heading = figure.nextElementSibling()?.selectFirst("h3 a[href], h2 a[href]")
+            val title = captionLink?.text()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: heading?.text()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: decodeSlug(relativeUrl)
+            SManga.create().apply {
+                url = mangaPathTemplate.slug(relativeUrl)
+                this.title = title
+                thumbnail_url = figure.thumbnailUrl()
             }
         }.distinctBy { it.url }
     }
+
+    private fun decodeSlug(path: String): String = runCatching {
+        java.net.URLDecoder.decode(path.trim('/'), "UTF-8")
+    }.getOrDefault(path.trim('/'))
+        .replace('-', ' ')
+        .trim()
 
     private fun buildPopularMangaRequest(page: Int): Request {
         val url = if (page == 1) {
