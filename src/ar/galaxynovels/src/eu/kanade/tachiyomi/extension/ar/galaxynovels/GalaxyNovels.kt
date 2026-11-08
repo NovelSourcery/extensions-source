@@ -160,12 +160,25 @@ abstract class GalaxyNovels :
         // clients, which is what leaves the app's main page empty. The library archive serves the
         // same catalogue from a different template and is the reliable fallback.
         val fallbackResponse = client.get(buildLibraryRequest(page).url, headers, ensureSuccess = false)
-        if (!fallbackResponse.isSuccessful) {
+        if (fallbackResponse.isSuccessful) {
+            val fallback = parseNovelList(fallbackResponse)
+            if (fallback.mangas.isNotEmpty()) return fallback
+        } else {
             fallbackResponse.close()
+        }
+
+        // Last resort for the first page: the site front page renders the same `wor-novel-card`
+        // grid. It is a different route, so a WAF rule that only covers the archives does not
+        // necessarily hit it.
+        if (page > 1) return result
+
+        val homeResponse = client.get(baseUrl, headers, ensureSuccess = false)
+        if (!homeResponse.isSuccessful) {
+            homeResponse.close()
             return result
         }
-        val fallback = parseNovelList(fallbackResponse)
-        return if (fallback.mangas.isNotEmpty()) fallback else result
+        val home = parseNovelList(homeResponse)
+        return if (home.mangas.isNotEmpty()) home else result
     }
 
     private fun buildLibraryRequest(page: Int): Request {
