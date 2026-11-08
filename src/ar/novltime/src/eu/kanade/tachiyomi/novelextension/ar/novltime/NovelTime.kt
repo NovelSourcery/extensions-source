@@ -20,7 +20,12 @@ import kotlinx.serialization.json.JsonElement
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Interceptor
+import okhttp3.OkHttpClient
+import okhttp3.Response
+import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 
 private const val API_URL = SITE_URL + "/api/v1"
 
@@ -38,6 +43,12 @@ private const val MAX_CACHED_QUERIES = 32
 
 private const val SORT_POPULAR = "popular"
 private const val SORT_LATEST = "latest"
+
+/** Total attempts (first try + retries) for a single GET. */
+private const val MAX_ATTEMPTS = 3
+
+/** Base backoff between attempts; grows linearly (400 ms, 800 ms, …). */
+private const val RETRY_DELAY_MS = 400L
 
 /**
  * نوفل تايم (novltime.com) — an Arabic web-novel library.
@@ -65,6 +76,46 @@ abstract class NovelTime :
 
     // The API answers JSON regardless of the browser-ish defaults KeiSource adds.
     override fun Headers.Builder.configureHeaders(): Headers.Builder = set("Accept", "application/json")
+
+    /**
+     * The host sits behind a gateway that intermittently answers 504 on otherwise valid requests
+     * (big chapter lists especially), and it can also stall a connection. Bounded timeouts keep a
+     * stalled attempt inside the host app's 30 s chapter-load budget, and [RetryInterceptor] gives
+     * the request another chance before that budget runs out.
+     */
+    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = apply {
+        connectTimeout(10, TimeUnit.SECONDS)
+        readTimeout(10, TimeUnit.SECONDS)
+        callTimeout(25, TimeUnit.SECONDS)
+        addInterceptor(RetryInterceptor())
+    }
+
+    private class RetryInterceptor : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): Response {
+            val request = chain.request()
+            val canRetry = request.method == "GET"
+            var attempt = 0
+
+            while (true) {
+                val response = try {
+                    chain.proceed(request)
+                } catch (e: IOException) {
+                    if (!canRetry || attempt >= MAX_ATTEMPTS - 1 || chain.call().isCanceled()) throw e
+                    attempt++
+                    Thread.sleep(RETRY_DELAY_MS * attempt)
+                    continue
+                }
+
+                val code = response.code
+                val transient = code == 408 || code == 429 || code >= 500
+                if (!canRetry || !transient || attempt >= MAX_ATTEMPTS - 1) return response
+
+                response.close()
+                attempt++
+                Thread.sleep(RETRY_DELAY_MS * attempt)
+            }
+        }
+    }
 
     // The API returns large objects with fields this source does not read, and some of them are
     // null for novels that are still being set up, so both leniencies are needed.
