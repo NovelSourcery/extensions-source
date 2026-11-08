@@ -21,6 +21,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
+import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
@@ -53,6 +54,8 @@ abstract class GalaxyNovels :
 
         const val ACCEPT_LANGUAGE = "ar,en-US;q=0.7,en;q=0.3"
 
+        const val CLIENT_HINTS = "\"Chromium\";v=\"140\", \"Not=A?Brand\";v=\"24\", \"Google Chrome\";v=\"140\""
+
         /**
          * Matches the anti-piracy notice lines the site hides inside the chapter body. Each is
          * marked `data-wor-decoy="1"` by the theme (and also carries `hidden aria-hidden="true"`,
@@ -69,32 +72,58 @@ abstract class GalaxyNovels :
     private val json = Json { ignoreUnknownKeys = true }
 
     /**
-     * Cloudflare blocks this host on a request signature, not on a solvable JS challenge (a hard
-     * WAF 403 — "Sorry, you have been blocked" — so cf_clearance/WebView solving cannot help).
-     * Two independent signatures were measured against the live site:
+     * The site answers a hard 403 to anything that does not look like a desktop browser
+     * navigation. Measured against the live site:
      *
-     * 1. OkHttp's default `okhttp/x.y.z` User-Agent is blocked on every path, so the default
-     *    client 403s even where the site is reachable. Any real browser UA passes.
-     * 2. `Accept-Language` together with BOTH `Sec-Fetch-Dest: document` and
-     *    `Sec-Fetch-Mode: navigate` is blocked. Either of the two Sec-Fetch headers alone is fine,
-     *    as is Accept-Language on its own.
+     * 1. OkHttp's default `okhttp/x.y.z` User-Agent (and a bare curl request) is blocked on every
+     *    path, so a real desktop Chrome UA has to be sent.
+     * 2. A request without an `Accept: text/html…` header is blocked as well — even with a browser
+     *    UA. Sending `Accept` alone is enough to turn the 403 into a 200.
+     * 3. The app's default `Referer`/`Origin` self-references are treated as bot traffic by the
+     *    WAF, so they are dropped and the rest of Chrome's navigation fingerprint (client hints,
+     *    `Upgrade-Insecure-Requests`) is sent instead.
      *
-     * So we advertise a plain browser UA and deliberately do not send Sec-Fetch-Dest /
-     * Sec-Fetch-Mode. Referer/Origin already come from KeiSource's headersBuilder().
+     * All of this is applied in both [configureClient] and [configureHeaders] so every request
+     * path — list, details, chapter reads — carries the same browser-like header set.
      */
     override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(WorReaderBrowserInterceptor())
 
     private class WorReaderBrowserInterceptor : Interceptor {
         override fun intercept(chain: Interceptor.Chain): okhttp3.Response = chain.proceed(
             chain.request().newBuilder()
+                .removeHeader("Referer")
+                .removeHeader("Origin")
+                .removeHeader("Sec-Fetch-Dest")
+                .removeHeader("Sec-Fetch-Mode")
+                .removeHeader("Sec-Fetch-Site")
+                .removeHeader("Sec-Fetch-User")
                 .header("User-Agent", BROWSER_USER_AGENT)
                 // The site serves its reader shell in JS and expects this opt-in cookie.
                 .header("Cookie", "wor_reader_js=1")
                 .header("Accept", HTML_ACCEPT)
                 .header("Accept-Language", ACCEPT_LANGUAGE)
+                .header("sec-ch-ua", CLIENT_HINTS)
+                .header("sec-ch-ua-mobile", "?0")
+                .header("sec-ch-ua-platform", "\"Windows\"")
+                .header("Upgrade-Insecure-Requests", "1")
                 .build(),
         )
     }
+
+    /**
+     * `headersBuilder()` sets `Referer`/`Origin` before this hook runs, so they have to be removed
+     * here too — requests built with [headers] never pass through [WorReaderBrowserInterceptor]'s
+     * `removeHeader` calls otherwise.
+     */
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = removeAll("Referer")
+        .removeAll("Origin")
+        .set("User-Agent", BROWSER_USER_AGENT)
+        .set("Accept", HTML_ACCEPT)
+        .set("Accept-Language", ACCEPT_LANGUAGE)
+        .set("sec-ch-ua", CLIENT_HINTS)
+        .set("sec-ch-ua-mobile", "?0")
+        .set("sec-ch-ua-platform", "\"Windows\"")
+        .set("Upgrade-Insecure-Requests", "1")
 
     private fun String?.toAbsoluteUrl(): String? = when {
         this.isNullOrEmpty() -> null
@@ -116,7 +145,35 @@ abstract class GalaxyNovels :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = buildPopularMangaRequest(page)
-        return parseNovelList(client.get(request.url, request.headers))
+        // A WAF 403 is not an IOException root cause we can recover from later in the app, so the
+        // status is checked here instead of letting the default ensureSuccess throw.
+        val response = client.get(request.url, request.headers, ensureSuccess = false)
+        val result = if (response.isSuccessful) {
+            parseNovelList(response)
+        } else {
+            response.close()
+            MangasPage(emptyList(), false)
+        }
+        if (result.mangas.isNotEmpty()) return result
+
+        // The /novels/ archive occasionally answers 403 to this host even for browser-like
+        // clients, which is what leaves the app's main page empty. The library archive serves the
+        // same catalogue from a different template and is the reliable fallback.
+        val fallbackResponse = client.get(buildLibraryRequest(page).url, headers, ensureSuccess = false)
+        if (!fallbackResponse.isSuccessful) {
+            fallbackResponse.close()
+            return result
+        }
+        val fallback = parseNovelList(fallbackResponse)
+        return if (fallback.mangas.isNotEmpty()) fallback else result
+    }
+
+    private fun buildLibraryRequest(page: Int): Request {
+        val url = "$baseUrl/library/".toHttpUrl().newBuilder()
+            // The library page paginates with library_page, not page
+            .addQueryParameter("library_page", page.toString())
+            .build()
+        return GET(url, headers)
     }
 
     private fun buildLatestUpdatesRequest(page: Int): Request {
@@ -135,15 +192,19 @@ abstract class GalaxyNovels :
     private fun parseNovelList(response: Response): MangasPage {
         val doc = response.asJsoup()
 
-        val novels = doc.select("article.wor-novel-card").mapNotNull { card ->
-            val link = card.selectFirst("a.wor-novel-card__cover") ?: return@mapNotNull null
-            val title = card.selectFirst("h3 a")?.text()
+        // /novels/ and /recent/ render `article.wor-novel-card` (title in an h3), while /library/
+        // renders `article.wor-library-card` (title in `h2.wor-library-card__title`). Both are
+        // handled here so the popular, latest and library-fallback paths share one parser.
+        val novels = doc.select("article.wor-novel-card, article.wor-library-card").mapNotNull { card ->
+            val link = card.selectFirst("a.wor-novel-card__cover, a.wor-library-card__cover, a[href*=novel]")
+                ?: return@mapNotNull null
+            val title = card.selectFirst("h3 a, h2.wor-library-card__title a")?.text()?.trim()
                 ?: link.attr("aria-label").trim().ifEmpty { return@mapNotNull null }
 
             SManga.create().apply {
                 this.title = title
                 url = link.attr("href").removePrefix(baseUrl)
-                val img = card.selectFirst("img.wor-cover-img")
+                val img = card.selectFirst("img.wor-cover-img, img")
                 thumbnail_url = img?.attr("data-src")?.toAbsoluteUrl()
                     ?: img?.attr("src")?.toAbsoluteUrl()
             }
