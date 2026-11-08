@@ -1,7 +1,6 @@
 package eu.kanade.tachiyomi.novelextension.ar.galaxynovels
 
 import android.util.Log
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -10,7 +9,6 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
@@ -26,8 +24,8 @@ import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -55,6 +53,13 @@ abstract class GalaxyNovels :
         const val ACCEPT_LANGUAGE = "ar,en-US;q=0.7,en;q=0.3"
 
         const val CLIENT_HINTS = "\"Chromium\";v=\"140\", \"Not=A?Brand\";v=\"24\", \"Google Chrome\";v=\"140\""
+
+        /**
+         * Reader proxy used only when Cloudflare blocks this network (see [fetchBody]). It fetches
+         * the same page from its own network and returns the rendered HTML untouched, absolute
+         * links included, so the parsers see exactly the markup the site serves.
+         */
+        const val JINA_READER = "https://r.jina.ai/"
 
         /**
          * Matches the anti-piracy notice lines the site hides inside the chapter body. Each is
@@ -132,79 +137,89 @@ abstract class GalaxyNovels :
         else -> this
     }
 
-    // ======================== Popular/Latest ========================
+    // ======================== HTTP ========================
 
-    private fun buildPopularMangaRequest(page: Int): Request {
-        val url = "$baseUrl/novels/".toHttpUrl().newBuilder()
-            .addQueryParameter("sort", "popular")
-            .addQueryParameter("period", "all")
-            .addQueryParameter("page", page.toString())
+    /**
+     * Runs a GET and returns the body. Cloudflare answers every HTML page with its "Sorry, you
+     * have been blocked" interstitial on blacklisted networks — a hard block, not a solvable
+     * challenge, which is why the app showed an empty catalogue and an HTTP 403 error. When that
+     * happens the same URL is replayed through [JINA_READER], which downloads the page from its
+     * own network; its HTML output keeps the original markup and absolute links, so the parsers
+     * below work unchanged. JSON endpoints are requested in the proxy's raw `text` mode.
+     *
+     * The direct request is always tried first, so networks that are not blocked keep the normal
+     * fast path and never touch the proxy.
+     */
+    private suspend fun fetchBody(url: String, isJson: Boolean = false): String? {
+        runCatching { client.get(url, headers, ensureSuccess = false) }.getOrNull()?.let { response ->
+            val body = response.use { it.body.string() }
+            if (response.isSuccessful && !body.isCloudflareBlock()) return body
+        }
+
+        val proxyHeaders = Headers.Builder()
+            .set("Accept", "*/*")
+            .set("X-Return-Format", if (isJson) "text" else "html")
             .build()
-        return GET(url, headers)
+        val proxied = runCatching { client.get(JINA_READER + url, proxyHeaders, ensureSuccess = false) }
+            .getOrNull() ?: return null
+        if (!proxied.isSuccessful) {
+            proxied.close()
+            return null
+        }
+        return proxied.use { it.body.string() }.takeUnless { it.isBlank() || it.isCloudflareBlock() }
     }
 
+    private suspend fun fetchDocument(url: String): Document? = fetchBody(url)?.let(Jsoup::parse)
+
+    private fun String.isCloudflareBlock(): Boolean = contains("Sorry, you have been blocked") || contains("Attention Required! | Cloudflare")
+
+    // ======================== Popular/Latest ========================
+
+    private fun buildPopularMangaUrl(page: Int): String = "$baseUrl/novels/".toHttpUrl().newBuilder()
+        .addQueryParameter("sort", "popular")
+        .addQueryParameter("period", "all")
+        .addQueryParameter("page", page.toString())
+        .build()
+        .toString()
+
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val request = buildPopularMangaRequest(page)
-        // A WAF 403 is not an IOException root cause we can recover from later in the app, so the
-        // status is checked here instead of letting the default ensureSuccess throw.
-        val response = client.get(request.url, request.headers, ensureSuccess = false)
-        val result = if (response.isSuccessful) {
-            parseNovelList(response)
-        } else {
-            response.close()
-            MangasPage(emptyList(), false)
-        }
+        val result = fetchDocument(buildPopularMangaUrl(page))?.let(::parseNovelList)
+            ?: MangasPage(emptyList(), false)
         if (result.mangas.isNotEmpty()) return result
 
         // The /novels/ archive occasionally answers 403 to this host even for browser-like
         // clients, which is what leaves the app's main page empty. The library archive serves the
         // same catalogue from a different template and is the reliable fallback.
-        val fallbackResponse = client.get(buildLibraryRequest(page).url, headers, ensureSuccess = false)
-        if (fallbackResponse.isSuccessful) {
-            val fallback = parseNovelList(fallbackResponse)
-            if (fallback.mangas.isNotEmpty()) return fallback
-        } else {
-            fallbackResponse.close()
-        }
+        fetchDocument(buildLibraryUrl(page))?.let(::parseNovelList)
+            ?.takeIf { it.mangas.isNotEmpty() }
+            ?.let { return it }
 
         // Last resort for the first page: the site front page renders the same `wor-novel-card`
         // grid. It is a different route, so a WAF rule that only covers the archives does not
         // necessarily hit it.
         if (page > 1) return result
 
-        val homeResponse = client.get(baseUrl, headers, ensureSuccess = false)
-        if (!homeResponse.isSuccessful) {
-            homeResponse.close()
-            return result
-        }
-        val home = parseNovelList(homeResponse)
-        return if (home.mangas.isNotEmpty()) home else result
+        return fetchDocument(baseUrl)?.let(::parseNovelList)
+            ?.takeIf { it.mangas.isNotEmpty() }
+            ?: result
     }
 
-    private fun buildLibraryRequest(page: Int): Request {
-        val url = "$baseUrl/library/".toHttpUrl().newBuilder()
-            // The library page paginates with library_page, not page
-            .addQueryParameter("library_page", page.toString())
-            .build()
-        return GET(url, headers)
-    }
+    private fun buildLibraryUrl(page: Int): String = "$baseUrl/library/".toHttpUrl().newBuilder()
+        // The library page paginates with library_page, not page
+        .addQueryParameter("library_page", page.toString())
+        .build()
+        .toString()
 
-    private fun buildLatestUpdatesRequest(page: Int): Request {
-        val url = "$baseUrl/recent/".toHttpUrl().newBuilder()
-            // The /recent/ archive paginates with recent_page, not page
-            .addQueryParameter("recent_page", page.toString())
-            .build()
-        return GET(url, headers)
-    }
+    private fun buildLatestUpdatesUrl(page: Int): String = "$baseUrl/recent/".toHttpUrl().newBuilder()
+        // The /recent/ archive paginates with recent_page, not page
+        .addQueryParameter("recent_page", page.toString())
+        .build()
+        .toString()
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val request = buildLatestUpdatesRequest(page)
-        return parseNovelList(client.get(request.url, request.headers))
-    }
+    override suspend fun getLatestUpdates(page: Int): MangasPage = fetchDocument(buildLatestUpdatesUrl(page))?.let(::parseNovelList)
+        ?: MangasPage(emptyList(), false)
 
-    private fun parseNovelList(response: Response): MangasPage {
-        val doc = response.asJsoup()
-
+    private fun parseNovelList(doc: Document): MangasPage {
         // /novels/ and /recent/ render `article.wor-novel-card` (title in an h3), while /library/
         // renders `article.wor-library-card` (title in `h2.wor-library-card__title`). Both are
         // handled here so the popular, latest and library-fallback paths share one parser.
@@ -230,14 +245,14 @@ abstract class GalaxyNovels :
 
     // ======================== Search ========================
 
-    private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+    private fun buildSearchMangaUrl(page: Int, query: String, filters: FilterList): String {
         if (query.isNotEmpty()) {
-            val url = "$baseUrl/library/".toHttpUrl().newBuilder()
+            return "$baseUrl/library/".toHttpUrl().newBuilder()
                 .addQueryParameter("q", query)
                 // The WorReader library page paginates with library_page, not page
                 .addQueryParameter("library_page", page.toString())
                 .build()
-            return GET(url, headers)
+                .toString()
         }
 
         val url = "$baseUrl/library/".toHttpUrl().newBuilder()
@@ -267,13 +282,12 @@ abstract class GalaxyNovels :
             }
         }
 
-        return GET(url.build(), headers)
+        return url.build().toString()
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val searchRequest = buildSearchMangaRequest(page, query, filters)
-        val response = client.get(searchRequest.url, searchRequest.headers)
-        val doc = response.asJsoup()
+        val doc = fetchDocument(buildSearchMangaUrl(page, query, filters))
+            ?: return MangasPage(emptyList(), false)
 
         val novels = doc.select("article.wor-library-card, article.wor-novel-card").mapNotNull { card ->
             val titleLink = card.selectFirst("h2.wor-library-card__title a, h3 a")
@@ -305,14 +319,11 @@ abstract class GalaxyNovels :
     // ======================== Novel Details + Chapters ========================
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val path = url.encodedPath
-        val response = client.get(url, headers, ensureSuccess = false)
-        if (!response.isSuccessful) return null
-        val doc = response.asJsoup()
-        return parseMangaDetails(doc).apply { this.url = path }
+        val doc = fetchDocument(url.toString()) ?: return null
+        return parseMangaDetails(doc).apply { this.url = url.encodedPath }
     }
 
-    private fun parseMangaDetails(doc: org.jsoup.nodes.Document): SManga = SManga.create().apply {
+    private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
         title = doc.selectFirst("h1")?.text() ?: "No Title"
 
         val img = doc.selectFirst("img.wor-cover-img")
@@ -356,7 +367,8 @@ abstract class GalaxyNovels :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val doc = client.get(baseUrl + manga.url, headers, ensureSuccess = false).asJsoup()
+        val doc = fetchDocument(baseUrl + manga.url)
+            ?: return SMangaUpdate(manga, chapters)
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) fetchChapterList(manga, doc) else chapters
@@ -364,7 +376,7 @@ abstract class GalaxyNovels :
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private suspend fun fetchChapterList(manga: SManga, doc: org.jsoup.nodes.Document): List<SChapter> = // The app can cancel getMangaUpdate mid-fetch (background update + foreground
+    private suspend fun fetchChapterList(manga: SManga, doc: Document): List<SChapter> = // The app can cancel getMangaUpdate mid-fetch (background update + foreground
         // detail refresh overlap). Wrap the whole network chain in NonCancellable so a
         // cancelled coroutine doesn't abort the manifest/pack fetch and drop us to
         // the 30-chapter HTML fallback.
@@ -383,23 +395,20 @@ abstract class GalaxyNovels :
             if (novelId != null) {
                 try {
                     val manifestUrl = "$baseUrl/wp-content/uploads/wor-reader-cache/chapters/manifest/novel-$novelId.json"
-                    val manifestResp = client.get(manifestUrl, headers, ensureSuccess = false)
-                    if (manifestResp.isSuccessful) {
-                        val manifestBody = manifestResp.body.string()
+                    val manifestBody = fetchBody(manifestUrl, isJson = true)
+                    if (manifestBody != null) {
                         val manifest = json.decodeFromString<ManifestResponse>(manifestBody)
                         Log.i(TAG, "fetchChapterList: manifest ok total=${manifest.total} pack_url=${manifest.pack_url}")
 
                         val packUrl = manifest.pack_url
                         if (packUrl.isNotBlank()) {
-                            val packResp = client.get(packUrl, headers, ensureSuccess = false)
-                            if (packResp.isSuccessful) {
-                                val packBody = packResp.body.string()
+                            val packBody = fetchBody(packUrl, isJson = true)
+                            if (packBody != null) {
                                 val pack = json.decodeFromString<PackResponse>(packBody)
                                 Log.i(TAG, "fetchChapterList: pack ok chapters=${pack.chapters.size} total=${pack.total}")
                                 return@withContext pack.chapters.toChapterList()
-                            } else {
-                                Log.w(TAG, "fetchChapterList: pack HTTP ${packResp.code}")
                             }
+                            Log.w(TAG, "fetchChapterList: pack unavailable")
                         }
 
                         if (manifest.live_tail.isNotEmpty()) {
@@ -407,7 +416,7 @@ abstract class GalaxyNovels :
                             return@withContext manifest.live_tail.toChapterList()
                         }
                     } else {
-                        Log.w(TAG, "fetchChapterList: manifest HTTP ${manifestResp.code}")
+                        Log.w(TAG, "fetchChapterList: manifest unavailable")
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "fetchChapterList: manifest/pack error", e)
@@ -417,7 +426,7 @@ abstract class GalaxyNovels :
             // Step 2: last resort — parse the detail page HTML (has the ~30 most recent chapters).
             Log.w(TAG, "fetchChapterList: falling back to HTML chapters")
             val htmlDoc = if (doc.select("article.wor-novel-chapter-item").isEmpty()) {
-                client.get(baseUrl + manga.url, headers, ensureSuccess = false).asJsoup()
+                fetchDocument(baseUrl + manga.url) ?: doc
             } else {
                 doc
             }
@@ -485,10 +494,8 @@ abstract class GalaxyNovels :
             baseUrl + page.url
         }
 
-        // The source headers (browser UA + Cookie/Accept/Accept-Language, no Sec-Fetch-Dest/Mode)
-        // come from WorReaderBrowserInterceptor, which runs for every request through this client.
-        val response = client.get(url, headers)
-        val doc = response.asJsoup()
+        // fetchDocument retries through the reader proxy when the network is WAF-blocked.
+        val doc = fetchDocument(url) ?: return ""
 
         // The reader renders the chapter body in `div.wor-reader-text-surface`; the older
         // WordPress-style containers are kept as a fallback in case the theme changes back.
