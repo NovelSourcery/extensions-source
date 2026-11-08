@@ -14,7 +14,13 @@ import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.parseAs
+import kotlinx.serialization.Serializable
+import okhttp3.Headers
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Interceptor
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -25,6 +31,47 @@ abstract class RewayahFans :
     NovelSource {
 
     override val supportsLatest = true
+
+    private companion object {
+        /**
+         * WordPress.com's edge rejects the app's default (OkHttp / mobile random) User-Agent with
+         * a 403 for this host. A plain desktop Chrome UA plus the usual navigation headers gets a
+         * 200, so both are forced here. See [BrowserHeadersInterceptor].
+         */
+        const val BROWSER_USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+
+        const val HTML_ACCEPT =
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+
+        const val ACCEPT_LANGUAGE = "ar,en-US;q=0.9,en;q=0.8"
+
+        const val CLIENT_HINTS = "\"Chromium\";v=\"140\", \"Not=A?Brand\";v=\"24\", \"Google Chrome\";v=\"140\""
+    }
+
+    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(BrowserHeadersInterceptor())
+
+    private class BrowserHeadersInterceptor : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): okhttp3.Response = chain.proceed(
+            chain.request().newBuilder()
+                .header("User-Agent", BROWSER_USER_AGENT)
+                .header("Accept", HTML_ACCEPT)
+                .header("Accept-Language", ACCEPT_LANGUAGE)
+                .header("sec-ch-ua", CLIENT_HINTS)
+                .header("sec-ch-ua-mobile", "?0")
+                .header("sec-ch-ua-platform", "\"Windows\"")
+                .header("Upgrade-Insecure-Requests", "1")
+                .build(),
+        )
+    }
+
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = set("User-Agent", BROWSER_USER_AGENT)
+        .set("Accept", HTML_ACCEPT)
+        .set("Accept-Language", ACCEPT_LANGUAGE)
+        .set("sec-ch-ua", CLIENT_HINTS)
+        .set("sec-ch-ua-mobile", "?0")
+        .set("sec-ch-ua-platform", "\"Windows\"")
+        .set("Upgrade-Insecure-Requests", "1")
 
     /** [SManga.url] stored as a bare slug (root-level WP post permalink, no fixed prefix). */
     private val mangaPathTemplate = SlugPath("/")
@@ -46,26 +93,64 @@ abstract class RewayahFans :
             ?: ""
     } ?: ""
 
-    private fun parseNovelList(document: Document): List<SManga> {
-        return document.select("figure.wp-block-image").mapNotNull { figure ->
-            val captionLink = figure.selectFirst("figcaption a[href]")
+    private suspend fun parseNovelList(document: Document): List<SManga> {
+        val novels = document.select("figure.wp-block-image").mapNotNull { figure ->
+            val link = figure.selectFirst("figcaption a[href]")
                 ?: figure.selectFirst("a[href]")
                 ?: return@mapNotNull null
-            val imgElement = figure.selectFirst("img")
-            val href = captionLink.attr("href")
-            val title = captionLink.text()
-            val relativeUrl = href.toRelativeUrl()
-            if (relativeUrl.isNotEmpty() && title.isNotEmpty()) {
-                SManga.create().apply {
-                    url = mangaPathTemplate.slug(relativeUrl)
-                    this.title = title
-                    thumbnail_url = figure.thumbnailUrl()
-                }
-            } else {
-                null
+            // Entries on the home page have no <figcaption>: their title is the heading rendered
+            // right after the figure. On the /list/ archive some figures lack both, and those get
+            // their title from the WP REST API (or, as a last resort, from the decoded slug).
+            val heading = figure.nextElementSibling()?.selectFirst("h3 a[href], h2 a[href]")
+            val title = link.text().trim().takeIf { it.isNotEmpty() && figure.selectFirst("figcaption a[href]") != null }
+                ?: heading?.text()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: ""
+            val relativeUrl = link.attr("href").toRelativeUrl()
+            if (relativeUrl.isEmpty()) return@mapNotNull null
+            SManga.create().apply {
+                url = mangaPathTemplate.slug(relativeUrl)
+                this.title = title
+                thumbnail_url = figure.thumbnailUrl()
             }
         }.distinctBy { it.url }
+
+        val untitled = novels.filter { it.title.isBlank() }
+        if (untitled.isNotEmpty()) {
+            val titles = fetchPageTitles(untitled.map { it.url })
+            untitled.forEach { manga ->
+                manga.title = titles[manga.url.trim('/')] ?: decodeSlug(manga.url)
+            }
+        }
+
+        return novels
     }
+
+    /**
+     * The archive's `<figure>` blocks do not always carry a caption, but the site itself is a
+     * WordPress install and exposes the page titles over REST. A single batched request resolves
+     * every missing title.
+     */
+    private suspend fun fetchPageTitles(slugs: Collection<String>): Map<String, String> {
+        if (slugs.isEmpty()) return emptyMap()
+        val url = "$baseUrl/wp-json/wp/v2/pages".toHttpUrl().newBuilder()
+            .addQueryParameter("_fields", "slug,title")
+            .apply { slugs.forEach { addEncodedQueryParameter("slug[]", it.trim('/')) } }
+            .build()
+        return runCatching {
+            client.get(url, headers).parseAs<List<WpTitlePage>>()
+                .mapNotNull { page ->
+                    page.title?.rendered?.takeIf { it.isNotBlank() }?.let { page.slug.trim('/') to it }
+                }
+                .toMap()
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun decodeSlug(slug: String): String = runCatching {
+        java.net.URLDecoder.decode(slug.trim('/'), "UTF-8")
+    }.getOrDefault(slug.trim('/'))
+        .replace('-', ' ')
+        .trim()
+        .ifEmpty { slug }
 
     private fun buildPopularMangaRequest(page: Int): Request {
         val url = if (page == 1) {
@@ -230,3 +315,13 @@ abstract class RewayahFans :
         return paragraphs.joinToString("<br><br>") { it.html() }
     }
 }
+
+/** Minimal shape of a `/wp-json/wp/v2/pages?_fields=slug,title` entry. */
+@Serializable
+class WpTitlePage(
+    val slug: String = "",
+    val title: WpRenderedTitle? = null,
+)
+
+@Serializable
+class WpRenderedTitle(val rendered: String = "")
