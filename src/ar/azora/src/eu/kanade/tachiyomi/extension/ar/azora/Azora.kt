@@ -14,17 +14,9 @@ import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.parseAs
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl
 import okhttp3.Request
 import org.jsoup.Jsoup
-import org.jsoup.parser.Parser
 import java.net.URLEncoder
 
 @Source
@@ -62,7 +54,7 @@ abstract class Azora :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val response = client.get(url, headers, ensureSuccess = false)
         if (!response.isSuccessful) return null
-        // Raw body needed for the <astro-island> regex extraction below, in addition to Jsoup
+        // Raw body needed for the RSC `post:$R[...]` extraction below, in addition to Jsoup
         // parsing for the HTML fallback path - asJsoup() would consume it without giving the
         // string back.
         val html = response.body.string()
@@ -93,17 +85,17 @@ abstract class Azora :
     private fun parseMangaDetails(html: String, post: PostDto? = extractPost(html)): SManga {
         val doc = Jsoup.parse(html)
         return SManga.create().apply {
-            title = post?.postTitle
+            title = post?.postTitle?.takeIf { it.isNotBlank() }
                 ?: doc.selectFirst("h1[itemProp=name]")?.text()
                 ?: doc.selectFirst("meta[property=og:title]")?.attr("content")
                 ?: ""
-            thumbnail_url = post?.featuredImage
+            thumbnail_url = post?.featuredImage?.takeIf { it.isNotBlank() }
                 ?: doc.selectFirst("img[itemProp=image]")?.attr("abs:src")
                 ?: doc.selectFirst("meta[property=og:image]")?.attr("content")
-            description = post?.postContent
+            description = post?.postContent?.takeIf { it.isNotBlank() }
                 ?.let { Jsoup.parseBodyFragment(it).text() }
                 ?: doc.selectFirst("meta[name=description]")?.attr("content")
-            genre = post?.genres?.joinToString { it.name }
+            genre = post?.genres?.takeIf { it.isNotEmpty() }?.joinToString { it.name }
                 ?: doc.select("a[itemProp=genre]").joinToString { it.text() }
             status = when (post?.seriesStatus?.lowercase() ?: "") {
                 "ongoing" -> SManga.ONGOING
@@ -126,8 +118,12 @@ abstract class Azora :
 
     private suspend fun fetchChapterList(postId: Int, slug: String): List<SChapter> {
         val response = client.get("$apiUrl/api/chapters?postId=$postId&skip=0&take=all&order=desc", headers)
+        // Locked/paid chapters are kept on purpose. Most Azora novels are fully locked, so the old
+        // `isAccessible && !isLocked && !isPermanentlyLocked && price <= 0` filter produced an
+        // empty list and the app showed "لا يوجد فصول" for those series. The reader page for a
+        // locked chapter explains that it is locked instead of returning nothing.
         return response.parseAs<ChaptersResponse>().post.chapters
-            .filter { it.isAccessible && !it.isLocked && !it.isPermanentlyLocked && it.price <= 0 }
+            .filter { it.slug.isNotBlank() }
             .map { it.toSChapter(slug) }
             .sortedByDescending { it.chapter_number }
     }
@@ -136,54 +132,63 @@ abstract class Azora :
 
     override suspend fun fetchPageText(page: Page): String {
         val doc = client.get(baseUrl + page.url, headers).asJsoup()
-        val content = doc.selectFirst("div.novel-reader-content") ?: return ""
+        val content = doc.selectFirst("div.novel-reader-content")
+            ?: return "هذا الفصل مقفل. افتح الفصل من موقع Azora لقراءته."
         return content.select("p")
             .mapNotNull { p -> p.text().takeIf { it.isNotBlank() } }
             .dropWhile { it.all { c -> c == '*' || c.isWhitespace() } || it.startsWith("الفصل ") }
             .joinToString("\n\n")
     }
 
-    // ---------- Astro island JSON decoding ----------
-    // The site is an Astro app: post metadata for the series page is embedded as an escaped JSON
-    // blob in a <astro-island props="..."> tag rather than exposed over the public API, so it has
-    // to be extracted from the raw HTML and decoded from Astro's tagged-array wire format.
+    // ---------- RSC flight payload decoding ----------
+    // The series page is no longer an Astro app: the post metadata now lives in the inline React
+    // Server Components payload as `post:$R[89]={id:2004,slug:"…",postTitle:"…",…}`. It is a JS
+    // object literal (unquoted keys, `!0` booleans), not JSON, so the few fields we need are read
+    // with targeted regexes and the rest of the details come from the rendered HTML.
 
-    private fun extractPost(html: String): PostDto? = extractSeriesPanelProps(html)?.let { props ->
-        runCatching {
-            val decoded = decodeAstroProps(props)
-            (decoded["post"] as? JsonObject)?.parseAs<PostDto>()
-        }.getOrNull()
+    private fun extractPost(html: String): PostDto? {
+        val marker = html.indexOf("post:${'$'}R[")
+        if (marker < 0) return null
+        val start = html.indexOf('{', marker)
+        if (start < 0) return null
+        val payload = html.substring(start, minOf(html.length, start + PAYLOAD_WINDOW))
+
+        val id = ID_FIELD.find(payload)?.groupValues?.get(1)?.toIntOrNull() ?: return null
+        return PostDto(
+            id = id,
+            slug = stringField("slug", payload).orEmpty(),
+            postTitle = stringField("postTitle", payload).orEmpty(),
+            featuredImage = stringField("featuredImage", payload).orEmpty(),
+            seriesStatus = stringField("seriesStatus", payload).orEmpty(),
+            postContent = stringField("postContent", payload).orEmpty(),
+        )
     }
 
-    private val astroIslandRegex = Regex("""<astro-island\b([^>]*)>""")
+    private fun stringField(name: String, payload: String): String? = Regex("${Regex.escape(name)}:\"((?:[^\"\\\\]|\\\\.)*)\"")
+        .find(payload)
+        ?.groupValues
+        ?.get(1)
+        ?.let(::unescapeJsString)
 
-    private fun extractSeriesPanelProps(html: String): String? {
-        for (match in astroIslandRegex.findAll(html)) {
-            val attrs = match.groupValues[1]
-            if ("&quot;name&quot;:&quot;SeriesChaptersPanelIsland&quot;" in attrs) {
-                val props = Regex("""props="([^"]*)"""").find(attrs)?.groupValues?.get(1)
-                if (props != null) return Parser.unescapeEntities(props, false)
-            }
-        }
-        return null
-    }
+    /** Undoes the `\x3C`-style escapes React uses inside the flight payload strings. */
+    private fun unescapeJsString(value: String): String = value
+        .replace("\\x3C", "<")
+        .replace("\\x3E", ">")
+        .replace("\\x26", "&")
+        .replace("\\x3c", "<")
+        .replace("\\x3e", ">")
+        .replace("\\u003C", "<")
+        .replace("\\u003E", ">")
+        .replace("\\u0026", "&")
+        .replace("\\\"", "\"")
+        .replace("\\/", "/")
+        .replace("\\n", "\n")
+        .replace("\\r", "\r")
 
-    private fun decodeAstroProps(rawProps: String): JsonObject {
-        val root = rawProps.parseAs<JsonElement>().jsonObject
-        return JsonObject(root.mapValues { (_, value) -> decodeAstroNode(value) })
-    }
+    private companion object {
+        /** Enough to reach the post fields, which sit at the very start of the object. */
+        const val PAYLOAD_WINDOW = 8_000
 
-    private fun decodeAstroNode(node: JsonElement): JsonElement {
-        if (node !is JsonArray || node.size < 2) return node
-        val tag = node[0].jsonPrimitive.contentOrNull ?: return node
-        val payload = node[1]
-        return when (tag) {
-            "1" -> JsonArray(payload.jsonArray.map { decodeAstroNode(it) })
-            else -> when (payload) {
-                is JsonObject -> JsonObject(payload.mapValues { (_, value) -> decodeAstroNode(value) })
-                is JsonArray -> JsonArray(payload.jsonArray.map { decodeAstroNode(it) })
-                else -> payload
-            }
-        }
+        val ID_FIELD = Regex("""\bid:(\d+)""")
     }
 }
