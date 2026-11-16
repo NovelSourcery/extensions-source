@@ -32,7 +32,6 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import org.jsoup.Jsoup
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import kotlin.time.Instant
@@ -114,7 +113,7 @@ abstract class NovelDex :
             addQueryParameter("limit", "24")
 
             if (query.isNotBlank()) {
-                addQueryParameter("search", query)
+                addQueryParameter("q", query)
             }
 
             val genres = mutableListOf<String>()
@@ -592,113 +591,32 @@ abstract class NovelDex :
     // ======================== Novel Content ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val chapterPath = page.url
+        val rscResponse = client.get("$baseUrl${page.url}", rscHeaders())
+        val (rscBody, _) = resolveRedirects(rscResponse.body.string())
 
-        // Approach 1: RSC headers (React Server Component wire format)
-        // NovelDex uses Next.js App Router — chapter content lives in RSC T-tags,
-        // NOT in the visible HTML DOM (which only has loading skeletons).
-        try {
-            val rscResponse = client.get("$baseUrl$chapterPath", rscHeaders())
-            val (rscBody, _) = resolveRedirects(rscResponse.body.string())
-            val xorContent = extractFromXorEncryption(rscBody)
-            if (!xorContent.isNullOrBlank()) return xorContent
+        extractFromXorEncryption(rscBody)?.takeIf(String::isNotBlank)?.let { return it }
+        extractFromRscBody(rscBody)?.let { return it }
 
-            val rscContent = extractFromRscBody(rscBody)
-            if (rscContent != null) return rscContent
-        } catch (_: Exception) {}
-
-        // Approach 2: Normal HTML fetch (fallback)
-        try {
-            val htmlResponse = client.get("$baseUrl$chapterPath", headers)
-            val htmlBody = htmlResponse.body.string()
-            val doc = Jsoup.parse(htmlBody)
-
-            // Try common chapter content selectors
-            val content = doc.selectFirst(
-                "div.chapter-content, div.prose, article.chapter, " +
-                    "div[class*=chapter-text], div[class*=chapterContent], " +
-                    "div[class*=reading-content], div[class*=novelContent]",
-            )?.html()
-            if (!content.isNullOrBlank() && content.length > 50) return content
-
-            // Try __NEXT_DATA__ JSON (Pages Router)
-            val nextDataScript = doc.selectFirst("script#__NEXT_DATA__")?.data()
-            if (nextDataScript != null) {
-                val extracted = extractContentFromNextData(nextDataScript)
-                if (extracted != null && extracted.length > 50) return extracted
-            }
-
-            // Try RSC extraction on HTML body (content is inside self.__next_f.push scripts)
-            val xorContent = extractFromXorEncryption(htmlBody)
-            if (!xorContent.isNullOrBlank()) return xorContent
-
-            val rscContent = extractFromRscBody(htmlBody)
-            if (rscContent != null) return rscContent
-        } catch (_: Exception) {}
-
-        return ""
+        if (LOCKED_REGEX.containsMatchIn(rscBody)) {
+            throw Exception("This chapter is locked. Unlock it on NovelDex first.")
+        }
+        throw Exception("Chapter content not found")
     }
 
     /**
-     * Extract chapter content from RSC wire format body.
-     *
-     * RSC T-tags have format: `KEY:TSIZE,<content>` where:
-     * - KEY is a hex identifier (e.g. "d", "4c", "1c")
-     * - SIZE is the hex byte-length of the content
-     * - Content follows immediately after the comma
-     *
-     * Strategy:
-     * 1. Targeted: find "content":"$KEY" reference and resolve the T-tag directly
-     * 2. Fallback: score all T-tags to find the one with actual chapter HTML
+     * Resolve the chapter's `"content":"$KEY"` reference to its RSC T-tag (`KEY:TSIZE,<content>`).
+     * No blind scan of other T-tags: without the reference they are page scripts, CSS class
+     * lists and the site's notice comment, which came out as gibberish chapter text.
      */
     private fun extractFromRscBody(body: String): String? {
-        // --- Targeted extraction: find "content":"$KEY" and resolve T-tag ---
         val contentMarker = "\"content\":\"\$"
         val contentIdx = body.indexOf(contentMarker)
-        if (contentIdx >= 0) {
-            val keyStart = contentIdx + contentMarker.length
-            val keyEnd = body.indexOf('"', keyStart)
-            if (keyEnd > keyStart && keyEnd - keyStart <= 4) {
-                val key = body.substring(keyStart, keyEnd)
-                val tTagContent = resolveTTag(body, key)
-                if (tTagContent != null && tTagContent.length > 50) return tTagContent
-            }
-        }
-
-        // --- Fallback: scan all T-tags with scoring ---
-        val tTagRegex = Regex("""[0-9a-fA-F]+:T([0-9a-fA-F]+),""")
-        val allTTags = tTagRegex.findAll(body).toList()
-
-        var bestContent: String? = null
-        var bestScore = 0
-
-        for (match in allTTags) {
-            val sizeBytes = match.groupValues[1].toIntOrNull(16) ?: continue
-            if (sizeBytes < 100) continue
-
-            val contentStart = match.range.last + 1
-            if (contentStart >= body.length) continue
-
-            val rawContent = extractTTagBytes(body, contentStart, sizeBytes)
-            val content = stripWatermark(rawContent)
-
-            if (content.isBlank() || content.length < 50) continue
-            if (content.trimStart().startsWith("<script") || content.trimStart().startsWith("{")) continue
-            if (looksLikeEncryptedPayload(content)) continue
-
-            var score = content.length / 10
-            score += Regex("<p[ >]").findAll(content).count() * 50
-            score += Regex("<br").findAll(content).count() * 5
-            if (content.contains("function ") || content.contains("var ") || content.contains("window.")) score -= 500
-            if (content.contains("<script")) score -= 1000
-
-            if (score > bestScore && content.length > 50) {
-                bestScore = score
-                bestContent = content
-            }
-        }
-
-        return bestContent
+        if (contentIdx < 0) return null
+        val keyStart = contentIdx + contentMarker.length
+        val keyEnd = body.indexOf('"', keyStart)
+        if (keyEnd <= keyStart || keyEnd - keyStart > 4) return null
+        return resolveTTag(body, body.substring(keyStart, keyEnd))
+            ?.takeIf { it.length > 50 && !looksLikeEncryptedPayload(it) }
     }
 
     private fun looksLikeEncryptedPayload(content: String): Boolean {
@@ -842,28 +760,6 @@ abstract class NovelDex :
         .replace(Regex("[\uFEFF\u200B\u200C\u200D\u200E\u200F\u034F\u2060-\u2064\u2069\uFFFE]+"), "")
         .trim()
 
-    /**
-     * Try to extract chapter content from __NEXT_DATA__ JSON (Pages Router).
-     */
-    private fun extractContentFromNextData(jsonStr: String): String? {
-        return try {
-            val root = json.parseToJsonElement(jsonStr).jsonObject
-            val props = root["props"]?.jsonObject?.get("pageProps")?.jsonObject ?: return null
-            for (key in listOf("content", "chapterContent", "body", "text", "html")) {
-                props[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.length > 50 }?.let { return it }
-            }
-            val chapter = props["chapter"]?.jsonObject
-            if (chapter != null) {
-                for (key in listOf("content", "body", "text", "html")) {
-                    chapter[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.length > 50 }?.let { return it }
-                }
-            }
-            null
-        } catch (_: Exception) {
-            null
-        }
-    }
-
     // ======================== Preferences ========================
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
@@ -884,6 +780,7 @@ abstract class NovelDex :
         private const val SHOW_LOCKED_PREF_KEY = "show_locked_chapters"
         private const val MAX_REDIRECT_HOPS = 3
         private val REDIRECT_REGEX = Regex("""REDIRECT;\w+;([^;]+);\d+;""")
+        private val LOCKED_REGEX = Regex(""""isUnlocked"\s*:\s*false\s*,\s*"isLocked"\s*:\s*true""")
     }
 
     // ======================== Filters ========================
