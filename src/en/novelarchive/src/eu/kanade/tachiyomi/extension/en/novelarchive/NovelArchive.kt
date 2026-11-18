@@ -14,6 +14,7 @@ import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.parseAs
 import kotlinx.serialization.json.JsonElement
+import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
@@ -23,6 +24,9 @@ abstract class NovelArchive :
     NovelSource {
 
     override val supportsLatest = true
+
+    // Cloudflare blocks API requests that carry no Accept-Language.
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = set("Accept-Language", "en-US,en;q=0.9")
 
     // manga.url is stored as a bare opaque id; this template covers only the webview/deeplink
     // shape ("/novel/<id>") - the API endpoint uses a different prefix ("/api/novels/<id>") built
@@ -91,7 +95,10 @@ abstract class NovelArchive :
         genre = cleanGenres(genres)
     }
 
-    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
+    override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.slug())
+
+    // Entries imported from a page url carry the full page path instead of the bare slug.
+    private fun SManga.slug(): String = url.substringBefore('?').trimEnd('/').substringAfterLast("/novel/").trim('/')
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val id = mangaPathTemplate.slug(url.encodedPath).trim('/')
@@ -128,7 +135,7 @@ abstract class NovelArchive :
         }.trim()
     }
 
-    private fun buildMangaDetailsUrl(manga: SManga): String = "$baseUrl/api/novels/${manga.url}"
+    private fun buildMangaDetailsUrl(manga: SManga): String = "$baseUrl/api/novels/${manga.slug()}"
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,

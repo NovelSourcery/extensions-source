@@ -6,16 +6,17 @@ plugins {
 
 keiyoushi {
     name = "Novel Archive"
-    versionCode = 5
+    versionCode = 6
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 
     source {
         lang = "en"
-        baseUrl = "https://novelarchive.cc"
+        baseUrl = "https://novelarchive.st"
     }
 
     deeplink {
+        host("novelarchive.st")
         host("novelarchive.cc")
         path("/..*")
     }
