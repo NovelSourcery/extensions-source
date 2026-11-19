@@ -76,7 +76,7 @@ abstract class WtrLab :
             var currentRequest = original
             var response = chain.proceed(currentRequest)
             var attempt = 0
-            while (!response.isSuccessful && attempt < MAX_BUILD_ID_RETRIES) {
+            while (!response.isSuccessful && response.code < 500 && attempt < MAX_BUILD_ID_RETRIES) {
                 val failedBuildId = BUILD_ID_IN_PATH_REGEX.find(currentRequest.url.encodedPath)
                     ?.groupValues?.get(1) ?: break
                 response.close()
@@ -693,6 +693,12 @@ abstract class WtrLab :
 
     private suspend fun parseMangaDetailsJson(response: Response): SManga {
         val manga = SManga.create()
+        if (!response.isSuccessful) {
+            val code = response.code
+            // Removed novels render the Next.js error page with an HTTP 500 and statusCode 410 inside
+            val gone = response.body.string().contains("\"statusCode\":410")
+            throw Exception(if (gone) "Novel was removed from WTR-LAB" else "HTTP error $code")
+        }
         var root = json.parseToJsonElement(response.body.string()).jsonObject
 
         var pageProps = root["pageProps"]?.jsonObject
