@@ -69,10 +69,17 @@ abstract class PenguinSquad :
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val latestRequest = buildLatestUpdatesRequest(page)
         val doc = client.get(latestRequest.url, latestRequest.headers, Fetch.DOCUMENT).asJsoup()
-        val section = doc.select("section")
+        val newlyAdded = doc.select("section")
             .firstOrNull { it.selectFirst("h2")?.ownText() == "Newly Added" }
-            ?: doc
-        return MangasPage(section.parseNovelCards(), false)
+            ?.parseNovelCards()
+            ?: doc.parseNovelCards()
+        if (page <= 1) return MangasPage(newlyAdded, true)
+
+        val seen = newlyAdded.mapTo(HashSet()) { it.url }
+        val popularRequest = buildPopularMangaRequest(page)
+        val rest = client.get(popularRequest.url, popularRequest.headers, Fetch.DOCUMENT).asJsoup().parseNovelCards()
+            .filterNot { it.url in seen }
+        return MangasPage(rest, false)
     }
 
     // The site has no server-side text search; ?genre= is the only server filter.
