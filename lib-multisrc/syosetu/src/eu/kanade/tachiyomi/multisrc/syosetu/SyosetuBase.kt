@@ -108,7 +108,8 @@ abstract class SyosetuBase(
     override suspend fun getLatestUpdates(page: Int): MangasPage = when {
         siteType == SiteType.NOVEL18 -> fetchNovel18ApiList(page, order = "new")
         siteType == SiteType.NOC || siteType == SiteType.MID || siteType == SiteType.MNLT ->
-            fetchNovelList(buildOrderedListUrl(page, "new"))
+            fetchNovelList(buildOrderedListUrl(page, "new")).cappedAt(page)
+        siteType == SiteType.NCODE -> fetchNovel18ApiList(page, order = "new", apiBase = novelApiUrl)
         supportsRanking -> fetchNovelList(buildRankingUrl(page, "daily", "", "total"))
         else -> MangasPage(emptyList(), false)
     }
@@ -116,13 +117,17 @@ abstract class SyosetuBase(
     // ---------- Search ----------
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = when {
         siteType == SiteType.NOVEL18 -> fetchNovel18ApiList(page, order = "hyoka", word = query.takeIf { it.isNotBlank() })
-        query.isNotBlank() -> fetchNovelList(buildSearchUrl(page, query))
-        supportsRanking -> fetchNovelList(buildFilteredSearchUrl(page, filters))
+        query.isNotBlank() -> fetchNovelList(buildSearchUrl(page, query)).cappedAt(page)
+        supportsRanking -> fetchNovelList(buildFilteredSearchUrl(page, filters)).cappedAt(page)
         else -> MangasPage(emptyList(), false)
     }
 
+    // search.php stops at 2000 results (page 100) yet still links a next page that 404s.
+    private fun MangasPage.cappedAt(page: Int) = if (page >= MAX_SEARCH_PAGE) MangasPage(mangas, false) else this
+
     // ---------- NOVEL18 JSON API browsing ----------
     private val novel18ApiUrl = "https://api.syosetu.com/novel18api/api/"
+    private val novelApiUrl = "https://api.syosetu.com/novelapi/api/"
     private val novel18PageSize = 20
 
     // The API hard-caps how deep its "st" (start offset) search param can go, rejecting anything
@@ -132,8 +137,13 @@ abstract class SyosetuBase(
     // site only ever allows ~100.
     private val novel18MaxSearchOffset = 2000
 
-    private suspend fun fetchNovel18ApiList(page: Int, order: String, word: String? = null): MangasPage {
-        val apiUrl = novel18ApiUrl.toHttpUrl().newBuilder()
+    private suspend fun fetchNovel18ApiList(
+        page: Int,
+        order: String,
+        word: String? = null,
+        apiBase: String = novel18ApiUrl,
+    ): MangasPage {
+        val apiUrl = apiBase.toHttpUrl().newBuilder()
             .addQueryParameter("out", "json")
             .addQueryParameter("order", order)
             .addQueryParameter("lim", novel18PageSize.toString())
@@ -225,7 +235,7 @@ abstract class SyosetuBase(
 
     protected open fun parseNovelList(doc: Document): MangasPage {
         val elements = when (siteType) {
-            SiteType.NCODE, SiteType.NOVEL18 -> doc.select(".c-card, .searchkekka_box, .p-ranklist-item")
+            SiteType.NCODE, SiteType.NOVEL18 -> doc.select(".c-card, .searchkekka_box, .p-ranklist-item, .smpnovel_list")
             // NOC/MNLT/MID serve an entirely different template to mobile User-Agents (which is
             // what this source's headers advertise), and MID's own mobile template differs again
             // from NOC/MNLT's: rank/list becomes "ul.ranking" (NOC/MNLT) or ".rankList" (MID),
@@ -239,12 +249,14 @@ abstract class SyosetuBase(
 
         val novels = elements.mapNotNull { element ->
             val link = element.selectFirst("a.tl")
-                ?: element.selectFirst(".novel_h a.tl")
+                ?: element.selectFirst("a.read_button")
                 ?: element.selectFirst("a[href*='/n']")
                 ?: element.selectFirst("a")
                 ?: return@mapNotNull null
 
-            val title = link.attr("title").ifEmpty { link.text() }.trim()
+            val title = link.attr("title")
+                .ifEmpty { if (link.hasClass("read_button")) element.selectFirst(".novel_h")?.text().orEmpty() else link.text() }
+                .trim()
             val href = link.attr("abs:href")
             if (title.isBlank() || href.isBlank()) return@mapNotNull null
 
@@ -519,3 +531,5 @@ abstract class SyosetuBase(
         }
     }
 }
+
+private const val MAX_SEARCH_PAGE = 100
