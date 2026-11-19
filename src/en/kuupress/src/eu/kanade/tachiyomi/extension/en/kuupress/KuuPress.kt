@@ -72,7 +72,7 @@ abstract class KuuPress :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val url = "$apiBase/novels_trending".toHttpUrl().newBuilder()
-            .addQueryParameter("limit", "10")
+            .addQueryParameter("limit", "100")
             .build()
         val body = client.get(url, headers, Fetch.XHR).body.string()
         return parseNovelArrayResponse(body, key = "data", hasMore = false)
