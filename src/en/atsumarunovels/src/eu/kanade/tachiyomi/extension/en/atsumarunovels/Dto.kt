@@ -25,7 +25,7 @@ class BrowseMangaDto(
 
 @Serializable
 class MangaObjectDto(
-    val mangaPage: MangaDto,
+    val mangaPage: MangaDto? = null,
 )
 
 @Serializable

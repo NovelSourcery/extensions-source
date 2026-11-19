@@ -153,9 +153,13 @@ abstract class AtsumaruNovels :
         return fetchDetails(id).toSMangaDetails(baseUrl).apply { initialized = true }
     }
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.url}"
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.mangaId}"
 
     private suspend fun fetchDetails(id: String): MangaDto = client.get("$baseUrl/api/manga/page?id=$id", Fetch.XHR).parseAs<MangaObjectDto>().mangaPage
+        ?: throw Exception("Novel not found")
+
+    // Urls saved from a page path ("/novel/<id>") instead of the bare id
+    private val SManga.mangaId get() = url.trim('/').substringAfterLast('/')
 
     private suspend fun fetchAllChapters(id: String): List<ChapterDto> = client.get("$baseUrl/api/manga/allChapters?mangaId=$id", Fetch.XHR).parseAs<AllChaptersDto>().chapters
 
@@ -166,14 +170,14 @@ abstract class AtsumaruNovels :
         fetchChapters: Boolean,
     ): SMangaUpdate = coroutineScope {
         // Scanlator names live in the details response, so it's needed for the chapter list too
-        val detailsDeferred = async { fetchDetails(manga.url) }
-        val chaptersDeferred = async { if (fetchChapters) fetchAllChapters(manga.url) else null }
+        val detailsDeferred = async { fetchDetails(manga.mangaId) }
+        val chaptersDeferred = async { if (fetchChapters) fetchAllChapters(manga.mangaId) else null }
 
         val details = detailsDeferred.await()
         val chapterDtos = chaptersDeferred.await()
 
         val updatedManga = if (fetchDetails) details.toSMangaDetails(baseUrl) else manga
-        val updatedChapters = chapterDtos?.let { buildChapterList(manga.url, details, it) } ?: chapters
+        val updatedChapters = chapterDtos?.let { buildChapterList(manga.mangaId, details, it) } ?: chapters
 
         SMangaUpdate(updatedManga, updatedChapters)
     }
@@ -256,13 +260,13 @@ abstract class AtsumaruNovels :
 
     override suspend fun onFavorited(manga: SManga, categories: List<String>) {
         if (!trackingEnabled) return
-        val type = fetchDetails(manga.url).type ?: DEFAULT_TYPE
-        syncBookmark(manga.url, prefs.getString(PREF_LIBRARY_STATUS, DEFAULT_STATUS), type)
+        val type = fetchDetails(manga.mangaId).type ?: DEFAULT_TYPE
+        syncBookmark(manga.mangaId, prefs.getString(PREF_LIBRARY_STATUS, DEFAULT_STATUS), type)
     }
 
     override suspend fun onUnfavorited(manga: SManga, categories: List<String>) {
         if (!trackingEnabled) return
-        syncBookmark(manga.url, null, null)
+        syncBookmark(manga.mangaId, null, null)
     }
 
     override suspend fun onChaptersRead(
@@ -276,7 +280,7 @@ abstract class AtsumaruNovels :
         if (read.isEmpty()) return
 
         // syncProgress needs each chapter's scanlation id, which isn't kept on SChapter
-        val scanlationIds = fetchAllChapters(manga.url).associate { it.id to it.scanlationMangaId }
+        val scanlationIds = fetchAllChapters(manga.mangaId).associate { it.id to it.scanlationMangaId }
         val now = System.currentTimeMillis()
         val day = Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate().toString()
 
@@ -285,7 +289,7 @@ abstract class AtsumaruNovels :
             val scanlationId = scanlationIds[chapterId] ?: return@mapNotNull null
             buildJsonObject {
                 put("mangaScanlationId", scanlationId)
-                put("mangaId", manga.url)
+                put("mangaId", manga.mangaId)
                 put("chapterId", chapterId)
                 put("page", 0)
                 put("frac", 1)
@@ -303,8 +307,8 @@ abstract class AtsumaruNovels :
         }
 
         if (prefs.getBoolean(PREF_MARK_COMPLETED, true) && allChapters.isNotEmpty() && allChapters.all { it.isRead() }) {
-            val type = fetchDetails(manga.url).type ?: DEFAULT_TYPE
-            syncBookmark(manga.url, "Completed", type)
+            val type = fetchDetails(manga.mangaId).type ?: DEFAULT_TYPE
+            syncBookmark(manga.mangaId, "Completed", type)
         }
     }
 
