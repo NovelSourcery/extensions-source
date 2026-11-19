@@ -5,19 +5,22 @@ plugins {
 }
 
 keiyoushi {
-    name = "WuxiaWorldEU"
-    versionCode = 7
+    name = "ReadNovelEU"
+    versionCode = 8
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 
     source {
         lang = "en"
-        baseUrl = "https://www.wuxiaworld.eu"
+        baseUrl = "https://readnovel.eu"
+        id = 2133254182037727506L
     }
 
     deeplink {
+        host("readnovel.eu")
         host("wuxiaworld.eu")
         host("www.wuxiaworld.eu")
+        host("wuxia.click")
         path("/novel/..*")
         path("/..*")
     }
