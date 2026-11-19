@@ -32,6 +32,7 @@ import keiyoushi.utils.getPreferences
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.toJsonString
 import keiyoushi.utils.tryParseDateTime
+import kotlinx.coroutines.delay
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -47,6 +48,7 @@ import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.io.File
 import java.time.format.DateTimeFormatter
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * NovelFire novel source - ported from LN Reader plugin
@@ -444,7 +446,9 @@ abstract class NovelFire :
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private suspend fun fetchNovelFireChapterList(doc: Document, response: Response, existingChapters: List<SChapter>): List<SChapter> {
+    private suspend fun fetchNovelFireChapterList(doc: Document, response: Response, storedChapters: List<SChapter>): List<SChapter> {
+        // Lists stored by versionCode 15 have glued names and numbers ("Ch. 908113 Years1 month ago"); refetch them.
+        val existingChapters = storedChapters.takeUnless { list -> list.any { GLUED_NAME_REGEX.matches(it.name) } } ?: emptyList()
         val novelPath = response.request.url.encodedPath.trimStart('/')
 
         val totalChapters = doc.selectFirst("#gotochapno")?.attr("max")?.toIntOrNull()
@@ -484,26 +488,13 @@ abstract class NovelFire :
                 fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
             ).reversed()
             else -> {
-                if (postId != null) {
-                    try {
-                        paginatedChapterList(
-                            existingChapters = existingChapters,
-                            siteTotal = totalChapters,
-                            assumedPageSize = CHAPTERS_PER_PAGE,
-                            fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
-                        ).reversed()
-                    } catch (e: Exception) {
-                        Log.d(TAG, "fetchMangaUpdate: HTML incremental failed (${e.message}), falling back to AJAX")
-                        getAllChaptersFromAjax(novelPath, postId).reversed()
-                    }
-                } else {
-                    paginatedChapterList(
-                        existingChapters = existingChapters,
-                        siteTotal = totalChapters,
-                        assumedPageSize = CHAPTERS_PER_PAGE,
-                        fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
-                    ).reversed()
-                }
+                // The ajax listing route is gone (404), so auto only uses the paged HTML list.
+                paginatedChapterList(
+                    existingChapters = existingChapters,
+                    siteTotal = totalChapters,
+                    assumedPageSize = CHAPTERS_PER_PAGE,
+                    fetchPage = { page -> fetchSingleHtmlPage(novelPath, page) },
+                ).reversed()
             }
         }
     }
@@ -605,14 +596,31 @@ abstract class NovelFire :
     private suspend fun fetchSingleHtmlPage(novelPath: String, page: Int): Pair<List<SChapter>, Boolean> {
         val pageUrl = "$baseUrl/$novelPath/chapters?page=$page"
         Log.d(TAG, "html fetch: GET $pageUrl")
-        val response = client.get(pageUrl, headers, Fetch.DOCUMENT)
+        // Long chapter lists hit the site's 429 limit after about a dozen pages; wait it out.
+        var response = client.get(pageUrl, headers, Fetch.DOCUMENT, ensureSuccess = false)
+        var attempt = 0
+        while (response.code == 429 && attempt < MAX_RATE_LIMIT_RETRIES) {
+            val wait = response.header("Retry-After")?.toLongOrNull() ?: RATE_LIMIT_WAIT_SECONDS
+            response.close()
+            delay(wait.coerceAtMost(30).seconds)
+            response = client.get(pageUrl, headers, Fetch.DOCUMENT, ensureSuccess = false)
+            attempt++
+        }
+        if (!response.isSuccessful) {
+            response.close()
+            throw Exception("HTTP error ${response.code}")
+        }
         val body = response.body.string()
         if (body.contains("You are being rate limited")) throw NovelFireThrottlingError()
         val doc = Jsoup.parse(body)
         checkCloudflare(doc)
         val chapters = doc.select(".chapter-list li").mapNotNull { element ->
             val linkElement = element.selectFirst("a") ?: return@mapNotNull null
-            val chapterName = linkElement.attr("title").ifEmpty { linkElement.text() }
+            val chapterNo = linkElement.selectFirst(".chapter-no")?.text()
+            val chapterTitle = linkElement.selectFirst(".chapter-title")?.text()
+            // The anchor's children have no whitespace between them, so text() glues the
+            // number, title and relative date into one string ("Ch. 908113 Years1 month ago").
+            val chapterName = linkElement.attr("title").ifEmpty { chapterTitle?.ifBlank { null } ?: chapterNo ?: linkElement.text() }
             val chapterUrl = linkElement.absUrl("href").ifEmpty { linkElement.attr("href") }
             val chapterDate: Long = dateFormat.tryParseDateTime(
                 linkElement.selectFirst(".chapter-update[datetime]")?.attr("datetime"),
@@ -622,6 +630,7 @@ abstract class NovelFire :
                     name = chapterName
                     url = it.toNovelPath()
                     date_upload = chapterDate
+                    chapterNo?.let { no -> CHAPTER_NO_REGEX.find(no)?.value?.toFloatOrNull() }?.let { n -> chapter_number = n }
                 }
             }
         }
@@ -916,6 +925,10 @@ abstract class NovelFire :
     companion object {
         private const val TAG = "NovelFire"
         private const val CHAPTERS_PER_PAGE = 100
+        private const val MAX_RATE_LIMIT_RETRIES = 3
+        private const val RATE_LIMIT_WAIT_SECONDS = 5L
+        private val CHAPTER_NO_REGEX = Regex("""\d+(?:\.\d+)?""")
+        private val GLUED_NAME_REGEX = Regex("""Ch\. \d.* ago""")
         private const val TAGS_CACHE_KEY = "novelfire_tags_cache"
         private const val TAGS_CACHE_TIME_KEY = "novelfire_tags_cache_time"
         private const val CLEAR_TAG_CACHE_KEY = "novelfire_clear_tag_cache"
