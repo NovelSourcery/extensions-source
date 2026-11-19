@@ -195,7 +195,7 @@ abstract class LnCrawler :
 
         return SManga.create().apply {
             url = mangaPath.slug("/novels/${novel.slug}/${source?.sourceSlug ?: ""}")
-            title = novel.title
+            title = novel.displayTitle ?: source?.title ?: throw Exception("Novel title not found")
             thumbnail_url = resolveCover(source?.coverUrl ?: novel.preferedSource?.coverUrl)
             author = source?.authors?.joinToString() ?: novel.preferedSource?.authors?.joinToString()
 
@@ -209,7 +209,7 @@ abstract class LnCrawler :
                 append("\nSources: ${novel.sources?.size ?: 1}")
 
                 source?.let { s ->
-                    append("\n\nCurrent Source: ${s.sourceName}")
+                    s.sourceName?.let { append("\n\nCurrent Source: $it") }
                     append("\nChapters: ${s.chaptersCount}")
                     append("\nVolumes: ${s.volumesCount}")
                 }
@@ -456,7 +456,7 @@ abstract class LnCrawler :
 
     private fun novelToSManga(novel: NovelSearchResult): SManga = SManga.create().apply {
         url = mangaPath.slug(toWebPath("/novels/${novel.preferedSource?.novelSlug ?: novel.slug}/${novel.preferedSource?.sourceSlug ?: ""}"))
-        title = novel.title
+        title = novel.displayTitle!!
         thumbnail_url = resolveCover(novel.preferedSource?.coverMinUrl ?: novel.preferedSource?.coverUrl)
         author = novel.preferedSource?.authors?.firstOrNull()
         description = novel.preferedSource?.synopsis?.let { Jsoup.parse(it).text() }
@@ -540,23 +540,27 @@ abstract class LnCrawler :
     @Serializable
     class NovelSearchResult(
         private val id: String,
-        val title: String,
+        private val title: String? = null,
         val slug: String = "",
         @SerialName("sources_count") private val sourcesCount: Int = 0,
         @SerialName("avg_rating") private val avgRating: Double? = null,
         @SerialName("rating_count") private val ratingCount: Int = 0,
         @SerialName("total_views") private val totalViews: Int = 0,
         @SerialName("weekly_views") private val weeklyViews: Int = 0,
-        @SerialName("prefered_source") val preferedSource: SourceInfo? = null,
+        @SerialName("suggested_source") val preferedSource: SourceInfo? = null,
         private val languages: List<String>? = null,
         @SerialName("is_bookmarked") private val isBookmarked: Boolean? = null,
         @SerialName("comment_count") private val commentCount: Int = 0,
-    )
+    ) {
+        // Novels no longer carry their own title; the suggested source's title stands in for it.
+        val displayTitle: String?
+            get() = title ?: preferedSource?.title
+    }
 
     @Serializable
     class NovelDetail(
         private val id: String,
-        val title: String,
+        private val title: String? = null,
         val slug: String,
         val sources: List<SourceInfo>? = null,
         @SerialName("created_at") private val createdAt: String? = null,
@@ -565,16 +569,18 @@ abstract class LnCrawler :
         @SerialName("rating_count") val ratingCount: Int = 0,
         @SerialName("total_views") val totalViews: Int = 0,
         @SerialName("weekly_views") val weeklyViews: Int = 0,
-        @SerialName("prefered_source") val preferedSource: SourceInfo? = null,
+        @SerialName("suggested_source") val preferedSource: SourceInfo? = null,
         @SerialName("similar_novels") private val similarNovels: List<NovelSearchResult>? = null,
-    )
+    ) {
+        val displayTitle: String?
+            get() = title ?: preferedSource?.title
+    }
 
     @Serializable
     class SourceInfo(
-        private val id: String,
-        private val title: String,
+        val title: String,
         @SerialName("source_url") private val sourceUrl: String? = null,
-        @SerialName("source_name") val sourceName: String,
+        @SerialName("source_name") val sourceName: String? = null,
         @SerialName("source_slug") val sourceSlug: String,
         val authors: List<String>? = null,
         val tags: List<String>? = null,
@@ -594,7 +600,7 @@ abstract class LnCrawler :
 
     @Serializable
     class ChapterInfo(
-        private val id: Int,
+        private val id: Int? = null,
         @SerialName("chapter_id") val chapterId: Int,
         val title: String,
         private val url: String? = null,
