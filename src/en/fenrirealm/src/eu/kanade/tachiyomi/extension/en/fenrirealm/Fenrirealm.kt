@@ -216,19 +216,19 @@ abstract class Fenrirealm :
 
                     is GenreFilter -> {
                         filter.state.filter { it.isIncluded() }.forEach { genre ->
-                            addQueryParameter("genres[]", genre.id.toString())
+                            addQueryParameter("genres[]", genre.key)
                         }
                         filter.state.filter { it.isExcluded() }.forEach { genre ->
-                            addQueryParameter("exclude_genres[]", genre.id.toString())
+                            addQueryParameter("exclude_genres[]", genre.key)
                         }
                     }
 
                     is TagFilter -> {
                         filter.state.filter { it.isIncluded() }.forEach { tag ->
-                            addQueryParameter("tags[]", tag.id.toString())
+                            addQueryParameter("tags[]", tag.key)
                         }
                         filter.state.filter { it.isExcluded() }.forEach { tag ->
-                            addQueryParameter("exclude_tags[]", tag.id.toString())
+                            addQueryParameter("exclude_tags[]", tag.key)
                         }
                     }
 
@@ -418,7 +418,7 @@ abstract class Fenrirealm :
     }
 
     private suspend fun mintReadToken(chapter: ChapterDto): Boolean {
-        val target = chapter.remintChapterUuid ?: chapter.remintChapterId?.toString() ?: chapter.uuid ?: chapter.id.toString()
+        val target = chapter.remintChapterUuid ?: chapter.remintChapterId?.toString() ?: chapter.uuid ?: chapter.id?.toString() ?: return false
         val response = client.post(
             "$baseUrl/api/read-token",
             headers,
@@ -507,8 +507,8 @@ abstract class Fenrirealm :
         val genres = async { client.get("$apiBaseUrl/taxonomies/genres", headers, Fetch.XHR).parseAs<List<TaxonomyDto>>() }
         val tags = async { client.get("$apiBaseUrl/taxonomies/tags", headers, Fetch.XHR).parseAs<List<TaxonomyDto>>() }
         FilterDataDto(
-            genres = genres.await().map { TaxonomyDto(it.id, it.name) },
-            tags = tags.await().filter { (it.seriesCount ?: 0) > 0 }.map { TaxonomyDto(it.id, it.name) }.sortedBy { it.name },
+            genres = genres.await().map { FilterOptionDto(it.key, it.name) },
+            tags = tags.await().filter { (it.seriesCount ?: 0) > 0 }.map { FilterOptionDto(it.key, it.name) }.sortedBy { it.name },
         ).toJsonElement()
     }
 
@@ -523,9 +523,9 @@ abstract class Fenrirealm :
                     add(Filter.Header("Press 'Reset' to load genres and tags"))
                 } else {
                     add(Filter.Header("Include/Exclude Genres (Tap to toggle)"))
-                    add(GenreFilter(filterData.genres.map { TaxonomyTriState(it.id, it.name) }))
+                    add(GenreFilter(filterData.genres.map { TaxonomyTriState(it.key, it.name) }))
                     add(Filter.Header("Include/Exclude Tags (Tap to toggle)"))
-                    add(TagFilter(filterData.tags.map { TaxonomyTriState(it.id, it.name) }))
+                    add(TagFilter(filterData.tags.map { TaxonomyTriState(it.key, it.name) }))
                 }
             },
         )
@@ -578,7 +578,6 @@ abstract class Fenrirealm :
 
     @Serializable
     class NovelDto(
-        private val id: Int,
         private val title: String,
         private val slug: String,
         @SerialName("alt_title") private val altTitle: String? = null,
@@ -731,8 +730,9 @@ abstract class Fenrirealm :
 
     @Serializable
     class ChapterDto(
-        val id: Int,
+        val id: Int? = null,
         val uuid: String? = null,
+        @SerialName("content_cid") private val contentCid: Int? = null,
         val content: JsonElement = JsonNull,
         @SerialName("content_format") val contentFormat: String? = null,
         @SerialName("content_scheme") private val contentScheme: String? = null,
@@ -745,19 +745,23 @@ abstract class Fenrirealm :
         val isPaid: Boolean
             get() = (locked?.price ?: 0) > 0 && bought?.boughtAt == null && !bypass
 
+        // The site dropped numeric chapter ids; key/shuffle seeds now use content_cid, falling back to the uuid.
+        private val saltTarget: String
+            get() = contentCid?.toString() ?: id?.toString() ?: uuid.orEmpty()
+
         fun decrypt(token: String): String? = runCatching {
             val isV2 = contentScheme == "fragmented-v2"
             val vid = if (isV2) tokenVid(token) else ""
             val cipherText = when (content) {
                 is JsonArray -> unshuffle(
                     content.map { it.jsonPrimitive.content },
-                    if (isV2) "$token:$vid:$id:fr-frag-v2" else "$token:$id:fr-frag-v1",
+                    if (isV2) "$token:$vid:$saltTarget:fr-frag-v2" else "$token:$saltTarget:fr-frag-v1",
                 )
                 is JsonPrimitive -> content.content
                 else -> return null
             }
             val raw = Base64.decode(cipherText, Base64.DEFAULT)
-            val keySeed = if (isV2 && vid.isNotEmpty()) "$token:$vid:$id:fr-content-v2" else "$token:$id:fr-content-v1"
+            val keySeed = if (isV2 && vid.isNotEmpty()) "$token:$vid:$saltTarget:fr-content-v2" else "$token:$saltTarget:fr-content-v1"
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(sha256(keySeed), "AES"), GCMParameterSpec(128, raw, 0, 12))
             String(cipher.doFinal(raw, 12, raw.size - 12), Charsets.UTF_8)
@@ -837,15 +841,26 @@ abstract class Fenrirealm :
 
     @Serializable
     class TaxonomyDto(
-        val id: Int,
+        private val id: Int? = null,
+        private val uuid: String? = null,
         val name: String,
         @SerialName("series_count") val seriesCount: Int? = null,
+    ) {
+        // The API is moving from numeric ids to uuids; its filters accept either.
+        val key: String
+            get() = uuid ?: id.toString()
+    }
+
+    @Serializable
+    class FilterOptionDto(
+        val key: String,
+        val name: String,
     )
 
     @Serializable
     class FilterDataDto(
-        val genres: List<TaxonomyDto>,
-        val tags: List<TaxonomyDto>,
+        val genres: List<FilterOptionDto>,
+        val tags: List<FilterOptionDto>,
     )
 
     @Serializable
@@ -901,14 +916,12 @@ abstract class Fenrirealm :
 
     @Serializable
     class GenreDto(
-        val id: Int,
         val name: String,
         val slug: String,
     )
 
     @Serializable
     class TagDto(
-        val id: Int,
         val name: String,
         val slug: String,
     )
@@ -996,7 +1009,7 @@ abstract class Fenrirealm :
             ),
         )
 
-    private class TaxonomyTriState(val id: Int, name: String) : Filter.TriState(name)
+    private class TaxonomyTriState(val key: String, name: String) : Filter.TriState(name)
 
     private class GenreFilter(genres: List<TaxonomyTriState>) : Filter.Group<TaxonomyTriState>("Genres", genres)
 
