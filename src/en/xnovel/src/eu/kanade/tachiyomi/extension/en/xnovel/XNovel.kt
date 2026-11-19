@@ -54,7 +54,7 @@ abstract class XNovel :
         GenreFilter(),
     )
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl/${manga.url}"
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl/${novelId(manga.url)}"
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         if (url.host != baseUrl.toHttpUrl().host) return null
@@ -68,9 +68,16 @@ abstract class XNovel :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate = coroutineScope {
-        val details = async { if (fetchDetails) fetchNovel(manga.url) else manga }
-        val chapterList = async { if (fetchChapters) fetchChapters(manga.url) else chapters }
+        val id = novelId(manga.url)
+        val details = async { if (fetchDetails) fetchNovel(id) else manga }
+        val chapterList = async { if (fetchChapters) fetchChapters(id) else chapters }
         SMangaUpdate(details.await(), chapterList.await())
+    }
+
+    // Urls saved from a page path ("/31750-slug") instead of the bare node id
+    private fun novelId(url: String): String {
+        val segment = url.trim('/').substringAfterLast('/')
+        return ID_REGEX.find(segment)?.groupValues?.get(1) ?: segment
     }
 
     private suspend fun fetchNovel(id: String): SManga = query(graphQLBody(NOVEL_QUERY, variables = IdVariables(id)))

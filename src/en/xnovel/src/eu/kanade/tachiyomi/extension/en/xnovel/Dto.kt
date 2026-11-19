@@ -19,14 +19,16 @@ class Paging(val next: Int? = null)
 class NovelData(@SerialName("get_NovelsNode") val node: NovelNode)
 
 @Serializable
-class NovelNode(private val id: String, private val data: Novel) {
+class NovelNode(private val id: String, private val data: Novel? = null) {
+    private val novel get() = data ?: throw Exception("Novel not found")
+
     fun toSManga(baseUrl: String) = SManga.create().apply {
         url = id
-        title = data.title
-        thumbnail_url = data.cover?.let { baseUrl + it }
+        title = novel.title
+        thumbnail_url = novel.cover?.let { baseUrl + it }
     }
 
-    fun toDetailedSManga(baseUrl: String) = toSManga(baseUrl).apply { data.fillDetails(this) }
+    fun toDetailedSManga(baseUrl: String) = toSManga(baseUrl).apply { novel.fillDetails(this) }
 }
 
 @Serializable
