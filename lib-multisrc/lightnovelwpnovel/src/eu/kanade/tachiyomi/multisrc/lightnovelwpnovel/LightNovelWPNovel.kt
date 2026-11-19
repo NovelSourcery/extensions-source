@@ -59,10 +59,11 @@ abstract class LightNovelWPNovel :
     override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(client.newCall(buildLatestUpdatesRequest(page)).execute())
 
     protected open fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        var url = "$baseUrl/$seriesPath?page=$page"
-
-        if (query.isNotBlank()) {
-            url += "&s=${query.replace(" ", "+")}"
+        var url = if (query.isNotBlank()) {
+            val pagePath = if (page > 1) "/page/$page" else ""
+            "$baseUrl/$seriesPath$pagePath/?s=${query.replace(" ", "+")}"
+        } else {
+            "$baseUrl/$seriesPath?page=$page"
         }
 
         filters.forEach { filter ->
@@ -91,7 +92,7 @@ abstract class LightNovelWPNovel :
     protected open fun parseMangaListResponse(response: Response): MangasPage {
         val doc = response.asJsoup()
         val mangas = parseNovels(doc)
-        val hasNextPage = doc.selectFirst(".pagination .next, .pagination a.next") != null
+        val hasNextPage = doc.selectFirst(".pagination .next, .pagination a.next, .hpage a.r") != null
         return MangasPage(mangas, hasNextPage)
     }
 
