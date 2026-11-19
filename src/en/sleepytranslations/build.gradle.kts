@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "SleepyTranslations"
-    versionCode = 4
+    versionCode = 5
     contentWarning = ContentWarning.SAFE
     theme = "madaranovel"
 
@@ -17,6 +17,6 @@ keiyoushi {
 
     deeplink {
         host("sleepytranslations.com")
-        path("/novel/..*")
+        path("/series/..*")
     }
 }
