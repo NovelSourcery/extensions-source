@@ -30,17 +30,28 @@ abstract class Qimao :
     NovelSource,
     ConfigurableSource {
 
-    override val supportsLatest = false
+    override val supportsLatest = true
 
     private val preferences by getPreferencesLazy()
 
-    override suspend fun getPopularManga(page: Int): MangasPage {
-        if (page > 1) return MangasPage(emptyList(), false)
-        val data = client.get("$baseUrl/api/search/result?keyword=&page=1", headers, Fetch.XHR).parseAs<SearchResponse>().data
-        return MangasPage(data.doYouLikeList.map { it.toSManga() }, false)
-    }
+    override suspend fun getPopularManga(page: Int): MangasPage = getClassifyList("click", page)
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = throw UnsupportedOperationException()
+    override suspend fun getLatestUpdates(page: Int): MangasPage = getClassifyList("update_time", page)
+
+    private suspend fun getClassifyList(order: String, page: Int): MangasPage {
+        val url = "$baseUrl/api/classify/book-list".toHttpUrl().newBuilder().apply {
+            CLASSIFY_PARAMS.forEach { addQueryParameter(it, "a") }
+            addQueryParameter("order", order)
+            addQueryParameter("page", page.toString())
+        }.build()
+        val data = client.get(url, headers, Fetch.XHR).parseAs<ClassifyResponse>().data
+
+        val count = data.pageData.count.toIntOrNull() ?: 0
+        val pageSize = data.pageData.pageSize.toIntOrNull() ?: data.bookList.size
+        val hasNextPage = data.bookList.isNotEmpty() && pageSize > 0 && page * pageSize < count
+
+        return MangasPage(data.bookList.map { it.toSManga() }, hasNextPage)
+    }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val url = "$baseUrl/api/search/result".toHttpUrl().newBuilder()
@@ -123,7 +134,15 @@ abstract class Qimao :
     private class SearchData(
         @SerialName("page_data") val pageData: PageDataDto,
         @SerialName("search_list") val searchList: List<SearchItemDto> = emptyList(),
-        @SerialName("do_you_like_list") val doYouLikeList: List<SearchItemDto> = emptyList(),
+    )
+
+    @Serializable
+    private class ClassifyResponse(val data: ClassifyData)
+
+    @Serializable
+    private class ClassifyData(
+        @SerialName("page_data") val pageData: PageDataDto,
+        @SerialName("book_list") val bookList: List<SearchItemDto> = emptyList(),
     )
 
     @Serializable
@@ -213,5 +232,6 @@ abstract class Qimao :
 
     companion object {
         private const val PREF_SHOW_LOCKED = "pref_show_locked_chapters"
+        private val CLASSIFY_PARAMS = listOf("channel", "category1", "category2", "words", "update_time", "is_vip", "is_over")
     }
 }
