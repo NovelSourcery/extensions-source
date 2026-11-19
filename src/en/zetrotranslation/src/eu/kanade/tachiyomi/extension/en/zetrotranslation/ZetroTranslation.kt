@@ -1,5 +1,6 @@
 ﻿package eu.kanade.tachiyomi.novelextension.en.zetrotranslation
 
+import keiyoushi.utils.getPreferences
 import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.CheckBoxPreference
@@ -21,7 +22,7 @@ abstract class ZetroTranslation :
     override val reverseChapterListDefault = true
 
     private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+        getPreferences()
     }
 
     private val includeLocked: Boolean
