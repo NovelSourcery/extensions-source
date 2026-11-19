@@ -16,6 +16,7 @@ import keiyoushi.source.KeiSource
 import keiyoushi.utils.setAltTitles
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -37,6 +38,8 @@ abstract class NovelsPl :
 
     override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = rateLimit(permits = 2, period = 1.seconds)
 
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = set("User-Agent", USER_AGENT)
+
     override suspend fun getPopularManga(page: Int): MangasPage = browse(page, "")
 
     override suspend fun getLatestUpdates(page: Int): MangasPage = throw UnsupportedOperationException()
@@ -45,6 +48,7 @@ abstract class NovelsPl :
 
     private suspend fun browse(page: Int, query: String): MangasPage {
         val doc = client.get("$baseUrl/listNovels", Fetch.DOCUMENT).asJsoup()
+        if (doc.selectFirst("#anubis_challenge") != null) throw Exception("Bot check: open in WebView")
         val all = doc.select("a[data-toggle=tooltip][href*=/novel/]")
         val entries: List<Element> = if (query.isNotBlank()) {
             all.filter { it.text().contains(query, ignoreCase = true) }
@@ -180,6 +184,7 @@ abstract class NovelsPl :
 
     companion object {
         private const val PAGE_SIZE = 20
+        private const val USER_AGENT = "Tsundoku"
         private val dateFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.ENGLISH)
     }
 }
