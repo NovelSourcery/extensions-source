@@ -94,10 +94,7 @@ abstract class MzNovels :
 
     private fun buildLatestUpdatesUrl(page: Int): String = "$baseUrl/latest-updates/?page=$page"
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val response = client.get(buildLatestUpdatesUrl(page), headers, Fetch.DOCUMENT)
-        return parseNovelList(response.asJsoup(), 1) // page is already in URL
-    }
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseSearchResponse(client.get(buildLatestUpdatesUrl(page), headers, Fetch.DOCUMENT))
     // ======================== Search ========================
 
     private fun buildSearchMangaUrl(page: Int, query: String, filters: FilterList): String {
@@ -164,11 +161,11 @@ abstract class MzNovels :
             }
         }
 
-        // The pagination bar has no "next" element at all (verified live) - it's numbered
-        // data-page links plus the current page as a bare <span class="active">. There's a next
-        // page iff some pagination link's data-page is greater than the current one.
-        val hasNextPage = doc.select(".pagination .pagination-link[data-page]").any {
-            (it.attr("data-page").toIntOrNull() ?: 0) > pageNo
+        val hasNextPage = doc.select(".pagination a").any { link ->
+            val target = link.attr("data-page").toIntOrNull()
+                ?: PAGE_PARAM_REGEX.find(link.attr("href"))?.groupValues?.get(1)?.toIntOrNull()
+                ?: 0
+            target > pageNo
         }
         return MangasPage(novels, hasNextPage)
     }
@@ -362,3 +359,5 @@ abstract class MzNovels :
     // Access via: preferences.getString("author_notes", "footnotes")
     // Possible values: "inline", "footnotes", "none"
 }
+
+private val PAGE_PARAM_REGEX = Regex("""[?&]page=(\d+)""")
