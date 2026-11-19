@@ -125,6 +125,14 @@ abstract class MadaraNovel :
     override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.newCall(buildPopularMangaRequest(page)).execute())
 
     private fun parseMangaListResponse(response: Response): MangasPage {
+        if (response.code == 404) {
+            response.close()
+            return MangasPage(emptyList(), false)
+        }
+        if (!response.isSuccessful) {
+            response.close()
+            throw Exception("HTTP error ${response.code}")
+        }
         val doc = response.asJsoup()
         val mangas = parseNovels(doc)
         // Check multiple pagination selectors for different Madara themes
@@ -132,7 +140,8 @@ abstract class MadaraNovel :
             doc.selectFirst("a.next.page-numbers") != null ||
             doc.selectFirst(".nav-previous a") != null ||
             doc.selectFirst(".wp-pagenavi a.nextpostslink") != null ||
-            doc.selectFirst(".page-item.next:not(.disabled) a") != null
+            doc.selectFirst(".page-item.next:not(.disabled) a") != null ||
+            (mangas.isNotEmpty() && doc.selectFirst("#navigation-ajax") != null)
         return MangasPage(mangas, hasNextPage)
     }
 
@@ -228,6 +237,8 @@ abstract class MadaraNovel :
                 null
             }
         }
+            .groupBy { it.url }
+            .map { (_, entries) -> entries.firstOrNull { !it.thumbnail_url.isNullOrEmpty() } ?: entries.first() }
     }
 
     protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(mangaPathTemplate.absolute(baseUrl, manga.url), headers)
