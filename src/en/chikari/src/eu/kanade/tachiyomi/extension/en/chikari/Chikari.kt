@@ -107,7 +107,8 @@ abstract class Chikari :
         offset: Int,
         filters: FilterList,
     ): HttpUrl {
-        val builder = "$baseUrl/api/novels".toHttpUrl().newBuilder()
+        val builder = "$baseUrl/api/series".toHttpUrl().newBuilder()
+            .addQueryParameter("type", "novel")
             .addQueryParameter("sort", sort)
             .addQueryParameter("adult", adult.toString())
             .addQueryParameter("limit", limit.toString())
@@ -150,10 +151,10 @@ abstract class Chikari :
 
     override suspend fun fetchFilterData(): JsonElement = coroutineScope {
         val genresDeferred = async {
-            client.get("$baseUrl/api/novels/genres", headers, Fetch.XHR).parseAs<List<NamedSlugDto>>()
+            client.get("$baseUrl/api/genres?novels=true", headers, Fetch.XHR).parseAs<List<NamedSlugDto>>()
         }
         val tagsDeferred = async {
-            client.get("$baseUrl/api/novels/tags", headers, Fetch.XHR).parseAs<List<NamedIdDto>>()
+            client.get("$baseUrl/api/tags?novels=true", headers, Fetch.XHR).parseAs<List<NamedIdDto>>()
         }
         FilterDataDto(genres = genresDeferred.await(), tags = tagsDeferred.await()).toJsonElement()
     }
@@ -188,7 +189,7 @@ abstract class Chikari :
         return client.get("$baseUrl/api/novels/$slug", headers, Fetch.XHR).parseAs<NovelDto>().toSMangaDetails()
     }
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl/novels/${manga.url}"
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl/novels/${manga.slug()}"
 
     override fun getChapterUrl(chapter: SChapter): String = "$baseUrl/novels/${chapter.url}"
 
@@ -198,7 +199,7 @@ abstract class Chikari :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate = coroutineScope {
-        val slug = manga.url
+        val slug = manga.slug()
         // Details and chapters are independent — don't serialize chapter fetch behind details.
         val detailsDeferred = if (fetchDetails) {
             async { client.get("$baseUrl/api/novels/$slug", headers, Fetch.XHR).parseAs<NovelDto>() }
@@ -274,6 +275,9 @@ abstract class Chikari :
             .filter { it.isNotEmpty() }
             .joinToString("\n") { "<p>${Entities.escape(it).replace("\n", "<br>")}</p>" }
     }
+
+    // Entries imported from a page url carry the full "/novels/<slug>" path instead of the bare slug.
+    private fun SManga.slug(): String = url.substringBefore('?').trimEnd('/').substringAfterLast("/novels/").trim('/')
 
     private fun formatNumber(number: Double): String = number.toString().removeSuffix(".0")
 
