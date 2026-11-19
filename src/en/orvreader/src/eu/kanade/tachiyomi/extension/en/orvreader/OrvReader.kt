@@ -104,7 +104,10 @@ abstract class OrvReader :
 
     // --- URL builders ----------------------------------------------------------------------
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl/stories/${manga.url}/"
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl/stories/${manga.slug()}/"
+
+    // Entries imported from a page url carry the full "/stories/<slug>/" path instead of the bare slug.
+    private fun SManga.slug(): String = url.trim('/').substringAfterLast("stories/")
 
     override fun getChapterUrl(chapter: SChapter): String {
         val (slug, chapterId) = splitChapterUrl(chapter.url) ?: return "$baseUrl/stories/"
@@ -119,6 +122,7 @@ abstract class OrvReader :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate = coroutineScope {
+        val slug = manga.slug()
         if (!fetchDetails && !fetchChapters) {
             return@coroutineScope SMangaUpdate(manga, chapters)
         }
@@ -126,11 +130,11 @@ abstract class OrvReader :
         // Details live in the ToC page HTML; the chapter list lives in a separate JSON.
         // Fire both concurrently — the JSON fetch does not depend on the HTML.
         val detailsDeferred = async {
-            client.get("$baseUrl/stories/${manga.url}/", Fetch.DOCUMENT).asJsoup()
+            client.get("$baseUrl/stories/$slug/", Fetch.DOCUMENT).asJsoup()
         }
         val chaptersDeferred = if (fetchChapters) {
             async {
-                client.get("$baseUrl/meta/${manga.url}.json", Fetch.XHR).parseAs<List<ChapterEntry>>()
+                client.get("$baseUrl/meta/$slug.json", Fetch.XHR).parseAs<List<ChapterEntry>>()
             }
         } else {
             null
@@ -141,7 +145,7 @@ abstract class OrvReader :
         SMangaUpdate(
             manga = if (fetchDetails) parseMangaDetails(doc, manga) else manga,
             chapters = if (fetchChapters) {
-                parseChapterList(doc, chaptersDeferred!!.await(), manga.url)
+                parseChapterList(doc, chaptersDeferred!!.await(), slug)
             } else {
                 chapters
             },
