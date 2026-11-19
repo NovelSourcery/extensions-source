@@ -6,17 +6,12 @@ plugins {
 
 keiyoushi {
     name = "Novel-Bin (com)"
-    versionCode = 2
-    contentWarning = ContentWarning.SAFE
-    theme = "readnovelfull"
+    versionCode = 16
+    contentWarning = ContentWarning.MIXED
+    theme = "novelbin"
 
     source {
         lang = "en"
         baseUrl = "https://novel-bin.com"
-    }
-
-    deeplink {
-        host("novel-bin.com")
-        path("/..*")
     }
 }
