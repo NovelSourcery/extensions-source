@@ -117,7 +117,7 @@ abstract class NovelPing :
             putText(filters.firstInstanceOrNull<EndYearFilter>(), "end_year")
             putText(filters.firstInstanceOrNull<AuthorFilter>(), "author")
             putText(filters.firstInstanceOrNull<AuthorExcludeFilter>(), "author_exclude")
-            putText(filters.firstInstanceOrNull<MinChaptersFilter>(), "min_chapters")
+            addQueryParameter("min_chapters", filters.firstInstanceOrNull<MinChaptersFilter>()?.state?.trim().orEmpty().ifEmpty { "0" })
             putText(filters.firstInstanceOrNull<MaxChaptersFilter>(), "max_chapters")
         }.build()
 
