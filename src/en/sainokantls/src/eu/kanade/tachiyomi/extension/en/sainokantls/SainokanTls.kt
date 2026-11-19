@@ -65,7 +65,10 @@ abstract class SainokanTls :
         return MangasPage(mangas, document.selectFirst("a[rel=next]") != null)
     }
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.url}"
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.slug()}"
+
+    // Entries imported from a page url carry the full page path instead of the bare slug.
+    private fun SManga.slug(): String = url.substringBefore('?').trimEnd('/').substringAfterLast("/novel/").trim('/')
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val segments = url.pathSegments
@@ -81,7 +84,7 @@ abstract class SainokanTls :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val document = client.get(getMangaUrl(manga), Fetch.DOCUMENT).asJsoup()
-        return SMangaUpdate(parseMangaDetails(document), parseChapterList(document, manga.url))
+        return SMangaUpdate(parseMangaDetails(document), parseChapterList(document, manga.slug()))
     }
 
     private fun parseMangaDetails(document: Document): SManga = SManga.create().apply {
