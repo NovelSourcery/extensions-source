@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.post
 import keiyoushi.source.KeiSource
@@ -88,12 +89,12 @@ abstract class NzoSeries :
             add("post", nonce)
             add("action", "fetch_browse")
         }.build()
-        return client.post("$baseUrl/ajax", headers, body).parseAs()
+        return client.post("$baseUrl/ajax", headers, Fetch.XHR, body).parseAs()
     }
 
     private suspend fun nonce(refresh: Boolean): String {
         if (!refresh) browseNonce?.let { return it }
-        val document = client.get(baseUrl + browsePath, headers).asJsoup()
+        val document = client.get(baseUrl + browsePath, headers, Fetch.DOCUMENT).asJsoup()
         return document.browseNonce().also { browseNonce = it }
     }
 
@@ -110,7 +111,7 @@ abstract class NzoSeries :
         if (url.host != baseUrl.toHttpUrl().host || url.pathSegments.firstOrNull() != "series") return null
         val id = url.pathSegments.getOrNull(1)?.takeIf { it.isNotEmpty() } ?: return null
         val seriesUrl = "$baseUrl/series/$id/"
-        val document = client.get(seriesUrl, headers).asJsoup()
+        val document = client.get(seriesUrl, headers, Fetch.DOCUMENT).asJsoup()
         return parseMangaDetails(document, fetchRawChapters(document)).apply {
             this.url = mangaUrlFromPermalink(seriesUrl)
         }
@@ -122,7 +123,7 @@ abstract class NzoSeries :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val document = client.get(getMangaUrl(manga), headers).asJsoup()
+        val document = client.get(getMangaUrl(manga), headers, Fetch.DOCUMENT).asJsoup()
         val rawChapters = fetchRawChapters(document)
         val showLocked = preferences.getBoolean(showLockedPrefKey, false)
         val updatedChapters = rawChapters.filter { showLocked || !it.locked }.map { it.toSChapter() }
@@ -185,7 +186,7 @@ abstract class NzoSeries :
             .add("id", toc[0])
             .add("action", "series_toc")
             .build()
-        val data = client.post("$baseUrl/ajax", headers, body).parseAs<TocResponseDto>().data
+        val data = client.post("$baseUrl/ajax", headers, Fetch.XHR, body).parseAs<TocResponseDto>().data
         return data.mapIndexed { index, chapter ->
             RawChapter(chapterUrlFromLink(chapter.url), chapter.title, chapter.isLocked, index + 1f, parseRelativeDate(chapter.date))
         }.reversed()
@@ -215,7 +216,7 @@ abstract class NzoSeries :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, getChapterUrl(chapter)))
 
     override suspend fun fetchPageText(page: Page): String {
-        val document = client.get(page.url, headers).asJsoup()
+        val document = client.get(page.url, headers, Fetch.DOCUMENT).asJsoup()
         val loader = document.selectFirst("[x-data^=\"loadChapter(\"]")
         return if (loader != null) fetchLoadedContent(page.url, loader) else parseRenderedContent(document)
     }
@@ -233,7 +234,7 @@ abstract class NzoSeries :
     private suspend fun fetchLoadedContent(chapterUrl: String, loader: Element): String {
         val nonce = QUOTED_ARG_REGEX.findAll(loader.attr("x-data")).last().groupValues[1]
         val contentHeaders = headers.newBuilder().set("X-Nonce", nonce).build()
-        val response = client.post("${chapterUrl.trimEnd('/')}/content", contentHeaders, ContentRequestDto(captchaResponse = "").toJsonRequestBody(), ensureSuccess = false)
+        val response = client.post("${chapterUrl.trimEnd('/')}/content", contentHeaders, Fetch.XHR, ContentRequestDto(captchaResponse = "").toJsonRequestBody(), ensureSuccess = false)
         if (!response.isSuccessful) {
             val error = response.parseAs<ContentErrorDto>()
             throw Exception(if (error.captcha) "Captcha required: open the chapter in WebView" else error.message ?: "Chapter is locked")
@@ -258,7 +259,7 @@ abstract class NzoSeries :
     }
 
     override suspend fun fetchFilterData(): JsonElement {
-        val document = client.get(baseUrl + browsePath, headers).asJsoup()
+        val document = client.get(baseUrl + browsePath, headers, Fetch.DOCUMENT).asJsoup()
         browseNonce = document.browseNonce()
         return FilterDataDto(
             orders = document.selectOptions("orderBy")

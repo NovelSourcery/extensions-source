@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.formattedText
@@ -52,7 +53,7 @@ abstract class SainokanTls :
             addQueryParameter("page", page.toString())
         }.build()
 
-        val document = client.get(requestUrl).asJsoup()
+        val document = client.get(requestUrl, Fetch.DOCUMENT).asJsoup()
         val mangas = document.select("a[href*=/novel/]:has(h3)").map { card ->
             SManga.create().apply {
                 url = card.absUrl("href").toHttpUrl().pathSegments.last()
@@ -70,7 +71,7 @@ abstract class SainokanTls :
         val segments = url.pathSegments
         if (segments.size < 2 || segments[0] != "novel") return null
         val slug = segments[1]
-        return parseMangaDetails(client.get("$baseUrl/novel/$slug").asJsoup()).apply { this.url = slug }
+        return parseMangaDetails(client.get("$baseUrl/novel/$slug", Fetch.DOCUMENT).asJsoup()).apply { this.url = slug }
     }
 
     override suspend fun fetchMangaUpdate(
@@ -79,7 +80,7 @@ abstract class SainokanTls :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val document = client.get(getMangaUrl(manga)).asJsoup()
+        val document = client.get(getMangaUrl(manga), Fetch.DOCUMENT).asJsoup()
         return SMangaUpdate(parseMangaDetails(document), parseChapterList(document, manga.url))
     }
 
@@ -160,7 +161,7 @@ abstract class SainokanTls :
 
     override suspend fun fetchPageText(page: Page): String {
         if (page.url.contains("/novel/")) throw Exception(LOCKED_MESSAGE)
-        val document = client.get(page.url).asJsoup()
+        val document = client.get(page.url, Fetch.DOCUMENT).asJsoup()
         val content = document.selectFirst("#chapter-content") ?: throw Exception(LOCKED_MESSAGE)
         // Text is split into base64 chunks interleaved with aria-hidden decoy words.
         content.select("[aria-hidden=true]").remove()
@@ -172,7 +173,7 @@ abstract class SainokanTls :
     }
 
     override suspend fun fetchFilterData(): JsonElement {
-        val document = client.get("$baseUrl/novels").asJsoup()
+        val document = client.get("$baseUrl/novels", Fetch.DOCUMENT).asJsoup()
         return FILTER_PARAMS.map { param ->
             FilterDto(
                 param,

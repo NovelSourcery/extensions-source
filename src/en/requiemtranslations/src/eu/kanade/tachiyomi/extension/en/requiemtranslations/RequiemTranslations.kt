@@ -8,6 +8,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.firstInstanceOrNull
@@ -55,7 +56,7 @@ abstract class RequiemTranslations :
             .addQueryParameter("fields", "id,slug,title,thumbnail")
             .apply { filter?.let { addQueryParameter("filter", it) } }
             .build()
-        val data = client.get(url).parseAs<RecordsDto<SeriesDto>>()
+        val data = client.get(url, Fetch.XHR).parseAs<RecordsDto<SeriesDto>>()
         return MangasPage(data.items.map { it.toSManga() }, data.page < data.totalPages)
     }
 
@@ -71,7 +72,7 @@ abstract class RequiemTranslations :
                     .addQueryParameter("expand", "series")
                     .addQueryParameter("fields", "expand.series.slug")
                     .build()
-                client.get(chapterUrl).parseAs<RecordsDto<ChapterSeriesDto>>().items.firstOrNull()?.slug ?: return null
+                client.get(chapterUrl, Fetch.XHR).parseAs<RecordsDto<ChapterSeriesDto>>().items.firstOrNull()?.slug ?: return null
             }
             else -> return null
         }
@@ -96,13 +97,13 @@ abstract class RequiemTranslations :
             .addQueryParameter("expand", "genres,tags,writers,artists,types")
             .addQueryParameter("perPage", "1")
             .build()
-        val series = client.get(url).parseAs<RecordsDto<SeriesDto>>().items.firstOrNull() ?: return null
+        val series = client.get(url, Fetch.XHR).parseAs<RecordsDto<SeriesDto>>().items.firstOrNull() ?: return null
         val chapterCount = "$apiUrl/chapters/records".toHttpUrl().newBuilder()
             .addQueryParameter("filter", "series=\"${series.id}\"")
             .addQueryParameter("fields", "id")
             .addQueryParameter("perPage", "1")
             .build()
-            .let { client.get(it).parseAs<RecordsDto<ChapterDto>>().totalItems }
+            .let { client.get(it, Fetch.XHR).parseAs<RecordsDto<ChapterDto>>().totalItems }
         return series.toSMangaDetails(chapterCount)
     }
 
@@ -116,7 +117,7 @@ abstract class RequiemTranslations :
                 .addQueryParameter("page", page.toString())
                 .addQueryParameter("perPage", MAX_PER_PAGE.toString())
                 .build()
-            val data = client.get(url).parseAs<RecordsDto<ChapterDto>>()
+            val data = client.get(url, Fetch.XHR).parseAs<RecordsDto<ChapterDto>>()
             chapters += data.items
         } while (page++ < data.totalPages)
         // chapter_number is a text field, so the API can only sort it lexicographically.
@@ -134,7 +135,7 @@ abstract class RequiemTranslations :
             .addQueryParameter("fields", "content")
             .addQueryParameter("perPage", "1")
             .build()
-        val content = client.get(url).parseAs<RecordsDto<ChapterContentDto>>().items.firstOrNull()?.content
+        val content = client.get(url, Fetch.XHR).parseAs<RecordsDto<ChapterContentDto>>().items.firstOrNull()?.content
             ?: throw Exception("Chapter not found")
         return content.markdownToHtml()
     }
@@ -145,7 +146,7 @@ abstract class RequiemTranslations :
             .addQueryParameter("sort", "name")
             .addQueryParameter("fields", "id,name")
             .build()
-        return client.get(url).parseAs<RecordsDto<GenreDto>>().items.toJsonElement()
+        return client.get(url, Fetch.XHR).parseAs<RecordsDto<GenreDto>>().items.toJsonElement()
     }
 
     override fun getFilterList(data: JsonElement?): FilterList {

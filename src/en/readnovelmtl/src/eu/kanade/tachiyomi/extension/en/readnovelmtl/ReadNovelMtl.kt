@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.readnovelmtl
 
-import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
@@ -16,19 +15,19 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.getPreferences
+import keiyoushi.utils.jsonInstance
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
 import okhttp3.Request
 import org.jsoup.nodes.Document
-import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
-import uy.kohesive.injekt.injectLazy
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -42,10 +41,8 @@ abstract class ReadNovelMtl :
 
     override val supportsLatest = true
 
-    private val json: Json by injectLazy()
-
     private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+        getPreferences()
     }
 
     private var categoryCache: List<Pair<String, String>>? = null
@@ -62,7 +59,7 @@ abstract class ReadNovelMtl :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = buildPopularMangaRequest(page)
-        val document = client.get(request.url, request.headers).asJsoup()
+        val document = client.get(request.url, request.headers, Fetch.DOCUMENT).asJsoup()
         return parseNovelList(document)
     }
     // ======================== Latest ========================
@@ -71,7 +68,7 @@ abstract class ReadNovelMtl :
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val request = buildLatestUpdatesRequest(page)
-        val document = client.get(request.url, request.headers).asJsoup()
+        val document = client.get(request.url, request.headers, Fetch.DOCUMENT).asJsoup()
         return parseNovelList(document)
     }
     // ======================== Search ========================
@@ -133,7 +130,7 @@ abstract class ReadNovelMtl :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val request = buildSearchMangaRequest(page, query, filters)
-        val document = client.get(request.url, request.headers).asJsoup()
+        val document = client.get(request.url, request.headers, Fetch.DOCUMENT).asJsoup()
         return parseNovelList(document)
     }
     // ======================== Details + Chapters ========================
@@ -147,7 +144,7 @@ abstract class ReadNovelMtl :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val mangaDetailsRequest = buildMangaDetailsRequest(manga)
-        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, Fetch.DOCUMENT)
         val document = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(document, response.request.url.encodedPath) else manga
@@ -160,7 +157,7 @@ abstract class ReadNovelMtl :
         val jsonLd = document.selectFirst("script[type=application/ld+json]:contains(Book)")?.data()
         if (jsonLd != null) {
             try {
-                val schema = json.decodeFromString<SchemaBook>(jsonLd)
+                val schema = jsonInstance.decodeFromString<SchemaBook>(jsonLd)
                 return SManga.create().apply {
                     url = mangaPath.slug(requestPath)
                     title = schema.name
@@ -226,7 +223,7 @@ abstract class ReadNovelMtl :
     override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.get(url, headers, ensureSuccess = false)
+        val response = client.get(url, headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val document = response.asJsoup()
         return parseMangaDetails(document, url.encodedPath)
@@ -239,7 +236,7 @@ abstract class ReadNovelMtl :
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val response = client.get(url, headers)
+        val response = client.get(url, headers, Fetch.DOCUMENT)
         val document = response.asJsoup()
 
         val contentSection = document.selectFirst("#content")

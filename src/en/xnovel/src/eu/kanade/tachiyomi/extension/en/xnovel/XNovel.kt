@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.post
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.firstInstanceOrNull
@@ -93,7 +94,7 @@ abstract class XNovel :
         return paragraphs.joinToString("") { "<p>${Entities.escape(it)}</p>" }
     }
 
-    private suspend fun query(body: RequestBody) = client.post(apiUrl, body)
+    private suspend fun query(body: RequestBody) = client.post(apiUrl, Fetch.XHR, body)
 
     companion object {
         private const val PAGE_SIZE = 30

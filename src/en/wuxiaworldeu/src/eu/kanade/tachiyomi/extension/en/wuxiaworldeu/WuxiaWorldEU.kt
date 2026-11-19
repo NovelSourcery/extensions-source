@@ -8,6 +8,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -48,11 +49,11 @@ abstract class WuxiaWorldEU :
 
     // ======================== Browse / Search ========================
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelsList(client.get(novelsUrl(page), headers))
+    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelsList(client.get(novelsUrl(page), headers, Fetch.XHR))
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelsList(client.get(novelsUrl(page), headers))
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelsList(client.get(novelsUrl(page), headers, Fetch.XHR))
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseNovelsList(client.get(novelsUrl(page, query), headers))
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseNovelsList(client.get(novelsUrl(page, query), headers, Fetch.XHR))
 
     private fun novelsUrl(page: Int, query: String? = null): HttpUrl {
         val url = "$baseUrl/api/novels/".toHttpUrl().newBuilder()
@@ -92,7 +93,7 @@ abstract class WuxiaWorldEU :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = mangaPathTemplate.slug(url.encodedPath)
         val tempManga = SManga.create().apply { this.url = slug }
-        val response = client.get(mangaDetailsUrl(tempManga), headers, ensureSuccess = false)
+        val response = client.get(mangaDetailsUrl(tempManga), headers, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val data = json.parseToJsonElement(response.body.string()).jsonObject
         return parseMangaDetails(data).apply { this.url = slug }
@@ -131,7 +132,7 @@ abstract class WuxiaWorldEU :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val data = json.parseToJsonElement(client.get(mangaDetailsUrl(manga), headers).body.string()).jsonObject
+        val data = json.parseToJsonElement(client.get(mangaDetailsUrl(manga), headers, Fetch.XHR).body.string()).jsonObject
 
         val updatedManga = if (fetchDetails) parseMangaDetails(data) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(data) else chapters
@@ -159,7 +160,7 @@ abstract class WuxiaWorldEU :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get("$baseUrl/api/getchapter/${page.url}/", headers)
+        val response = client.get("$baseUrl/api/getchapter/${page.url}/", headers, Fetch.XHR)
         val data = json.parseToJsonElement(response.body.string()).jsonObject
         val text = data["text"]?.jsonPrimitive?.contentOrNull ?: return ""
         return text

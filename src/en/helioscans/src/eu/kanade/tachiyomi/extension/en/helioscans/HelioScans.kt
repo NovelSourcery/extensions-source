@@ -13,6 +13,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.firstInstanceOrNull
@@ -62,7 +63,7 @@ abstract class HelioScans :
         return MangasPage(mangas, false)
     }
 
-    private suspend fun fetchNovelCards(): List<Element> = client.get("$baseUrl/series/", headers).asJsoup()
+    private suspend fun fetchNovelCards(): List<Element> = client.get("$baseUrl/series/", headers, Fetch.DOCUMENT).asJsoup()
         .select("#searched_series_page > button")
         .filter { it.attr("data-type").equals("novel", ignoreCase = true) }
 
@@ -80,7 +81,7 @@ abstract class HelioScans :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         if (url.pathSegments.firstOrNull() != "series") return null
         val slug = url.pathSegments.getOrNull(1)?.takeIf { it.isNotEmpty() } ?: return null
-        val document = client.get("$baseUrl/series/$slug/", headers).asJsoup()
+        val document = client.get("$baseUrl/series/$slug/", headers, Fetch.DOCUMENT).asJsoup()
         return parseMangaDetails(document).apply { this.url = slug }
     }
 
@@ -90,7 +91,7 @@ abstract class HelioScans :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val document = client.get(getMangaUrl(manga), headers).asJsoup()
+        val document = client.get(getMangaUrl(manga), headers, Fetch.DOCUMENT).asJsoup()
         return SMangaUpdate(parseMangaDetails(document), parseChapterList(document))
     }
 
@@ -168,7 +169,7 @@ abstract class HelioScans :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, getChapterUrl(chapter)))
 
     override suspend fun fetchPageText(page: Page): String {
-        val document = client.get(page.url, headers).asJsoup()
+        val document = client.get(page.url, headers, Fetch.DOCUMENT).asJsoup()
         val content = document.selectFirst("#pages div[novel-reader-option]")
             ?: throw Exception("Chapter is locked or unavailable on Helio Scans")
         content.select("script, style, ins").remove()

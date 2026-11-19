@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -74,9 +75,9 @@ abstract class LNMTL :
         .addQueryParameter("page", page.toString())
         .build()
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelListing(client.get(novelListUrl(page, "favourites"), headers))
+    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelListing(client.get(novelListUrl(page, "favourites"), headers, Fetch.DOCUMENT))
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelListing(client.get(novelListUrl(page, "date"), headers))
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelListing(client.get(novelListUrl(page, "date"), headers, Fetch.DOCUMENT))
 
     private fun parseNovelListing(response: Response): MangasPage {
         val doc = response.asJsoup()
@@ -102,7 +103,7 @@ abstract class LNMTL :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val indexUrl = searchIndexUrl()
-        val body = client.get(indexUrl, headers).use { it.body.string() }
+        val body = client.get(indexUrl, headers, Fetch.XHR).use { it.body.string() }
         val all = json.parseToJsonElement(body).jsonArray
 
         fun normalize(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
@@ -127,7 +128,7 @@ abstract class LNMTL :
     }
 
     private suspend fun searchIndexUrl(): String {
-        val home = client.get(baseUrl, headers).use { it.asJsoup() }
+        val home = client.get(baseUrl, headers, Fetch.DOCUMENT).use { it.asJsoup() }
         val prefetchRegex = Regex("""prefetch:\s*'(/[^']+\.json)""")
         for (script in home.select("footer script")) {
             val match = prefetchRegex.find(script.data()) ?: continue
@@ -142,7 +143,7 @@ abstract class LNMTL :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPath.slug(url.encodedPath) }
-        val response = client.get(buildMangaDetailsUrl(manga), headers, ensureSuccess = false)
+        val response = client.get(buildMangaDetailsUrl(manga), headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.asJsoup()).apply { this.url = manga.url }
     }
@@ -156,7 +157,7 @@ abstract class LNMTL :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter volumes list both live on the same novel page - fetch it once.
-        val doc = client.get(buildMangaDetailsUrl(manga), headers).asJsoup()
+        val doc = client.get(buildMangaDetailsUrl(manga), headers, Fetch.DOCUMENT).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
@@ -203,7 +204,7 @@ abstract class LNMTL :
                     .addQueryParameter("volumeId", volumeId)
                     .addQueryParameter("page", page.toString())
                     .build()
-                val pageBody = client.get(url, headers).use { it.body.string() }
+                val pageBody = client.get(url, headers, Fetch.XHR).use { it.body.string() }
                 val pageJson = json.parseToJsonElement(pageBody).jsonObject
                 lastPage = pageJson["last_page"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 1
                 val data = pageJson["data"]?.jsonArray ?: break
@@ -239,7 +240,7 @@ abstract class LNMTL :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.get("$baseUrl${page.url}", headers).use { it.asJsoup() }
+        val doc = client.get("$baseUrl${page.url}", headers, Fetch.DOCUMENT).use { it.asJsoup() }
         return extractChapterText(doc)
     }
 

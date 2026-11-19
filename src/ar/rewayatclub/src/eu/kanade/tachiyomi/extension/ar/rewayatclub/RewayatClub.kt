@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -48,14 +49,14 @@ abstract class RewayatClub :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = buildPopularMangaRequest(page)
-        return parseNovelsResponse(client.get(request.url, request.headers))
+        return parseNovelsResponse(client.get(request.url, request.headers, Fetch.XHR))
     }
 
     private fun buildLatestUpdatesRequest(page: Int): Request = GET("$apiUrl/api/novels?page=$page", headers)
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val request = buildLatestUpdatesRequest(page)
-        return parseNovelsResponse(client.get(request.url, request.headers))
+        return parseNovelsResponse(client.get(request.url, request.headers, Fetch.XHR))
     }
 
     private fun parseNovelsResponse(response: Response): MangasPage {
@@ -71,7 +72,7 @@ abstract class RewayatClub :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val request = buildSearchMangaRequest(page, query, filters)
-        return parseNovelsResponse(client.get(request.url, request.headers))
+        return parseNovelsResponse(client.get(request.url, request.headers, Fetch.XHR))
     }
 
     private fun buildMangaDetailsRequest(manga: SManga): Request {
@@ -84,7 +85,7 @@ abstract class RewayatClub :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
         val request = buildMangaDetailsRequest(manga)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.XHR)
         if (!response.isSuccessful) return null
         return json.decodeFromString<NovelItem>(response.body.string()).toSManga()
     }
@@ -99,7 +100,7 @@ abstract class RewayatClub :
 
         val updatedManga = if (fetchDetails) {
             val request = buildMangaDetailsRequest(manga)
-            val response = client.get(request.url, request.headers)
+            val response = client.get(request.url, request.headers, Fetch.XHR)
             val item = json.decodeFromString<NovelItem>(response.body.string())
             cachedTranslators = item.contributors.map { it.username }.filter { it.isNotBlank() }.distinct().sorted()
             SManga.create().apply {
@@ -154,7 +155,7 @@ abstract class RewayatClub :
 
         var nextUrl: String? = "$apiUrl/api/chapters/$novelSlug/?ordering=-number&page=1&page_size=500"
         while (nextUrl != null) {
-            val pageResp = client.get(nextUrl, headers)
+            val pageResp = client.get(nextUrl, headers, Fetch.XHR)
             val body = json.decodeFromString<ChaptersResponse>(pageResp.body.string())
             pageResp.close()
             allChapters.addAll(body.results)
@@ -186,7 +187,7 @@ abstract class RewayatClub :
         val number = parts.lastOrNull().orEmpty()
         if (slug.isNotEmpty() && number.isNotEmpty()) {
             val apiText = runCatching {
-                val resp = client.get("$apiUrl/api/chapters/$slug/$number/", headers)
+                val resp = client.get("$apiUrl/api/chapters/$slug/$number/", headers, Fetch.XHR)
                 val item = json.decodeFromString<ChapterDetail>(resp.body.string())
                 parseChapterContent(item.content)
             }.getOrNull()
@@ -204,7 +205,7 @@ abstract class RewayatClub :
     }
 
     private suspend fun parseChapterWebPage(page: Page): String {
-        val doc = client.get("$baseUrl${page.url}", headers).asJsoup()
+        val doc = client.get("$baseUrl${page.url}", headers, Fetch.DOCUMENT).asJsoup()
 
         val nuxtScript = doc.select("script").firstOrNull { it.html().contains("window.__NUXT__") }
         if (nuxtScript != null) {

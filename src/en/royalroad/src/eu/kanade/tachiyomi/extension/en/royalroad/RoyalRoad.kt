@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.royalroad
 
-import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.source.ConfigurableSource
@@ -14,9 +13,11 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.getPreferences
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -26,7 +27,6 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import kotlin.time.Instant
 
@@ -39,7 +39,7 @@ abstract class RoyalRoad :
     override val supportsLatest = true
 
     private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+        getPreferences()
     }
 
     private val json = Json {
@@ -54,7 +54,7 @@ abstract class RoyalRoad :
 
     // Novel source implementation
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
+        val response = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers, Fetch.DOCUMENT)
         val body = response.body.string()
         val url = response.request.url.toString()
 
@@ -189,7 +189,7 @@ abstract class RoyalRoad :
     protected open fun buildPopularMangaUrl(page: Int): String = "$baseUrl/fictions/search?page=$page&orderBy=popularity"
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val doc = client.get(buildPopularMangaUrl(page), headers).asJsoup()
+        val doc = client.get(buildPopularMangaUrl(page), headers, Fetch.DOCUMENT).asJsoup()
         return parseNovelsFromSearch(doc)
     }
 
@@ -197,7 +197,7 @@ abstract class RoyalRoad :
     protected open fun buildLatestUpdatesUrl(page: Int): String = "$baseUrl/fictions/search?page=$page&orderBy=last_update"
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val doc = client.get(buildLatestUpdatesUrl(page), headers).asJsoup()
+        val doc = client.get(buildLatestUpdatesUrl(page), headers, Fetch.DOCUMENT).asJsoup()
         return parseNovelsFromSearch(doc)
     }
 
@@ -317,7 +317,7 @@ abstract class RoyalRoad :
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val doc = client.get(buildSearchMangaUrl(page, query, filters), headers).asJsoup()
+        val doc = client.get(buildSearchMangaUrl(page, query, filters), headers, Fetch.DOCUMENT).asJsoup()
         return parseNovelsFromSearch(doc)
     }
 
@@ -386,7 +386,7 @@ abstract class RoyalRoad :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list script both live on the same fiction page - fetch it once.
-        val doc = client.get(buildMangaDetailsUrl(manga), headers).asJsoup()
+        val doc = client.get(buildMangaDetailsUrl(manga), headers, Fetch.DOCUMENT).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
@@ -483,7 +483,7 @@ abstract class RoyalRoad :
     override fun getMangaUrl(manga: SManga): String = absoluteUrl(mangaPath.resolve(manga.url))
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.get(url, headers, ensureSuccess = false)
+        val response = client.get(url, headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         return parseMangaDetails(doc).apply { this.url = mangaPath.slug(url.encodedPath) }

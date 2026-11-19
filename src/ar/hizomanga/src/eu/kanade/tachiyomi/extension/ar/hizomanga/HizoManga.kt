@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import okhttp3.Request
 import org.jsoup.nodes.Document
@@ -40,7 +41,7 @@ abstract class HizoManga : MadaraNovel() {
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = buildPopularMangaRequest(page)
-        val doc = client.get(request.url, request.headers).asJsoup()
+        val doc = client.get(request.url, request.headers, Fetch.DOCUMENT).asJsoup()
         val mangas = parseNovels(doc)
         val hasNextPage = doc.selectFirst(".pagination a:contains(next)") != null ||
             doc.selectFirst("a.next.page-numbers") != null ||
@@ -152,7 +153,7 @@ abstract class HizoManga : MadaraNovel() {
     override suspend fun fetchPageText(page: Page): String {
         // page.url is already an absolute URL (see MadaraNovel.getPageList) - baseUrl must not be
         // prepended again here, or the request resolves against a bogus "site+https" host.
-        val response = client.get(page.url, headers)
+        val response = client.get(page.url, headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
 
         checkCaptcha(doc, page.url)

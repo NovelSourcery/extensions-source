@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
@@ -43,7 +44,7 @@ abstract class NovelsPl :
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = browse(page, query)
 
     private suspend fun browse(page: Int, query: String): MangasPage {
-        val doc = client.get("$baseUrl/listNovels").asJsoup()
+        val doc = client.get("$baseUrl/listNovels", Fetch.DOCUMENT).asJsoup()
         val all = doc.select("a[data-toggle=tooltip][href*=/novel/]")
         val entries: List<Element> = if (query.isNotBlank()) {
             all.filter { it.text().contains(query, ignoreCase = true) }
@@ -75,7 +76,7 @@ abstract class NovelsPl :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val doc = client.get(getMangaUrl(manga)).asJsoup()
+        val doc = client.get(getMangaUrl(manga), Fetch.DOCUMENT).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) parseAllChapters(doc, manga) else chapters
@@ -84,7 +85,7 @@ abstract class NovelsPl :
     }
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? = runCatching {
-        val response = client.get(url.toString())
+        val response = client.get(url.toString(), Fetch.DOCUMENT)
         parseMangaDetails(response.asJsoup()).apply {
             this.url = url.encodedPath.removePrefix("/novel/")
         }
@@ -143,7 +144,7 @@ abstract class NovelsPl :
         } else {
             coroutineScope {
                 val rest = (2..lastPage).map { p ->
-                    async { client.get("${getMangaUrl(manga)}?p=$p").asJsoup() }
+                    async { client.get("${getMangaUrl(manga)}?p=$p", Fetch.DOCUMENT).asJsoup() }
                 }
                 listOf(firstPageDoc) + rest.map { it.await() }
             }
@@ -171,7 +172,7 @@ abstract class NovelsPl :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.get(baseUrl + page.url).asJsoup()
+        val doc = client.get(baseUrl + page.url, Fetch.DOCUMENT).asJsoup()
         val content = doc.selectFirst("#chapter-content") ?: throw Exception("Chapter content not found")
         content.selectFirst("h4")?.remove()
         return content.html()

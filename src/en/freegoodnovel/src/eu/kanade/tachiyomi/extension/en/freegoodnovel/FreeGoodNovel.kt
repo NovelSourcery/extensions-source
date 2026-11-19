@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.firstInstanceOrNull
@@ -60,7 +61,7 @@ abstract class FreeGoodNovel :
             .addQueryParameter("fields", NOVEL_FIELDS)
             .apply { filter?.let { addQueryParameter("filter", it) } }
             .build()
-        val data = client.get(url).parseAs<RecordsDto<NovelDto>>()
+        val data = client.get(url, Fetch.XHR).parseAs<RecordsDto<NovelDto>>()
         return MangasPage(data.items.map { it.toSManga(baseUrl) }, data.page < data.totalPages)
     }
 
@@ -69,7 +70,7 @@ abstract class FreeGoodNovel :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         if (url.pathSegments.firstOrNull() != "novel") return null
         val id = url.pathSegments.lastOrNull { it.isNotEmpty() } ?: return null
-        return client.get("$apiUrl/novels/records/$id", ensureSuccess = false).use { response ->
+        return client.get("$apiUrl/novels/records/$id", Fetch.XHR, ensureSuccess = false).use { response ->
             if (response.isSuccessful) response.parseAs<NovelDto>().toSManga(baseUrl) else null
         }
     }
@@ -82,7 +83,7 @@ abstract class FreeGoodNovel :
     ): SMangaUpdate = coroutineScope {
         val details = async {
             if (fetchDetails) {
-                client.get("$apiUrl/novels/records/${manga.url}").parseAs<NovelDto>().toSManga(baseUrl)
+                client.get("$apiUrl/novels/records/${manga.url}", Fetch.XHR).parseAs<NovelDto>().toSManga(baseUrl)
             } else {
                 manga
             }
@@ -102,7 +103,7 @@ abstract class FreeGoodNovel :
                 .addQueryParameter("page", page.toString())
                 .addQueryParameter("perPage", MAX_PER_PAGE.toString())
                 .build()
-            val data = client.get(url).parseAs<RecordsDto<ChapterDto>>()
+            val data = client.get(url, Fetch.XHR).parseAs<RecordsDto<ChapterDto>>()
             data.items.mapTo(chapters) { it.toSChapter(novelId) }
         } while (page++ < data.totalPages)
         return chapters
@@ -125,7 +126,7 @@ abstract class FreeGoodNovel :
             .addQueryParameter("fields", "content")
             .addQueryParameter("perPage", "1")
             .build()
-        val content = client.get(url).parseAs<RecordsDto<ChapterContentDto>>().items.firstOrNull()?.content
+        val content = client.get(url, Fetch.XHR).parseAs<RecordsDto<ChapterContentDto>>().items.firstOrNull()?.content
             ?: throw Exception("Chapter not found")
         return content.toParagraphHtml()
     }
@@ -139,7 +140,7 @@ abstract class FreeGoodNovel :
                 .addQueryParameter("perPage", MAX_PER_PAGE.toString())
                 .addQueryParameter("fields", "tags")
                 .build()
-            val data = client.get(url).parseAs<RecordsDto<TagsDto>>()
+            val data = client.get(url, Fetch.XHR).parseAs<RecordsDto<TagsDto>>()
             data.items.flatMap { it.tags }.mapNotNullTo(tags) { it.trim().ifEmpty { null } }
         } while (page++ < data.totalPages)
         return tags.groupBy { it.lowercase() }.values

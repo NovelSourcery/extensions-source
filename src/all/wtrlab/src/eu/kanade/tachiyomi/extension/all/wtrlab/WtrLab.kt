@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.all.wtrlab
 
-import android.app.Application
 import android.util.Log
 import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
@@ -21,10 +20,12 @@ import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.lib.chapterutils.mergeChapters
 import keiyoushi.lib.chapterutils.shouldReturnExisting
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.post
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.getPreferences
 import keiyoushi.utils.jsonInstance
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.setAltTitles
@@ -54,7 +55,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
-import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.util.Base64
 import javax.crypto.Cipher
@@ -97,7 +97,7 @@ abstract class WtrLab :
     // The event/add endpoint omits "chapter_id" entirely when unresolved; json doesn't
     // guarantee that for null fields, so this overrides just that behavior for encoding.
     private val requestJson = Json(json) { explicitNulls = false }
-    private val preferences = Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+    private val preferences = getPreferences()
 
     /** [SManga.url] is stored as bare "<rawId>/<slug>"; a stored value starting with "/" is a
      * pre-existing full-path entry (either "/<lang>/novel/<id>/<slug>" or the legacy
@@ -156,7 +156,7 @@ abstract class WtrLab :
         return buildIdMutex.withLock {
             cachedBuildId?.let { return@withLock it }
 
-            val response = client.get("$baseUrl/$lang/novel-finder", headers)
+            val response = client.get("$baseUrl/$lang/novel-finder", headers, Fetch.DOCUMENT)
             val doc = response.asJsoup()
             val nextData = doc.selectFirst("#__NEXT_DATA__")?.data()
                 ?: throw Exception("Could not find __NEXT_DATA__ on page")
@@ -255,6 +255,7 @@ abstract class WtrLab :
         val response = client.post(
             "https://translate-pa.googleapis.com/v1/translateHtml",
             translateHeaders,
+            Fetch.XHR,
             bodyString.toRequestBody("application/json+protobuf".toMediaType()),
             ensureSuccess = false,
         )
@@ -318,7 +319,7 @@ abstract class WtrLab :
                 chapter_no = chapterNo,
                 chapter_id = chapterId,
             ).toJsonRequestBody()
-            val readerResponse = client.post("$baseUrl/api/reader/get", apiHeaders, body, ensureSuccess = false)
+            val readerResponse = client.post("$baseUrl/api/reader/get", apiHeaders, Fetch.XHR, body, ensureSuccess = false)
             val contentUrl = if (readerResponse.isSuccessful) {
                 runCatching {
                     readerResponse.peekBody(Long.MAX_VALUE).string().parseAs<ReaderResponse>().contentUrl
@@ -328,7 +329,7 @@ abstract class WtrLab :
             }
             if (contentUrl == null) return readerResponse
             readerResponse.close()
-            return client.get("$baseUrl$contentUrl", headers, ensureSuccess = false)
+            return client.get("$baseUrl$contentUrl", headers, Fetch.XHR, ensureSuccess = false)
         }
 
         var response = fetchReader(apiTranslateParam)
@@ -505,7 +506,7 @@ abstract class WtrLab :
     override suspend fun getPopularManga(page: Int): MangasPage {
         val buildId = getBuildIdSuspend()
         val url = "$baseUrl/_next/data/$buildId/$lang/novel-finder.json?orderBy=views&order=desc&page=$page"
-        val response = client.get(url, headers)
+        val response = client.get(url, headers, Fetch.XHR)
         return parseSeriesPage(response)
     }
 
@@ -548,7 +549,7 @@ abstract class WtrLab :
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val requestBody = PageRequestDto(page).toJsonRequestBody()
 
-        val response = client.post("$baseUrl/api/home/recent", apiHeaders, requestBody)
+        val response = client.post("$baseUrl/api/home/recent", apiHeaders, Fetch.XHR, requestBody)
         val jsonResult = json.parseToJsonElement(response.body.string()).jsonObject
         val data = jsonResult["data"] as? JsonArray ?: return MangasPage(emptyList(), false)
 
@@ -662,7 +663,7 @@ abstract class WtrLab :
         params.add("page=$page")
 
         val url = "$baseUrl/_next/data/$buildId/$lang/novel-finder.json?${params.joinToString("&")}"
-        val response = client.get(url, headers)
+        val response = client.get(url, headers, Fetch.XHR)
         return parseSeriesPage(response)
     }
 
@@ -685,7 +686,7 @@ abstract class WtrLab :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = mangaPath.slug(url.encodedPath)
         val tempManga = SManga.create().apply { this.url = slug }
-        val response = client.get(buildMangaDetailsUrl(tempManga), headers, ensureSuccess = false)
+        val response = client.get(buildMangaDetailsUrl(tempManga), headers, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetailsJson(response).apply { this.url = slug }
     }
@@ -715,7 +716,7 @@ abstract class WtrLab :
             val redirectSlug = redirectMatch.groupValues[2]
             val redirectUrl = "$baseUrl/_next/data/${getBuildIdSuspend()}/$lang/novel/$redirectRawId/$redirectSlug.json" +
                 "?locale=$lang&raw_id=$redirectRawId&serie_slug=$redirectSlug"
-            val redirectResponse = client.get(redirectUrl, headers, ensureSuccess = false)
+            val redirectResponse = client.get(redirectUrl, headers, Fetch.XHR, ensureSuccess = false)
             if (!redirectResponse.isSuccessful) {
                 val code = redirectResponse.code
                 redirectResponse.close()
@@ -828,7 +829,7 @@ abstract class WtrLab :
         // Details (JSON API) and chapters (plain HTML page) live on different endpoints - fire
         // both concurrently when both are needed, rather than awaiting them sequentially.
         val detailsDeferred = if (fetchDetails) {
-            async { parseMangaDetailsJson(client.get(buildMangaDetailsUrl(manga), headers, ensureSuccess = false)) }
+            async { parseMangaDetailsJson(client.get(buildMangaDetailsUrl(manga), headers, Fetch.XHR, ensureSuccess = false)) }
         } else {
             null
         }
@@ -841,7 +842,7 @@ abstract class WtrLab :
     }
 
     private suspend fun fetchChapterListInternal(manga: SManga, chapters: List<SChapter>): List<SChapter> {
-        val response = client.get(buildChapterListUrl(manga), headers)
+        val response = client.get(buildChapterListUrl(manga), headers, Fetch.DOCUMENT)
         val url = response.request.url.toString()
         val doc = response.asJsoup()
 
@@ -907,7 +908,7 @@ abstract class WtrLab :
             val end = minOf(start + batchSize - 1, totalChapters)
 
             try {
-                val response = client.get("$baseUrl/api/chapters/$rawId?start=$start&end=$end", headers)
+                val response = client.get("$baseUrl/api/chapters/$rawId?start=$start&end=$end", headers, Fetch.XHR)
 
                 val jsonResult = json.parseToJsonElement(response.body.string()).jsonObject
                 val chapters = jsonResult["chapters"] as? JsonArray ?: break
@@ -1033,7 +1034,7 @@ abstract class WtrLab :
     }
 
     private suspend fun fetchSerieId(manga: SManga, rawId: Int): Int? = try {
-        val response = client.get(buildMangaDetailsUrl(manga), headers, ensureSuccess = false)
+        val response = client.get(buildMangaDetailsUrl(manga), headers, Fetch.XHR, ensureSuccess = false)
         val root = json.parseToJsonElement(response.body.string()).jsonObject
         val sid = root["pageProps"]?.jsonObject
             ?.get("serie")?.jsonObject
@@ -1050,7 +1051,7 @@ abstract class WtrLab :
         return try {
             val start = ((order - 1) / CHAPTER_BATCH) * CHAPTER_BATCH + 1
             val end = start + CHAPTER_BATCH - 1
-            val response = client.get("$baseUrl/api/chapters/$rawId?start=$start&end=$end", headers)
+            val response = client.get("$baseUrl/api/chapters/$rawId?start=$start&end=$end", headers, Fetch.XHR)
             val chapters = json.parseToJsonElement(response.body.string()).jsonObject["chapters"] as? JsonArray
             chapters?.forEach { el ->
                 val o = el.jsonObject
@@ -1068,7 +1069,7 @@ abstract class WtrLab :
     private suspend fun postFolder(action: String, ids: SerieIds, folder: Int) {
         val body = FolderRequestBody(ids.sid, ids.rawId, folder).toJsonRequestBody()
         runCatching {
-            client.post("$baseUrl/api/library/folder/$action", apiHeaders, body).close()
+            client.post("$baseUrl/api/library/folder/$action", apiHeaders, Fetch.XHR, body).close()
         }
     }
 
@@ -1121,7 +1122,7 @@ abstract class WtrLab :
             chapter_id = chapterIdFor(ids.rawId, order),
         ).toJsonRequestBody(requestJson)
         runCatching {
-            client.post("$baseUrl/api/event/add", apiHeaders, body).close()
+            client.post("$baseUrl/api/event/add", apiHeaders, Fetch.XHR, body).close()
         }
     }
 
@@ -1132,7 +1133,7 @@ abstract class WtrLab :
         if (userFoldersFetched) return
         userFoldersFetched = true
         runCatching {
-            val response = client.get("$baseUrl/api/user/config/all", apiHeaders)
+            val response = client.get("$baseUrl/api/user/config/all", apiHeaders, Fetch.XHR)
             val folders = json.parseToJsonElement(response.body.string()).jsonObject["data"]
                 ?.jsonObject?.get("user_folders") as? JsonArray
             if (folders != null) {

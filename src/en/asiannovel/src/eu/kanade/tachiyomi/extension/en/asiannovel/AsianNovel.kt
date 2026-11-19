@@ -11,18 +11,18 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.jsonInstance
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
-import uy.kohesive.injekt.injectLazy
 
 @Source
 abstract class AsianNovel :
@@ -30,8 +30,6 @@ abstract class AsianNovel :
     NovelSource {
 
     override val supportsLatest = true
-
-    private val json: Json by injectLazy()
 
     /** [SManga.url] stored as bare slug under "/story/"; a stored value starting with "/" is a
      * pre-existing full-path entry and is resolved unchanged. */
@@ -41,7 +39,7 @@ abstract class AsianNovel :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val pageStr = if (page > 1) "page/$page/" else ""
-        val response = client.get("$baseUrl/$pageStr?s=&post_type=fcn_story&orderby=comment_count&order=desc", headers)
+        val response = client.get("$baseUrl/$pageStr?s=&post_type=fcn_story&orderby=comment_count&order=desc", headers, Fetch.DOCUMENT)
         return parseSearchResults(response.asJsoup())
     }
 
@@ -49,7 +47,7 @@ abstract class AsianNovel :
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val pageStr = if (page > 1) "page/$page/" else ""
-        val response = client.get("$baseUrl/$pageStr?s=&post_type=fcn_story&orderby=modified&order=desc", headers)
+        val response = client.get("$baseUrl/$pageStr?s=&post_type=fcn_story&orderby=modified&order=desc", headers, Fetch.DOCUMENT)
         return parseSearchResults(response.asJsoup())
     }
 
@@ -169,7 +167,7 @@ abstract class AsianNovel :
             }
         }
 
-        val response = client.get(url, headers)
+        val response = client.get(url, headers, Fetch.DOCUMENT)
         return parseSearchResults(response.asJsoup())
     }
 
@@ -185,7 +183,7 @@ abstract class AsianNovel :
     ): SMangaUpdate {
         // Details and the chapter list both live on the same story page - fetch it once.
         val request = buildMangaDetailsRequest(manga)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.DOCUMENT)
         val document = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(document, response) else manga
@@ -198,7 +196,7 @@ abstract class AsianNovel :
         val jsonLd = document.selectFirst("script[type=application/ld+json]:contains(Book)")?.data()
         if (jsonLd != null) {
             try {
-                val schema = json.decodeFromString<SchemaBook>(jsonLd)
+                val schema = jsonInstance.decodeFromString<SchemaBook>(jsonLd)
                 return SManga.create().apply {
                     url = mangaPath.slug(response.request.url.encodedPath)
                     title = schema.name
@@ -259,7 +257,7 @@ abstract class AsianNovel :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPath.slug(url.encodedPath) }
         val request = buildMangaDetailsRequest(manga)
-        val response = client.get(request.url, request.headers, ensureSuccess = false)
+        val response = client.get(request.url, request.headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val document = response.asJsoup()
         return parseMangaDetails(document, response)
@@ -272,7 +270,7 @@ abstract class AsianNovel :
     // ======================== Page Text (Novel) ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
+        val response = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers, Fetch.DOCUMENT)
         val document = response.asJsoup()
 
         val contentSection = document.selectFirst("#chapter-content, .chapter__content")

@@ -15,6 +15,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -124,9 +125,9 @@ abstract class MTLWuxia :
         return JsonObject(map)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = novelListParse(client.get(novelListUrl(page, baseListInput("views")), headers))
+    override suspend fun getPopularManga(page: Int): MangasPage = novelListParse(client.get(novelListUrl(page, baseListInput("views")), headers, Fetch.DOCUMENT))
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = novelListParse(client.get(novelListUrl(page, baseListInput("latest")), headers))
+    override suspend fun getLatestUpdates(page: Int): MangasPage = novelListParse(client.get(novelListUrl(page, baseListInput("latest")), headers, Fetch.DOCUMENT))
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         var sortBy = "latest"
@@ -145,7 +146,7 @@ abstract class MTLWuxia :
                 }
             }
         }
-        return novelListParse(client.get(novelListUrl(page, input), headers))
+        return novelListParse(client.get(novelListUrl(page, input), headers, Fetch.XHR))
     }
 
     // ---- Details ----
@@ -159,7 +160,7 @@ abstract class MTLWuxia :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
-        val response = client.get(buildMangaDetailsUrl(manga), headers, ensureSuccess = false)
+        val response = client.get(buildMangaDetailsUrl(manga), headers, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) return null
         // toSManga() already sets .url from the DTO's own slug field.
         return jsonInstance.decodeFromJsonElement<NovelDto>(response.trpcJson()).toSManga(mangaPathTemplate)
@@ -184,12 +185,12 @@ abstract class MTLWuxia :
     private suspend fun fetchAllChapters(slug: String): List<SChapter> {
         val chapters = mutableListOf<ChapterDto>()
 
-        var data = jsonInstance.decodeFromJsonElement<ChapterListJson>(client.get(chapterPageUrl(slug, null), headers).trpcJson())
+        var data = jsonInstance.decodeFromJsonElement<ChapterListJson>(client.get(chapterPageUrl(slug, null), headers, Fetch.DOCUMENT).trpcJson())
         chapters += data.chapters
 
         // Follow the cursor until the whole list is fetched (limit is capped at 100).
         while (data.nextCursor != null) {
-            val next = client.get(chapterPageUrl(slug, data.nextCursor), headers)
+            val next = client.get(chapterPageUrl(slug, data.nextCursor), headers, Fetch.DOCUMENT)
             data = jsonInstance.decodeFromJsonElement<ChapterListJson>(next.trpcJson())
             chapters += data.chapters
         }
@@ -216,7 +217,7 @@ abstract class MTLWuxia :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val updatedManga = if (fetchDetails) {
-            jsonInstance.decodeFromJsonElement<NovelDto>(client.get(buildMangaDetailsUrl(manga), headers).trpcJson()).toSManga(mangaPathTemplate)
+            jsonInstance.decodeFromJsonElement<NovelDto>(client.get(buildMangaDetailsUrl(manga), headers, Fetch.XHR).trpcJson()).toSManga(mangaPathTemplate)
         } else {
             manga
         }
@@ -247,7 +248,7 @@ abstract class MTLWuxia :
     )
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(baseUrl + page.url, headers)
+        val response = client.get(baseUrl + page.url, headers, Fetch.DOCUMENT)
         val chapter = response.asJsoup().extractNextJs<PageChapterDto>()
             ?: throw Exception("Chapter content not found")
 

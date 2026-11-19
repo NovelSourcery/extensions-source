@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.parseAs
@@ -77,7 +78,7 @@ abstract class MtlArabic :
         .build()
 
     private suspend fun getNovelsPage(url: HttpUrl): MangasPage {
-        val listing = client.get(url).parseAsIsland<ListingResponse>()
+        val listing = client.get(url, Fetch.XHR).parseAsIsland<ListingResponse>()
         val pagination = listing.pagination
         return MangasPage(
             listing.items.map { it.toSManga(baseUrl) },
@@ -99,7 +100,7 @@ abstract class MtlArabic :
         status = mangaStatus(details.status)
     }
 
-    private suspend fun fetchDetails(id: Int): NovelDetails = client.get(detailsUrl(id)).parseAsIsland<NovelDetails>()
+    private suspend fun fetchDetails(id: Int): NovelDetails = client.get(detailsUrl(id), Fetch.XHR).parseAsIsland<NovelDetails>()
 
     private fun detailsUrl(id: Int) = "$baseUrl/novel-details?id=$id"
 
@@ -151,6 +152,7 @@ abstract class MtlArabic :
     // The one endpoint that answers with bare JSON, so no island extraction here.
     private suspend fun fetchChapterPage(id: Int, page: Int): ChaptersResponse = client.get(
         "$baseUrl/api/novels/$id/chapters?page=$page&limit=$CHAPTERS_PER_PAGE&sort=asc",
+        Fetch.XHR,
     ).parseAs<ChaptersResponse>(islandJson)
 
     // ==================== Reader ====================
@@ -158,7 +160,7 @@ abstract class MtlArabic :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val chapter = client.get(baseUrl + page.url).parseAsIsland<ChapterPage>()
+        val chapter = client.get(baseUrl + page.url, Fetch.XHR).parseAsIsland<ChapterPage>()
         // The reader island stores the body as plain text rather than markup, one paragraph per
         // line, with the lines separated by blank lines. The blanks are the site's own spacing and
         // are dropped here so they don't compound with the separator below.

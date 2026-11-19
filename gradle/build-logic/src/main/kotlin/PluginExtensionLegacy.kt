@@ -18,6 +18,7 @@ import io.github.keiyoushi.gradle.internal.extensions.implementation
 import io.github.keiyoushi.gradle.internal.extensions.libs
 import io.github.keiyoushi.gradle.internal.extensions.ns
 import io.github.keiyoushi.gradle.internal.extensions.plugins
+import io.github.keiyoushi.gradle.tasks.ComputeContentHashTask
 import io.github.keiyoushi.gradle.tasks.CreateExtensionJarTask
 import io.github.keiyoushi.gradle.tasks.GenerateSourceInfoTask
 import io.github.keiyoushi.gradle.tasks.SignExtensionJarTask
@@ -30,6 +31,7 @@ import org.gradle.api.plugins.ExtraPropertiesExtension
 import org.gradle.kotlin.dsl.configure
 import org.gradle.kotlin.dsl.dependencies
 import org.gradle.kotlin.dsl.extra
+import org.gradle.kotlin.dsl.property
 import org.gradle.kotlin.dsl.register
 import org.gradle.kotlin.dsl.withType
 
@@ -150,29 +152,33 @@ class PluginExtensionLegacy : Plugin<Project> {
             }
         }
 
+        val contentHash = objects.property<String>()
         val sourceInfoTask = tasks.register<GenerateSourceInfoTask>("generateSourceInfo") {
             this.outputFile.set(layout.buildDirectory.file("keiyoushi-source-info.json"))
             this.content.set(
-                Json.encodeToString(
-                    ExtensionMetadata(
-                        module = applicationIdSuffix,
-                        theme = if (theme != null) themePkg else null,
-                        packageName = "eu.kanade.tachiyomi.novelextension.$applicationIdSuffix",
-                        name = extName,
-                        versionCode = versionCode,
-                        versionName = versionName,
-                        extensionLib = libVersion,
-                        contentWarning = if (isNsfw) 3 else 1,
-                        sources = listOf(
-                            SourceMetadata(
-                                id = explicitId ?: computeSourceId(extName, lang),
-                                name = extName,
-                                lang = lang,
-                                baseUrl = baseUrl,
+                contentHash.map { hash ->
+                    Json.encodeToString(
+                        ExtensionMetadata(
+                            module = applicationIdSuffix,
+                            theme = if (theme != null) themePkg else null,
+                            packageName = "eu.kanade.tachiyomi.novelextension.$applicationIdSuffix",
+                            name = extName,
+                            versionCode = versionCode,
+                            versionName = versionName,
+                            extensionLib = libVersion,
+                            contentWarning = if (isNsfw) 3 else 1,
+                            sources = listOf(
+                                SourceMetadata(
+                                    id = explicitId ?: computeSourceId(extName, lang),
+                                    name = extName,
+                                    lang = lang,
+                                    baseUrl = baseUrl,
+                                ),
                             ),
+                            contentHash = hash,
                         ),
-                    ),
-                ),
+                    )
+                },
             )
         }
         val providedClasspath = configurations.create("extensionProvidedClasspath") {
@@ -231,6 +237,14 @@ class PluginExtensionLegacy : Plugin<Project> {
                         minSdkVersion.set(ns.versions.android.sdk.min.map { it.toInt() })
                         outputJar.set(layout.buildDirectory.file("outputs/jar/${variant.name}/$filename.jar"))
                     }
+
+                    val contentHashTask = tasks.register<ComputeContentHashTask>("compute${variantName}ContentHash") {
+                        apkDir.set(variant.artifacts.get(SingleArtifact.APK))
+                        extensionJar.set(createTask.flatMap { it.outputJar })
+                        manifestFile.set(variant.artifacts.get(SingleArtifact.MERGED_MANIFEST))
+                        outputFile.set(layout.buildDirectory.file("intermediates/content_hash/${variant.name}/hash.txt"))
+                    }
+                    contentHash.set(contentHashTask.flatMap { it.outputFile }.map { it.asFile.readText() })
 
                     tasks.matching { it.name == "assemble$variantName" }
                         .configureEach { dependsOn(signTask) }

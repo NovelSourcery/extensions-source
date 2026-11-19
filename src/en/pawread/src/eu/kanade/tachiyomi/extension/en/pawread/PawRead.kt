@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -45,7 +46,7 @@ abstract class PawRead :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val popularRequest = buildPopularMangaRequest(page)
-        val response = client.get(popularRequest.url, popularRequest.headers)
+        val response = client.get(popularRequest.url, popularRequest.headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
         val mangas = parseNovels(doc)
         // Always assume next page exists if we got results
@@ -57,7 +58,7 @@ abstract class PawRead :
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val latestRequest = buildLatestUpdatesRequest(page)
-        val response = client.get(latestRequest.url, latestRequest.headers)
+        val response = client.get(latestRequest.url, latestRequest.headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
         val mangas = parseNovels(doc)
         return MangasPage(mangas, mangas.isNotEmpty())
@@ -111,7 +112,7 @@ abstract class PawRead :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val searchRequest = buildSearchMangaRequest(page, query, filters)
-        val response = client.get(searchRequest.url, searchRequest.headers)
+        val response = client.get(searchRequest.url, searchRequest.headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
         val mangas = parseNovels(doc)
         return MangasPage(mangas, mangas.isNotEmpty())
@@ -156,7 +157,7 @@ abstract class PawRead :
     ): SMangaUpdate {
         // Details and the chapter list both live on the same novel page - fetch it once.
         val mangaDetailsRequest = buildMangaDetailsRequest(manga)
-        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
@@ -253,7 +254,7 @@ abstract class PawRead :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
         val mangaDetailsRequest = buildMangaDetailsRequest(manga)
-        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, ensureSuccess = false)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         return parseMangaDetails(doc).apply { this.url = manga.url }
@@ -266,7 +267,7 @@ abstract class PawRead :
     // ======================== Novel Content ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(baseUrl + page.url, headers)
+        val response = client.get(baseUrl + page.url, headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
 
         val content = doc.selectFirst("div.main") ?: return ""

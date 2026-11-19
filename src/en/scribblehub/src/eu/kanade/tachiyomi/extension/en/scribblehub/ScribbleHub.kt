@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.scribblehub
 
-import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.source.ConfigurableSource
@@ -14,17 +13,18 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.post
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.getPreferences
 import kotlinx.serialization.json.JsonElement
 import okhttp3.FormBody
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
-import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.util.Calendar
 
@@ -42,7 +42,7 @@ abstract class ScribbleHub :
         .add("sec-ch-ua", "\"Chromium\"")
 
     private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+        getPreferences()
     }
 
     /** [SManga.url] is stored as the bare slug under "/series/" (e.g. "1135722/novel-name");
@@ -54,7 +54,7 @@ abstract class ScribbleHub :
     protected open fun buildPopularMangaUrl(page: Int): String = "$baseUrl/series-finder/?sf=1&sort=ratings&order=desc&pg=$page"
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val doc = client.get(buildPopularMangaUrl(page), headers).asJsoup()
+        val doc = client.get(buildPopularMangaUrl(page), headers, Fetch.DOCUMENT).asJsoup()
         return parseNovelsFromSearch(doc)
     }
 
@@ -62,7 +62,7 @@ abstract class ScribbleHub :
     protected open fun buildLatestUpdatesUrl(page: Int): String = "$baseUrl/latest-series/?pg=$page"
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val doc = client.get(buildLatestUpdatesUrl(page), headers).asJsoup()
+        val doc = client.get(buildLatestUpdatesUrl(page), headers, Fetch.DOCUMENT).asJsoup()
         return parseNovelsFromSearch(doc)
     }
 
@@ -76,7 +76,7 @@ abstract class ScribbleHub :
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val doc = client.get(buildSearchMangaUrl(page, query, filters), headers).asJsoup()
+        val doc = client.get(buildSearchMangaUrl(page, query, filters), headers, Fetch.DOCUMENT).asJsoup()
         return parseNovelsFromSearch(doc)
     }
 
@@ -131,7 +131,7 @@ abstract class ScribbleHub :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list (via novel id) both come from the same novel page.
-        val response = client.get(buildMangaDetailsUrl(manga), headers)
+        val response = client.get(buildMangaDetailsUrl(manga), headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
@@ -180,7 +180,7 @@ abstract class ScribbleHub :
             .add("mypostid", novelId)
             .build()
 
-        val chaptersResponse = client.post("$baseUrl/wp-admin/admin-ajax.php", headers, formBody)
+        val chaptersResponse = client.post("$baseUrl/wp-admin/admin-ajax.php", headers, Fetch.XHR, formBody)
         val chaptersHtml = chaptersResponse.body.string()
 
         val chaptersDoc = Jsoup.parse(chaptersHtml)
@@ -251,7 +251,7 @@ abstract class ScribbleHub :
     override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.get(url, headers, ensureSuccess = false)
+        val response = client.get(url, headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         return parseMangaDetails(doc).apply { this.url = mangaPath.slug(url.encodedPath) }
@@ -262,7 +262,7 @@ abstract class ScribbleHub :
 
     // Novel source implementation
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers)
+        val response = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers, Fetch.DOCUMENT)
         val body = response.body.string()
         val doc = Jsoup.parse(body, page.url)
 

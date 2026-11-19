@@ -11,18 +11,18 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.jsonInstance
 import keiyoushi.utils.stripChapterNumberPrefix
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import org.jsoup.Jsoup
-import uy.kohesive.injekt.injectLazy
 
 @Source
 abstract class NovelHi :
@@ -30,8 +30,6 @@ abstract class NovelHi :
     NovelSource {
 
     override val supportsLatest = false
-
-    private val json: Json by injectLazy()
 
     /**
      * The site's novel detail URL shape, as `/s/<slug>`. [SManga.url] is stored as the bare
@@ -73,7 +71,7 @@ abstract class NovelHi :
     }
 
     private fun parseList(response: okhttp3.Response): MangasPage {
-        val data = json.decodeFromString<ListResponse>(response.body.string()).data
+        val data = jsonInstance.decodeFromString<ListResponse>(response.body.string()).data
         val novels = data?.list.orEmpty().map { item ->
             SManga.create().apply {
                 title = item.bookName
@@ -90,7 +88,7 @@ abstract class NovelHi :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = listRequest(page, null, null, null, null)
-        return parseList(client.get(request.url, request.headers))
+        return parseList(client.get(request.url, request.headers, Fetch.XHR))
     }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage = getPopularManga(page)
@@ -100,7 +98,7 @@ abstract class NovelHi :
         val status = filters.filterIsInstance<StatusFilter>().firstOrNull()?.selected()
         val period = filters.filterIsInstance<PeriodFilter>().firstOrNull()?.selected()
         val request = listRequest(page, query.takeIf { it.isNotBlank() }, genre, status, period)
-        return parseList(client.get(request.url, request.headers))
+        return parseList(client.get(request.url, request.headers, Fetch.XHR))
     }
 
     protected open fun buildMangaDetailsRequest(manga: SManga): Request = GET(mangaPathTemplate.absolute(baseUrl, manga.url), headers)
@@ -113,7 +111,7 @@ abstract class NovelHi :
     ): SMangaUpdate {
         // Details and the chapter list's bookId both live on the same novel page - fetch it once.
         val detailsRequest = buildMangaDetailsRequest(manga)
-        val doc = client.get(detailsRequest.url, detailsRequest.headers).asJsoup()
+        val doc = client.get(detailsRequest.url, detailsRequest.headers, Fetch.DOCUMENT).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
 
@@ -132,7 +130,7 @@ abstract class NovelHi :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = mangaPathTemplate.slug(url.encodedPath)
-        val response = client.get(mangaPathTemplate.absolute(baseUrl, slug), headers, ensureSuccess = false)
+        val response = client.get(mangaPathTemplate.absolute(baseUrl, slug), headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         return parseMangaDetails(doc).apply { this.url = slug }
@@ -161,7 +159,7 @@ abstract class NovelHi :
             .addQueryParameter("curr", "1")
             .addQueryParameter("limit", "42121")
             .build()
-        val data = json.decodeFromString<ChapterResponse>(client.get(url, headers).body.string()).data
+        val data = jsonInstance.decodeFromString<ChapterResponse>(client.get(url, headers, Fetch.XHR).body.string()).data
 
         return data?.list.orEmpty().mapNotNull { ch ->
             val num = ch.indexNum.ifBlank { return@mapNotNull null }
@@ -185,7 +183,7 @@ abstract class NovelHi :
 
     override suspend fun fetchPageText(page: Page): String {
         val chapterUrl = baseUrl + "/" + page.url.trimStart('/')
-        val doc = client.get(chapterUrl, headers).asJsoup()
+        val doc = client.get(chapterUrl, headers, Fetch.DOCUMENT).asJsoup()
         val path = doc.selectFirst("#chapterContentPath")?.attr("value")
         val token = doc.selectFirst("#chapterContentToken")?.attr("value")
         if (path.isNullOrBlank() || token.isNullOrBlank()) return ""
@@ -195,7 +193,7 @@ abstract class NovelHi :
             .add("Referer", chapterUrl)
             .add("X-Requested-With", "XMLHttpRequest")
             .build()
-        val raw = json.decodeFromString<ContentResponse>(client.get("$contentUrl?token=$token", contentHeaders).body.string())
+        val raw = jsonInstance.decodeFromString<ContentResponse>(client.get("$contentUrl?token=$token", contentHeaders, Fetch.XHR).body.string())
             .data?.content ?: return ""
 
         // Site encodes letters with ROT13 (HTML tags left intact).

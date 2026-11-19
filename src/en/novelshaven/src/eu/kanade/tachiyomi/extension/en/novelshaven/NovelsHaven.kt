@@ -13,6 +13,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.getPreferencesLazy
@@ -50,7 +51,7 @@ abstract class NovelsHaven :
             .addQueryParameter("order", "descending")
             .addQueryParameter("page", page.toString())
             .build()
-        return client.get(url).asJsoup().parseSeriesList()
+        return client.get(url, Fetch.DOCUMENT).asJsoup().parseSeriesList()
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
@@ -59,7 +60,7 @@ abstract class NovelsHaven :
             filters.filterIsInstance<UrlFilter>().forEach { it.addTo(this) }
             addQueryParameter("page", page.toString())
         }.build()
-        return client.get(url).asJsoup().parseSeriesList()
+        return client.get(url, Fetch.DOCUMENT).asJsoup().parseSeriesList()
     }
 
     private fun Document.parseSeriesList(): MangasPage {
@@ -79,7 +80,7 @@ abstract class NovelsHaven :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         if (url.pathSegments.firstOrNull() != "series") return null
         val slug = url.pathSegments.getOrNull(1)?.takeIf { it.isNotEmpty() } ?: return null
-        val flight = Flight.parse(client.get("$baseUrl/series/$slug").asJsoup())
+        val flight = Flight.parse(client.get("$baseUrl/series/$slug", Fetch.DOCUMENT).asJsoup())
         return flight.series().toSManga().apply { this.url = slug }
     }
 
@@ -89,7 +90,7 @@ abstract class NovelsHaven :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val flight = Flight.parse(client.get(getMangaUrl(manga)).asJsoup())
+        val flight = Flight.parse(client.get(getMangaUrl(manga), Fetch.DOCUMENT).asJsoup())
         val showLocked = preferences.getBoolean(PREF_SHOW_LOCKED, false)
         val chapterList = flight.find { "chapters" in it && "seriesId" in it }
             ?.get("chapters")?.jsonArray.orEmpty()
@@ -108,7 +109,7 @@ abstract class NovelsHaven :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, getChapterUrl(chapter)))
 
     override suspend fun fetchPageText(page: Page): String {
-        val flight = Flight.parse(client.get(page.url).asJsoup())
+        val flight = Flight.parse(client.get(page.url, Fetch.DOCUMENT).asJsoup())
         val chapter = flight.find { (it["chapter"] as? JsonObject)?.containsKey("content") == true }
             ?.get("chapter")?.jsonObject
             ?: throw Exception("Chapter not found")
@@ -124,10 +125,10 @@ abstract class NovelsHaven :
     }
 
     override suspend fun fetchFilterData(): JsonElement {
-        val document = client.get("$baseUrl/series").asJsoup()
+        val document = client.get("$baseUrl/series", Fetch.DOCUMENT).asJsoup()
         val chunks = document.select("script[src*=/_next/static/chunks/]").map { it.absUrl("src") }.distinct()
         for (chunk in chunks) {
-            val script = client.get(chunk).use { it.body.string() }
+            val script = client.get(chunk, Fetch.XHR).use { it.body.string() }
             val lists = FILTER_LIST_REGEX.findAll(script).associate { it.groupValues[1] to it.groupValues[2].parseAs<List<String>>() }
             val genres = lists["GENRES"] ?: continue
             return FilterDataDto(genres, lists["TAGS"].orEmpty()).toJsonElement()

@@ -3,6 +3,7 @@ package eu.kanade.tachiyomi.novelextension.ar.novelarab
 import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 import eu.kanade.tachiyomi.source.model.Page
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 
 @Source
@@ -13,7 +14,7 @@ abstract class NovelArab : MadaraNovel() {
     override suspend fun fetchPageText(page: Page): String {
         // page.url is already an absolute URL (see MadaraNovel.getPageList) - baseUrl must not be
         // prepended again here, or the request resolves against a bogus "site+https" host.
-        val response = client.get(page.url, headers)
+        val response = client.get(page.url, headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
 
         checkCaptcha(doc, page.url)

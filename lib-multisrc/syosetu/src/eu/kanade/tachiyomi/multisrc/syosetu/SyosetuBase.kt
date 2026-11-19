@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.lib.chapterutils.checkCloudflare
+import keiyoushi.network.Fetch
 import keiyoushi.network.addCookie
 import keiyoushi.network.get
 import keiyoushi.network.rateLimit
@@ -140,7 +141,7 @@ abstract class SyosetuBase(
             .apply { if (!word.isNullOrBlank()) addQueryParameter("word", word) }
             .build()
 
-        val entries = client.get(apiUrl, headers).parseAs<List<Novel18ApiEntry>>()
+        val entries = client.get(apiUrl, headers, Fetch.XHR).parseAs<List<Novel18ApiEntry>>()
         val allCount = entries.firstOrNull()?.allcount ?: 0
         val novels = entries.filter { it.ncode.isNotEmpty() }.map { entry ->
             SManga.create().apply {
@@ -216,7 +217,7 @@ abstract class SyosetuBase(
 
     // ---------- Fetch & parse ----------
     private suspend fun fetchNovelList(url: String): MangasPage {
-        val response = client.get(url, headers)
+        val response = client.get(url, headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
         checkCloudflare(doc)
         return parseNovelList(doc)
@@ -276,7 +277,7 @@ abstract class SyosetuBase(
     // ---------- Novel details ----------
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
-        val response = client.get(contentBaseUrl + path, headers, ensureSuccess = false)
+        val response = client.get(contentBaseUrl + path, headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         checkCloudflare(doc)
@@ -313,7 +314,7 @@ abstract class SyosetuBase(
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val response = client.get(mangaPath.absolute(contentBaseUrl, manga.url), headers)
+        val response = client.get(mangaPath.absolute(contentBaseUrl, manga.url), headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
         checkCloudflare(doc)
 
@@ -352,7 +353,7 @@ abstract class SyosetuBase(
             val pageDoc = if (page == 1) {
                 doc
             } else {
-                val response = client.get("$basePath?p=$page", headers)
+                val response = client.get("$basePath?p=$page", headers, Fetch.DOCUMENT)
                 response.asJsoup()
             }
             checkCloudflare(pageDoc)
@@ -392,7 +393,7 @@ abstract class SyosetuBase(
 
     // ---------- Chapter content ----------
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(mangaPath.absolute(contentBaseUrl, page.url), headers)
+        val response = client.get(mangaPath.absolute(contentBaseUrl, page.url), headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
         checkCloudflare(doc)
 

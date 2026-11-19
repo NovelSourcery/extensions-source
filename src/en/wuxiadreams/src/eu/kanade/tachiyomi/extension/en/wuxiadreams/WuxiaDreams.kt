@@ -13,6 +13,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -78,13 +79,13 @@ abstract class WuxiaDreams :
         return MangasPage(mangas, hasNextPage(doc))
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.get(listUrl(page, "score", ""), headers))
+    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.get(listUrl(page, "score", ""), headers, Fetch.DOCUMENT))
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(client.get(listUrl(page, "update", ""), headers))
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(client.get(listUrl(page, "update", ""), headers, Fetch.DOCUMENT))
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val sort = filters.filterIsInstance<SortFilter>().firstOrNull()?.toUriPart() ?: "score"
-        return parseMangaListResponse(client.get(listUrl(page, sort, query), headers))
+        return parseMangaListResponse(client.get(listUrl(page, sort, query), headers, Fetch.DOCUMENT))
     }
 
     private fun hasNextPage(doc: Document): Boolean {
@@ -95,7 +96,7 @@ abstract class WuxiaDreams :
     override fun getMangaUrl(manga: SManga): String = mangaPathTemplate.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.get(url, headers, ensureSuccess = false)
+        val response = client.get(url, headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         return parseMangaDetails(doc).apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
@@ -140,7 +141,7 @@ abstract class WuxiaDreams :
     ): SMangaUpdate {
         // Details and the first chapter-list page both live on the same novel page - fetch it once.
         val resolvedUrl = mangaPathTemplate.resolve(manga.url)
-        val doc = client.get(mangaPathTemplate.absolute(baseUrl, manga.url), headers).asJsoup()
+        val doc = client.get(mangaPathTemplate.absolute(baseUrl, manga.url), headers, Fetch.DOCUMENT).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) fetchChapterList(resolvedUrl, doc) else chapters
@@ -166,7 +167,7 @@ abstract class WuxiaDreams :
         chapters += parseChapters(firstPageDoc)
         val totalPages = pageRegex.find(firstPageDoc.text())?.groupValues?.get(2)?.toIntOrNull() ?: 1
         for (page in 2..totalPages) {
-            val pageDoc = client.get("$baseUrl$resolvedMangaUrl?page=$page&sort=desc", headers).asJsoup()
+            val pageDoc = client.get("$baseUrl$resolvedMangaUrl?page=$page&sort=desc", headers, Fetch.DOCUMENT).asJsoup()
             chapters += parseChapters(pageDoc)
         }
         return chapters
@@ -197,7 +198,7 @@ abstract class WuxiaDreams :
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val doc = client.get(url, headers).asJsoup()
+        val doc = client.get(url, headers, Fetch.DOCUMENT).asJsoup()
         val article = doc.selectFirst("article.chapter-content-container") ?: return ""
         article.select("script, style, ins, [data-ad-slot-728x90], .adsbygoogle").remove()
         return article.html()

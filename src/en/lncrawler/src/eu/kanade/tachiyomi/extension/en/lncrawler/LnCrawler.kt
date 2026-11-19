@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.lncrawler
 
-import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
@@ -15,9 +14,11 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.getPreferences
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -27,7 +28,6 @@ import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Response
 import org.jsoup.Jsoup
-import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
 @Source
@@ -46,7 +46,7 @@ abstract class LnCrawler :
     }
 
     private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+        getPreferences()
     }
 
     override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor { chain ->
@@ -71,7 +71,7 @@ abstract class LnCrawler :
 
     private fun buildPopularMangaUrl(page: Int): String = "$apiUrl/novels/search/?page=$page&page_size=24&sort_by=popularity&sort_order=desc"
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parsePopularMangaResponse(client.get(buildPopularMangaUrl(page), headers))
+    override suspend fun getPopularManga(page: Int): MangasPage = parsePopularMangaResponse(client.get(buildPopularMangaUrl(page), headers, Fetch.XHR))
 
     private fun parsePopularMangaResponse(response: Response): MangasPage {
         val searchResponse = json.decodeFromString<SearchResponse>(response.body.string())
@@ -88,7 +88,7 @@ abstract class LnCrawler :
 
     private fun buildLatestUpdatesUrl(page: Int): String = "$apiUrl/novels/search/?page=$page&page_size=24&sort_by=last_updated&sort_order=desc"
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parsePopularMangaResponse(client.get(buildLatestUpdatesUrl(page), headers))
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parsePopularMangaResponse(client.get(buildLatestUpdatesUrl(page), headers, Fetch.XHR))
 
     // ======================== Search ========================
 
@@ -160,7 +160,7 @@ abstract class LnCrawler :
         }
     }
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parsePopularMangaResponse(client.get(buildSearchMangaUrl(page, query, filters), headers))
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parsePopularMangaResponse(client.get(buildSearchMangaUrl(page, query, filters), headers, Fetch.XHR))
 
     // ======================== Details ========================
 
@@ -176,12 +176,12 @@ abstract class LnCrawler :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val updatedManga = if (fetchDetails) {
-            parseMangaDetails(client.get(buildMangaDetailsUrl(manga), headers))
+            parseMangaDetails(client.get(buildMangaDetailsUrl(manga), headers, Fetch.XHR))
         } else {
             manga
         }
         val updatedChapters = if (fetchChapters) {
-            parseChapterList(client.get(buildChapterListUrl(manga), headers))
+            parseChapterList(client.get(buildChapterListUrl(manga), headers, Fetch.XHR))
         } else {
             chapters
         }
@@ -249,7 +249,7 @@ abstract class LnCrawler :
                 for (p in (chapterResponse.currentPage + 1)..chapterResponse.totalPages) {
                     try {
                         val moreUrl = "$apiUrl/novels/${chapterResponse.novelSlug}/${chapterResponse.sourceSlug}/chapters/?page=$p&page_size=1000"
-                        val moreResp = client.get(moreUrl, headers, ensureSuccess = false)
+                        val moreResp = client.get(moreUrl, headers, Fetch.XHR, ensureSuccess = false)
                         if (moreResp.isSuccessful) {
                             val moreBody = moreResp.body.string()
                             val moreChapterResponse = json.decodeFromString<ChapterListResponse>(moreBody)
@@ -281,7 +281,7 @@ abstract class LnCrawler :
 
             if (source != null) {
                 val chaptersUrl = "$apiUrl/novels/${novel.slug}/${source.sourceSlug}/chapters/?page=1&page_size=1000"
-                val chaptersResponse = client.get(chaptersUrl, headers)
+                val chaptersResponse = client.get(chaptersUrl, headers, Fetch.XHR)
                 return parseChapterList(chaptersResponse)
             }
 
@@ -294,7 +294,7 @@ abstract class LnCrawler :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPath.slug(url.encodedPath) }
-        val response = client.get(buildMangaDetailsUrl(manga), headers, ensureSuccess = false)
+        val response = client.get(buildMangaDetailsUrl(manga), headers, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) return null
         // parseMangaDetails already sets .url from the DTO's own slug/sourceSlug fields.
         return parseMangaDetails(response)
@@ -311,7 +311,7 @@ abstract class LnCrawler :
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val response = client.get(url, headers)
+        val response = client.get(url, headers, Fetch.DOCUMENT)
         val chapter = json.decodeFromString<ChapterContent>(response.body.string())
 
         val document = Jsoup.parse(chapter.body)

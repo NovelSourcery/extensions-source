@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.all.calibre
 
-import android.app.Application
 import androidx.preference.EditTextPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
@@ -14,9 +13,11 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.getPreferences
 import kotlinx.coroutines.delay
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -28,7 +29,6 @@ import kotlinx.serialization.json.jsonObject
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.Request
-import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.net.URLEncoder
 import java.util.Base64
@@ -47,7 +47,7 @@ abstract class Calibre :
 
     override val supportsLatest = true
 
-    private val preferences = Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+    private val preferences = getPreferences()
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -73,7 +73,7 @@ abstract class Calibre :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = buildPopularMangaRequest(page)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.XHR)
         val result = json.decodeFromString<SearchResponse>(response.body.string())
         val novels = booksMetadata(result.bookIds)
         return MangasPage(novels, result.bookIds.size >= LIMIT)
@@ -83,7 +83,7 @@ abstract class Calibre :
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val request = buildLatestUpdatesRequest(page)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.XHR)
         val result = json.decodeFromString<SearchResponse>(response.body.string())
         val novels = booksMetadata(result.bookIds)
         return MangasPage(novels, result.bookIds.size >= LIMIT)
@@ -120,6 +120,7 @@ abstract class Calibre :
         val response = client.get(
             "$baseUrl/ajax/search?query=$calibreQuery&num=$LIMIT&offset=$offset&sort=$sort&sort_order=$order",
             headers,
+            Fetch.XHR,
         )
         val result = json.decodeFromString<SearchResponse>(response.body.string())
         val novels = booksMetadata(result.bookIds)
@@ -147,7 +148,7 @@ abstract class Calibre :
 
     private suspend fun booksMetadata(ids: List<Long>): List<SManga> {
         if (ids.isEmpty()) return emptyList()
-        val response = client.get("$baseUrl/ajax/books?ids=${ids.joinToString(",")}", headers).body.string()
+        val response = client.get("$baseUrl/ajax/books?ids=${ids.joinToString(",")}", headers, Fetch.XHR).body.string()
         val books = json.decodeFromString<Map<String, BookMetadata>>(response)
         return ids.mapNotNull { id ->
             val book = books[id.toString()] ?: return@mapNotNull null
@@ -167,7 +168,7 @@ abstract class Calibre :
         val path = mangaPathTemplate.slug(url.encodedPath)
         val manga = SManga.create().apply { this.url = path }
         val request = buildMangaDetailsRequest(manga)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.XHR)
         if (!response.isSuccessful) return null
         val id = bookId(mangaPathTemplate.resolve(manga.url))
         val book = json.decodeFromString<BookMetadata>(response.body.string())
@@ -191,7 +192,7 @@ abstract class Calibre :
     ): SMangaUpdate {
         val id = bookId(mangaPathTemplate.resolve(manga.url))
         val request = buildMangaDetailsRequest(manga)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.XHR)
         val book = json.decodeFromString<BookMetadata>(response.body.string())
 
         val updatedManga = if (fetchDetails) bookMetadataToManga(id, book) else manga
@@ -229,7 +230,7 @@ abstract class Calibre :
     private suspend fun fetchManifest(id: String, format: String): BookManifest? {
         val url = "$baseUrl/book-manifest/$id/$format"
         repeat(15) {
-            val body = client.get(url, headers).body.string()
+            val body = client.get(url, headers, Fetch.XHR).body.string()
             val obj = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
             if (obj?.containsKey("spine") == true) {
                 return json.decodeFromString<BookManifest>(body)
@@ -243,13 +244,13 @@ abstract class Calibre :
 
     override suspend fun fetchPageText(page: Page): String {
         var url = page.url
-        var response = client.get(baseUrl + url, headers)
+        var response = client.get(baseUrl + url, headers, Fetch.XHR)
         // A cached chapter URL embeds the book file's size/mtime; if the book was re-imported
         // those change and the old URL 404s. Re-resolve via a fresh manifest and retry once.
         if (response.code == 404) {
             response.close()
             url = refreshBookFileUrl(url) ?: return ""
-            response = client.get(baseUrl + url, headers)
+            response = client.get(baseUrl + url, headers, Fetch.XHR)
         }
         val body = response.body.string()
         val tree = runCatching {

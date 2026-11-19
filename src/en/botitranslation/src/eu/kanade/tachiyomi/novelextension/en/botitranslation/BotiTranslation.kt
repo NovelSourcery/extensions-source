@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.getPreferencesLazy
@@ -56,7 +57,7 @@ abstract class BotiTranslation :
                 .apply { if (genre.isNotEmpty()) addQueryParameter("genre", genre) }
                 .build()
         }
-        return parseBookList(client.get(url, headers), page)
+        return parseBookList(client.get(url, headers, Fetch.XHR), page)
     }
 
     private fun parseBookList(response: Response, page: Int): MangasPage {
@@ -76,7 +77,7 @@ abstract class BotiTranslation :
         val id = manga.url
 
         val updatedManga = if (fetchDetails) {
-            client.get("$API_URL/books/$id", headers).parseAs<SingleResponse<BookDto>>().data.toSManga()
+            client.get("$API_URL/books/$id", headers, Fetch.XHR).parseAs<SingleResponse<BookDto>>().data.toSManga()
         } else {
             manga
         }
@@ -92,7 +93,7 @@ abstract class BotiTranslation :
                     .addQueryParameter("pageSize", CHAPTER_PAGE_SIZE.toString())
                     .addQueryParameter("sortDirection", "ASC")
                     .build()
-                val data = client.get(url, headers).parseAs<PageResponse<ChapterDto>>().data
+                val data = client.get(url, headers, Fetch.XHR).parseAs<PageResponse<ChapterDto>>().data
                 allChapters += data.list
                 if (page * CHAPTER_PAGE_SIZE >= data.totalCount || data.list.isEmpty()) break
                 page++
@@ -109,7 +110,7 @@ abstract class BotiTranslation :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val id = url.pathSegments.lastOrNull { it.isNotEmpty() }?.toIntOrNull() ?: return null
-        val response = client.get("$API_URL/books/$id", headers, ensureSuccess = false)
+        val response = client.get("$API_URL/books/$id", headers, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return response.parseAs<SingleResponse<BookDto>>().data.toSManga()
     }
@@ -119,7 +120,7 @@ abstract class BotiTranslation :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val chapter = client.get("$API_URL/chapters/${page.url}", headers).parseAs<SingleResponse<ChapterContentDto>>().data
+        val chapter = client.get("$API_URL/chapters/${page.url}", headers, Fetch.XHR).parseAs<SingleResponse<ChapterContentDto>>().data
         if (chapter.paywallStatus == "charge") {
             throw Exception("This chapter is locked (premium). Unlock it on the website, or disable \"Show locked chapters\".")
         }

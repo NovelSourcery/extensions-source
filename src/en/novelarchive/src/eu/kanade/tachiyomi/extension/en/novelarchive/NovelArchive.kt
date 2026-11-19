@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -58,18 +59,18 @@ abstract class NovelArchive :
     }
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val result = client.get(buildListUrl(page, "popular", "", FilterList()), headers).parseAs<NovelListResponse>()
+        val result = client.get(buildListUrl(page, "popular", "", FilterList()), headers, Fetch.XHR).parseAs<NovelListResponse>()
         return MangasPage(result.novels.map { it.toSManga() }, result.pagination.hasNext)
     }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val result = client.get(buildListUrl(page, "recent", "", FilterList()), headers).parseAs<NovelListResponse>()
+        val result = client.get(buildListUrl(page, "recent", "", FilterList()), headers, Fetch.XHR).parseAs<NovelListResponse>()
         return MangasPage(result.novels.map { it.toSManga() }, result.pagination.hasNext)
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val sort = filters.filterIsInstance<SortFilter>().firstOrNull()?.toUriPart() ?: "recent"
-        val result = client.get(buildListUrl(page, sort, query, filters), headers).parseAs<NovelListResponse>()
+        val result = client.get(buildListUrl(page, sort, query, filters), headers, Fetch.XHR).parseAs<NovelListResponse>()
         return MangasPage(result.novels.map { it.toSManga() }, result.pagination.hasNext)
     }
 
@@ -103,7 +104,7 @@ abstract class NovelArchive :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val id = mangaPathTemplate.slug(url.encodedPath).trim('/')
         if (id.isBlank()) return null
-        val response = client.get("$baseUrl/api/novels/$id", headers, ensureSuccess = false)
+        val response = client.get("$baseUrl/api/novels/$id", headers, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return response.parseAs<NovelDetailResponse>().novel.toSManga()
     }
@@ -144,7 +145,7 @@ abstract class NovelArchive :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list both live in the same API response - fetch it once.
-        val dto = client.get(buildMangaDetailsUrl(manga), headers).parseAs<NovelDetailResponse>().novel
+        val dto = client.get(buildMangaDetailsUrl(manga), headers, Fetch.XHR).parseAs<NovelDetailResponse>().novel
 
         val updatedManga = if (fetchDetails) dto.toSManga() else manga
 
@@ -174,7 +175,7 @@ abstract class NovelArchive :
 
     override suspend fun fetchPageText(page: Page): String {
         val (novelId, number) = page.url.split("/")
-        val response = client.get("$baseUrl/api/novels/$novelId/chapters/$number", headers)
+        val response = client.get("$baseUrl/api/novels/$novelId/chapters/$number", headers, Fetch.XHR)
         val content = response.parseAs<ChapterContentResponse>().chapter.content.orEmpty()
         return content.split("\n")
             .map { it.trim() }

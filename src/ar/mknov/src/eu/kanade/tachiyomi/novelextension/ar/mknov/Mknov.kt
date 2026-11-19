@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import kotlinx.serialization.SerialName
@@ -42,11 +43,11 @@ abstract class Mknov :
 
     private fun worksUrl(): String = "$baseUrl/api/works?limit=5000"
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseWorks(client.get(worksUrl(), headers).body.string(), "")
+    override suspend fun getPopularManga(page: Int): MangasPage = parseWorks(client.get(worksUrl(), headers, Fetch.XHR).body.string(), "")
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseWorks(client.get(worksUrl(), headers).body.string(), "")
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseWorks(client.get(worksUrl(), headers, Fetch.XHR).body.string(), "")
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseWorks(client.get(worksUrl(), headers).body.string(), query)
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseWorks(client.get(worksUrl(), headers, Fetch.XHR).body.string(), query)
 
     private fun parseWorks(body: String, query: String): MangasPage {
         val works = try {
@@ -105,7 +106,7 @@ abstract class Mknov :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val doc = client.get(baseUrl + manga.url, headers).asJsoup()
+        val doc = client.get(baseUrl + manga.url, headers, Fetch.DOCUMENT).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) loadChapterList(manga) else chapters
@@ -114,7 +115,7 @@ abstract class Mknov :
     }
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.get(url, headers, ensureSuccess = false)
+        val response = client.get(url, headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         return parseMangaDetails(doc).apply { this.url = url.encodedPath }
@@ -212,7 +213,7 @@ abstract class Mknov :
 
     private suspend fun loadChapterList(manga: SManga): List<SChapter> {
         val id = manga.url.substringAfterLast('/')
-        val body = client.get("$baseUrl/api/works/$id/chapters", headers, ensureSuccess = false).body.string()
+        val body = client.get("$baseUrl/api/works/$id/chapters", headers, Fetch.XHR, ensureSuccess = false).body.string()
 
         val chaptersResponse = try {
             json.decodeFromString<ChaptersResponse>(body)
@@ -253,7 +254,7 @@ abstract class Mknov :
             baseUrl + page.url
         }
 
-        val html = client.get(url, headers).body.string()
+        val html = client.get(url, headers, Fetch.DOCUMENT).body.string()
 
         // Jsoup parses HTML entities (&quot; etc.) so quotes become real chars.
         val doc = Jsoup.parse(html)
@@ -271,7 +272,7 @@ abstract class Mknov :
         // 3) Fetch the font and decode.
         val fontAbs = if (fontUrl.startsWith("http")) fontUrl else baseUrl + fontUrl
         val woff2 = try {
-            client.get(fontAbs, headers).body.bytes()
+            client.get(fontAbs, headers, Fetch.NONE).body.bytes()
         } catch (e: Exception) {
             return rawBody
         }

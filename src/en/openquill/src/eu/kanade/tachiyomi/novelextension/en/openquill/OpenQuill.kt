@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.formattedText
@@ -38,7 +39,7 @@ abstract class OpenQuill :
         return paginate(stories, page)
     }
 
-    private suspend fun fetchAllStories(): List<StoryDto> = client.get("$baseUrl/api/stories?page=1&limit=$MAX_STORIES", headers).parseAs<StoryListResponse>().stories
+    private suspend fun fetchAllStories(): List<StoryDto> = client.get("$baseUrl/api/stories?page=1&limit=$MAX_STORIES", headers, Fetch.XHR).parseAs<StoryListResponse>().stories
 
     private fun paginate(stories: List<StoryDto>, page: Int): MangasPage {
         val from = (page - 1) * PAGE_SIZE
@@ -54,7 +55,7 @@ abstract class OpenQuill :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val story = client.get("$baseUrl/api/stories/${manga.url}", headers).parseAs<StoryDto>()
+        val story = client.get("$baseUrl/api/stories/${manga.url}", headers, Fetch.XHR).parseAs<StoryDto>()
 
         val updatedManga = if (fetchDetails) story.toSManga(baseUrl) else manga
         val updatedChapters = if (fetchChapters) {
@@ -70,7 +71,7 @@ abstract class OpenQuill :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = url.pathSegments.getOrNull(1) ?: return null
-        val response = client.get("$baseUrl/api/stories/$slug", headers, ensureSuccess = false)
+        val response = client.get("$baseUrl/api/stories/$slug", headers, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return response.parseAs<StoryDto>().toSManga(baseUrl)
     }
@@ -81,7 +82,7 @@ abstract class OpenQuill :
         val match = CHAPTER_URL_REGEX.find(page.url) ?: throw Exception("Malformed chapter url: ${page.url}")
         val (slug, chapterNumber) = match.destructured
 
-        val response = client.get("$baseUrl/api/stories/$slug/chapters/$chapterNumber", headers)
+        val response = client.get("$baseUrl/api/stories/$slug/chapters/$chapterNumber", headers, Fetch.XHR)
             .parseAs<ChapterContentResponse>()
         val doc = Jsoup.parseBodyFragment(response.chapter.content, baseUrl)
         doc.selectFirst("h1")?.remove()

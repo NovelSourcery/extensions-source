@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -45,7 +46,7 @@ abstract class ShanghaiFantasy :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = buildPopularMangaRequest(page)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.XHR)
         return parseMangaListResponse(response)
     }
 
@@ -90,7 +91,7 @@ abstract class ShanghaiFantasy :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val request = buildSearchMangaRequest(page, query, filters)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.XHR)
         return parseMangaListResponse(response)
     }
 
@@ -109,7 +110,7 @@ abstract class ShanghaiFantasy :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val request = buildMangaDetailsRequest(manga)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
@@ -146,7 +147,7 @@ abstract class ShanghaiFantasy :
         val novelId = doc.selectFirst("#chapterList")?.attr("data-cat") ?: return emptyList()
 
         val chaptersUrl = "$baseUrl/wp-json/fiction/v1/chapters?category=$novelId&order=asc&page=1&per_page=9999"
-        val chapResponse = client.get(chaptersUrl, headers)
+        val chapResponse = client.get(chaptersUrl, headers, Fetch.XHR)
         val chapters = json.decodeFromString<List<ShanghaiChapter>>(chapResponse.body.string())
 
         return chapters.mapIndexedNotNull { index, ch ->
@@ -166,7 +167,7 @@ abstract class ShanghaiFantasy :
     override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.get(url, headers, ensureSuccess = false)
+        val response = client.get(url, headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         return parseMangaDetails(doc).apply { this.url = mangaPath.slug(url.encodedPath) }
@@ -177,7 +178,7 @@ abstract class ShanghaiFantasy :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers).asJsoup()
+        val doc = client.get(if (page.url.startsWith("http")) page.url else baseUrl + page.url, headers, Fetch.DOCUMENT).asJsoup()
         val title = doc.selectFirst("div.my-5")?.text() ?: ""
         // "div.flex:nth-child(4)" doesn't match anything on the live page - the real container
         // is "div.contenta" (verified live), which also carries inline AdSense blocks injected

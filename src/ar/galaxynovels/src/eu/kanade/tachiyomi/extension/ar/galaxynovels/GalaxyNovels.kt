@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import kotlinx.coroutines.NonCancellable
@@ -151,7 +152,7 @@ abstract class GalaxyNovels :
      * fast path and never touch the proxy.
      */
     private suspend fun fetchBody(url: String, isJson: Boolean = false): String? {
-        runCatching { client.get(url, headers, ensureSuccess = false) }.getOrNull()?.let { response ->
+        runCatching { client.get(url, headers, Fetch.DOCUMENT, ensureSuccess = false) }.getOrNull()?.let { response ->
             val body = response.use { it.body.string() }
             if (response.isSuccessful && !body.isCloudflareBlock()) return body
         }
@@ -160,7 +161,7 @@ abstract class GalaxyNovels :
             .set("Accept", "*/*")
             .set("X-Return-Format", if (isJson) "text" else "html")
             .build()
-        val proxied = runCatching { client.get(JINA_READER + url, proxyHeaders, ensureSuccess = false) }
+        val proxied = runCatching { client.get(JINA_READER + url, proxyHeaders, Fetch.DOCUMENT, ensureSuccess = false) }
             .getOrNull() ?: return null
         if (!proxied.isSuccessful) {
             proxied.close()

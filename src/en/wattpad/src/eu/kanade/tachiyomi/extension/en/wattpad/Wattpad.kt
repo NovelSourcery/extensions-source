@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.wattpad
 
-import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.CheckBoxPreference
 import androidx.preference.PreferenceScreen
@@ -14,15 +13,16 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.getPreferences
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
 import okhttp3.Response
-import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.net.URLEncoder
 import kotlin.time.Instant
@@ -40,7 +40,7 @@ abstract class Wattpad :
     private val json = Json { ignoreUnknownKeys = true }
 
     private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+        getPreferences()
     }
 
     private val includeMature: Boolean
@@ -51,9 +51,9 @@ abstract class Wattpad :
 
     // region Browse (Popular / Latest / Search)
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseStories(client.get(browseUrl("hot", page), headers))
+    override suspend fun getPopularManga(page: Int): MangasPage = parseStories(client.get(browseUrl("hot", page), headers, Fetch.XHR))
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseStories(client.get(browseUrl("new", page), headers))
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseStories(client.get(browseUrl("new", page), headers, Fetch.XHR))
 
     private fun browseUrl(filter: String, page: Int, category: Int = 0): String {
         val offset = (page - 1) * LIMIT
@@ -76,7 +76,7 @@ abstract class Wattpad :
         if (query.isBlank()) {
             val category = filters.filterIsInstance<CategoryFilter>().firstOrNull()?.selectedId ?: 0
             val sort = if (completed) "complete" else filters.filterIsInstance<SortFilter>().firstOrNull()?.value ?: "hot"
-            return parseStories(client.get(browseUrl(sort, page, category), headers))
+            return parseStories(client.get(browseUrl(sort, page, category), headers, Fetch.XHR))
         }
 
         val offset = (page - 1) * LIMIT
@@ -84,7 +84,7 @@ abstract class Wattpad :
         val q = URLEncoder.encode(query, "UTF-8")
         val url = "$baseUrl/v4/search/stories?query=$q$statusParam&free=1" +
             "&fields=stories(title,cover,url),nextUrl&limit=$LIMIT&mature=true&offset=$offset"
-        return parseStories(client.get(url, headers))
+        return parseStories(client.get(url, headers, Fetch.XHR))
     }
 
     // endregion
@@ -97,7 +97,7 @@ abstract class Wattpad :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
-        val response = client.get(storyInfoUrl(path), headers, ensureSuccess = false)
+        val response = client.get(storyInfoUrl(path), headers, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val story = json.decodeFromString<StoryDetails>(response.body.string())
         return parseMangaDetails(story).apply { this.url = mangaPath.slug(path) }
@@ -124,7 +124,7 @@ abstract class Wattpad :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and chapters both come from the same story-info endpoint - fetch it once.
-        val story = json.decodeFromString<StoryDetails>(client.get(storyInfoUrl(mangaPath.resolve(manga.url)), headers).body.string())
+        val story = json.decodeFromString<StoryDetails>(client.get(storyInfoUrl(mangaPath.resolve(manga.url)), headers, Fetch.XHR).body.string())
 
         val updatedManga = if (fetchDetails) parseMangaDetails(story) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(story) else chapters
@@ -165,7 +165,7 @@ abstract class Wattpad :
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val html = client.get(url, headers).body.string()
+        val html = client.get(url, headers, Fetch.XHR).body.string()
         if (html.trimStart().startsWith("{\"result\":\"ERROR\"")) {
             return "<p>This chapter is locked or unavailable.</p>"
         }

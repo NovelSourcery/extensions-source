@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import kotlinx.serialization.json.JsonElement
@@ -62,7 +63,7 @@ abstract class Quotev :
                 .applyBrowseOptions(opts)
                 .apply { if (page > 1) addQueryParameter("page", page.toString()) }
                 .build()
-            return parseStoryList(client.get(url, headers).asJsoup())
+            return parseStoryList(client.get(url, headers, Fetch.DOCUMENT).asJsoup())
         }
         return browse(page, opts)
     }
@@ -76,7 +77,7 @@ abstract class Quotev :
             .applyBrowseOptions(opts)
             .apply { if (page > 1) addQueryParameter("page", page.toString()) }
             .build()
-        return parseStoryList(client.get(url, headers).asJsoup())
+        return parseStoryList(client.get(url, headers, Fetch.DOCUMENT).asJsoup())
     }
 
     private fun HttpUrl.Builder.applyBrowseOptions(opts: BrowseOptions): HttpUrl.Builder = apply {
@@ -136,7 +137,7 @@ abstract class Quotev :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val doc = client.get(getMangaUrl(manga), headers).asJsoup()
+        val doc = client.get(getMangaUrl(manga), headers, Fetch.DOCUMENT).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(doc, manga.url) else chapters
@@ -145,7 +146,7 @@ abstract class Quotev :
     }
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.get(url, headers, ensureSuccess = false)
+        val response = client.get(url, headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         return parseMangaDetails(doc).apply {
@@ -197,7 +198,7 @@ abstract class Quotev :
         return buildString {
             var pageNum = startPage
             while (endPage == OPEN_ENDED || pageNum <= endPage) {
-                val doc = client.get("$baseUrl$storyPath/$pageNum", headers).asJsoup()
+                val doc = client.get("$baseUrl$storyPath/$pageNum", headers, Fetch.DOCUMENT).asJsoup()
                 append(doc.selectFirst("#rescontent")?.html().orEmpty())
                 if (doc.selectFirst("#quizPageNext") == null) break
                 pageNum++

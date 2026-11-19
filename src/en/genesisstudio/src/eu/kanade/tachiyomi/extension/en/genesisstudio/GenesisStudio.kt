@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.genesisstudio
 
-import android.app.Application
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.GET
@@ -13,8 +12,10 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.getPreferences
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.Json
@@ -29,7 +30,6 @@ import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
 /**
@@ -74,21 +74,21 @@ abstract class GenesisStudio :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = novelsListRequest()
-        return parseNovelsList(client.get(request.url, request.headers), null)
+        return parseNovelsList(client.get(request.url, request.headers, Fetch.XHR), null)
     }
 
     // No separate "latest" feed exists (single unpaginated catalog call); supportsLatest is
     // false so this is never actually invoked, but KeiSource requires an implementation.
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val request = novelsListRequest()
-        return parseNovelsList(client.get(request.url, request.headers), null)
+        return parseNovelsList(client.get(request.url, request.headers, Fetch.XHR), null)
     }
 
     // The catalog is a single unpaginated call; the query rides in the URL fragment (never sent
     // over the wire) so parseNovelsList can filter client-side without a second request.
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val request = novelsListRequest().let { it.newBuilder().url(it.url.newBuilder().fragment(query).build()).build() }
-        return parseNovelsList(client.get(request.url, request.headers), request.url.fragment)
+        return parseNovelsList(client.get(request.url, request.headers, Fetch.XHR), request.url.fragment)
     }
 
     private fun parseNovelsList(response: Response, query: String?): MangasPage {
@@ -127,12 +127,12 @@ abstract class GenesisStudio :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = url.encodedPath.substringAfter("/novels/", "").trim('/').takeIf { it.isNotBlank() } ?: return null
         val listRequest = novelsListRequest()
-        val listResponse = client.get(listRequest.url, listRequest.headers, ensureSuccess = false)
+        val listResponse = client.get(listRequest.url, listRequest.headers, Fetch.XHR, ensureSuccess = false)
         if (!listResponse.isSuccessful) return null
         val matched = parseNovelsList(listResponse, null).mangas
             .firstOrNull { it.url.split('|').getOrNull(2) == slug } ?: return null
         val detailsRequest = buildMangaDetailsRequest(matched)
-        val response = client.get(detailsRequest.url, detailsRequest.headers, ensureSuccess = false)
+        val response = client.get(detailsRequest.url, detailsRequest.headers, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response)
     }
@@ -157,7 +157,7 @@ abstract class GenesisStudio :
         val detailsDeferred = if (fetchDetails) {
             async {
                 val request = buildMangaDetailsRequest(manga)
-                parseMangaDetails(client.get(request.url, request.headers))
+                parseMangaDetails(client.get(request.url, request.headers, Fetch.XHR))
             }
         } else {
             null
@@ -165,7 +165,7 @@ abstract class GenesisStudio :
         val chaptersDeferred = if (fetchChapters) {
             async {
                 val request = buildChapterListRequest(manga)
-                parseChapterList(client.get(request.url, request.headers))
+                parseChapterList(client.get(request.url, request.headers, Fetch.XHR))
             }
         } else {
             null
@@ -240,7 +240,7 @@ abstract class GenesisStudio :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, getChapterUrl(chapter)))
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(page.url, headers)
+        val response = client.get(page.url, headers, Fetch.XHR)
         val html = response.body.string()
         val matches = PUSH_REGEX.findAll(html).map { it.groupValues[1] }.toList()
 
@@ -275,7 +275,7 @@ abstract class GenesisStudio :
         }.also(screen::addPreference)
     }
 
-    private val preferences = Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+    private val preferences = getPreferences()
 
     companion object {
         private val PUSH_REGEX = Regex("""self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)""")

@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.source.model.UpdateStrategy
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -128,7 +129,7 @@ abstract class RewayatFans :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = buildPopularMangaRequest(page)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.DOCUMENT)
         val document = response.asJsoup()
         val novels = parseNovelList(document)
         val hasNextPage = document.selectFirst(".page-links a.post-page-numbers") != null
@@ -146,7 +147,7 @@ abstract class RewayatFans :
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val request = buildLatestUpdatesRequest(page)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.DOCUMENT)
         val document = response.asJsoup()
         val novels = parseNovelList(document)
         val hasNextPage = document.selectFirst(".page-links a.post-page-numbers") != null
@@ -157,7 +158,7 @@ abstract class RewayatFans :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val request = buildSearchMangaRequest(page, query, filters)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.DOCUMENT)
         val document = response.asJsoup()
         val novels = document.select("article.entry, article").mapNotNull { item ->
             val titleLink = item.selectFirst("h2.entry-title a[href]")
@@ -191,7 +192,7 @@ abstract class RewayatFans :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
         val request = buildMangaDetailsRequest(manga)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.DOCUMENT)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.asJsoup()).apply { this.url = manga.url }
     }
@@ -203,7 +204,7 @@ abstract class RewayatFans :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val request = buildMangaDetailsRequest(manga)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.DOCUMENT)
         val document = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(document) else manga
@@ -259,7 +260,7 @@ abstract class RewayatFans :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(baseUrl + page.url, headers)
+        val response = client.get(baseUrl + page.url, headers, Fetch.DOCUMENT)
         val document = response.asJsoup()
         val content = document.selectFirst(".entry-content") ?: return ""
         content.select(

@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -74,12 +75,12 @@ abstract class BakaTsuki :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = categoryRequest(page, "Category:Completed Project")
-        return parseCategoryResponse(client.get(request.url, request.headers))
+        return parseCategoryResponse(client.get(request.url, request.headers, Fetch.XHR))
     }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val request = categoryRequest(page, "Category:Active Projects")
-        return parseCategoryResponse(client.get(request.url, request.headers))
+        return parseCategoryResponse(client.get(request.url, request.headers, Fetch.XHR))
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
@@ -90,7 +91,7 @@ abstract class BakaTsuki :
             .addQueryParameter("limit", "50")
             .addQueryParameter("namespace", "0")
             .addQueryParameter("format", "json")
-        val array = client.get(requestUrl.build(), headers).parseAs<JsonArray>()
+        val array = client.get(requestUrl.build(), headers, Fetch.XHR).parseAs<JsonArray>()
         val titles = array.getOrNull(1)?.jsonArray ?: return MangasPage(emptyList(), false)
         val mangas = titles.mapNotNull { it.jsonPrimitive.content }
             .filter { !it.contains(":") }
@@ -139,7 +140,7 @@ abstract class BakaTsuki :
         val rawTitle = url.queryParameter("title") ?: return null
         for (candidate in titleCandidates(rawTitle)) {
             val request = parseRequest(candidate)
-            val response = client.get(request.url, request.headers, ensureSuccess = false)
+            val response = client.get(request.url, request.headers, Fetch.XHR, ensureSuccess = false)
             if (!response.isSuccessful) continue
             val manga = runCatching { parseMangaDetails(response) }.getOrNull() ?: continue
             manga.url = candidate
@@ -157,7 +158,7 @@ abstract class BakaTsuki :
         // Details and the chapter list both come from the same MediaWiki "parse" call - parse the
         // body once and share the result, since the response can only be consumed once.
         val request = parseRequest(manga.url)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.XHR)
         val result = response.parseAs<ParseResponse>().orThrow(request.url.queryParameter("page").orEmpty())
 
         val updatedManga = if (fetchDetails) parseMangaDetails(result) else manga
@@ -230,7 +231,7 @@ abstract class BakaTsuki :
             page.url
         }
         val request = parseRequest(title)
-        val result = client.get(request.url, request.headers).parseAs<ParseResponse>().orThrow(title)
+        val result = client.get(request.url, request.headers, Fetch.XHR).parseAs<ParseResponse>().orThrow(title)
         val doc = Jsoup.parse(result.text.content, "$baseUrl/project/")
         doc.select(".wikitable, .mw-editsection, .printfooter, #toc, .toc, .navbox, .reference, style, script").remove()
         doc.select("img").forEach { img ->

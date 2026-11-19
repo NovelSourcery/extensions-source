@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.parseAs
@@ -43,7 +44,7 @@ abstract class OrvReader :
         // Only a single page of results — the site has exactly three stories.
         if (page > 1) return MangasPage(emptyList(), false)
 
-        val doc = client.get("$baseUrl/stories/").asJsoup()
+        val doc = client.get("$baseUrl/stories/", Fetch.DOCUMENT).asJsoup()
         val mangas = doc.select("a.card").mapNotNull { card ->
             val slug = card.absUrl("href")
                 .trimEnd('/')
@@ -86,7 +87,7 @@ abstract class OrvReader :
         if (storiesIndex == -1) return null
         val slug = segments.getOrNull(storiesIndex + 1)?.takeIf { it.isNotBlank() } ?: return null
 
-        val doc = client.get("$baseUrl/stories/$slug/").asJsoup()
+        val doc = client.get("$baseUrl/stories/$slug/", Fetch.DOCUMENT).asJsoup()
         val title = doc.selectFirst("div.status p")
             ?.text()
             ?.takeIf { it.isNotBlank() }
@@ -125,11 +126,11 @@ abstract class OrvReader :
         // Details live in the ToC page HTML; the chapter list lives in a separate JSON.
         // Fire both concurrently — the JSON fetch does not depend on the HTML.
         val detailsDeferred = async {
-            client.get("$baseUrl/stories/${manga.url}/").asJsoup()
+            client.get("$baseUrl/stories/${manga.url}/", Fetch.DOCUMENT).asJsoup()
         }
         val chaptersDeferred = if (fetchChapters) {
             async {
-                client.get("$baseUrl/meta/${manga.url}.json").parseAs<List<ChapterEntry>>()
+                client.get("$baseUrl/meta/${manga.url}.json", Fetch.XHR).parseAs<List<ChapterEntry>>()
             }
         } else {
             null
@@ -242,7 +243,7 @@ abstract class OrvReader :
 
         // No trailing slash: the site serves ch_N.html as a "file", and a trailing slash
         // would resolve `../../../assets/...` one directory too deep, breaking every image.
-        val doc = client.get("$baseUrl/stories/$slug/read/$chapterId").asJsoup()
+        val doc = client.get("$baseUrl/stories/$slug/read/$chapterId", Fetch.DOCUMENT).asJsoup()
 
         // The chapter body lives in `article.orv_main`, but the cover and mobile-title
         // images are siblings inside `div.main`. Select the whole subtree, then remove

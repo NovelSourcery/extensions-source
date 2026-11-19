@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -53,7 +54,7 @@ abstract class LightNovelTranslation :
         if (!query.isNullOrBlank()) addQueryParameter("field-search", query)
     }.build()
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.get(buildBrowseUrl(page, "most-liked"), headers))
+    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.get(buildBrowseUrl(page, "most-liked"), headers, Fetch.DOCUMENT))
 
     private fun parseMangaListResponse(response: Response): MangasPage {
         val doc = response.asJsoup()
@@ -78,9 +79,9 @@ abstract class LightNovelTranslation :
         return MangasPage(mangas, hasNextPage)
     }
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(client.get(buildBrowseUrl(page, "most-recent"), headers))
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(client.get(buildBrowseUrl(page, "most-recent"), headers, Fetch.DOCUMENT))
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseMangaListResponse(client.get(buildBrowseUrl(page, "most-recent", query.trim()), headers))
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseMangaListResponse(client.get(buildBrowseUrl(page, "most-recent", query.trim()), headers, Fetch.DOCUMENT))
 
     private fun buildMangaDetailsUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
@@ -90,7 +91,7 @@ abstract class LightNovelTranslation :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val doc = client.get(buildMangaDetailsUrl(manga), headers).asJsoup()
+        val doc = client.get(buildMangaDetailsUrl(manga), headers, Fetch.DOCUMENT).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) fetchChapterList(doc) else chapters
@@ -190,7 +191,7 @@ abstract class LightNovelTranslation :
     private suspend fun fetchTocFragment(url: HttpUrl): Element? {
         val fragmentUrl = url.newBuilder().setQueryParameter("lnt_fragment", "toc").build()
         val jsonHeaders = headers.newBuilder().set("Accept", "application/json").build()
-        val html = client.get(fragmentUrl, jsonHeaders).parseAs<JsonObject>()["data"]
+        val html = client.get(fragmentUrl, jsonHeaders, Fetch.XHR).parseAs<JsonObject>()["data"]
             ?.jsonObject?.get("html")?.jsonPrimitive?.content ?: return null
         return Jsoup.parseBodyFragment(html, baseUrl).body()
     }
@@ -199,7 +200,7 @@ abstract class LightNovelTranslation :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPath.slug(url.encodedPath) }
-        val response = client.get(buildMangaDetailsUrl(manga), headers, ensureSuccess = false)
+        val response = client.get(buildMangaDetailsUrl(manga), headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.asJsoup()).apply { this.url = manga.url }
     }
@@ -207,7 +208,7 @@ abstract class LightNovelTranslation :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(baseUrl + page.url, headers)
+        val response = client.get(baseUrl + page.url, headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
 
         val content = doc.selectFirst("div.text_story") ?: return ""

@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -64,7 +65,7 @@ abstract class SeaNovel :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = buildPopularMangaRequest(page)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.XHR)
         val body = response.body.string()
         val novels = json.decodeFromString<List<NovelDto>>(body)
         return MangasPage(novels.map { it.toSManga() }, novels.size >= 50)
@@ -78,7 +79,7 @@ abstract class SeaNovel :
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val request = buildLatestUpdatesRequest(page)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.XHR)
         val body = response.body.string()
         val novels = json.decodeFromString<List<NovelDto>>(body)
         return MangasPage(novels.map { it.toSManga() }, novels.size >= 50)
@@ -91,7 +92,7 @@ abstract class SeaNovel :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val request = buildSearchMangaRequest(page, query)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.XHR)
         val url = response.request.url
         val queryParam = url.queryParameter("q") ?: ""
         val pageParam = url.queryParameter("__page")?.toIntOrNull() ?: 1
@@ -121,7 +122,7 @@ abstract class SeaNovel :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
         val request = buildMangaDetailsRequest(manga)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.XHR)
         if (!response.isSuccessful) return null
         return json.decodeFromString<NovelDto>(response.body.string()).toSManga()
     }
@@ -136,7 +137,7 @@ abstract class SeaNovel :
 
         val updatedManga = if (fetchDetails) {
             val request = buildMangaDetailsRequest(manga)
-            val response = client.get(request.url, request.headers)
+            val response = client.get(request.url, request.headers, Fetch.XHR)
             val body = response.body.string()
             json.decodeFromString<NovelDto>(body).toSManga()
         } else {
@@ -155,7 +156,7 @@ abstract class SeaNovel :
         var hasMore: Boolean
         do {
             val url = "$baseUrl/api/novel/$slug/chapters?offset=$offset&limit=$limit&sort=asc"
-            val response = client.get(url, headers)
+            val response = client.get(url, headers, Fetch.XHR)
             val chapterResponse = json.decodeFromString<ChapterResponse>(response.body.string())
             if (chapterResponse.chapters.isEmpty()) break
             allChapters.addAll(chapterResponse.chapters.map { it.toSChapter(slug) })
@@ -171,7 +172,7 @@ abstract class SeaNovel :
 
     override suspend fun fetchPageText(page: Page): String {
         val url = baseUrl + page.url
-        val response = client.get(url, headers)
+        val response = client.get(url, headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
         val html = doc.html()
 

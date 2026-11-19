@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.parseAs
@@ -18,8 +19,9 @@ import keiyoushi.zip.Entry
 import keiyoushi.zip.MAX_EOCD_SEARCH
 import keiyoushi.zip.ZipDirectory
 import keiyoushi.zip.dataRange
+import keiyoushi.zip.findEocd
+import keiyoushi.zip.parseCentralDirectory
 import keiyoushi.zip.range
-import keiyoushi.zip.readZipDirectory
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import okhttp3.Headers
@@ -50,7 +52,7 @@ abstract class Cyrisia :
         return paginate(all, page)
     }
 
-    private suspend fun fetchBookshelf(): List<BookshelfEntry> = client.get("$baseUrl/api/bookshelf", headers).parseAs()
+    private suspend fun fetchBookshelf(): List<BookshelfEntry> = client.get("$baseUrl/api/bookshelf", headers, Fetch.XHR).parseAs()
 
     private fun paginate(list: List<BookshelfEntry>, page: Int): MangasPage {
         val from = (page - 1) * PAGE_SIZE
@@ -76,7 +78,7 @@ abstract class Cyrisia :
 
     private suspend fun fetchManga(seriesName: String): SManga {
         val metadataUrl = "$baseUrl/api/metadata".toHttpUrl().newBuilder().addQueryParameter("series", seriesName).build()
-        val meta = runCatching { client.get(metadataUrl, headers).parseAs<MetadataDto>() }.getOrNull()
+        val meta = runCatching { client.get(metadataUrl, headers, Fetch.XHR).parseAs<MetadataDto>() }.getOrNull()
         return meta?.toSManga(seriesName) ?: SManga.create().apply {
             url = seriesName
             title = seriesName
@@ -139,7 +141,7 @@ abstract class Cyrisia :
             wholeFile?.let { return sliceZipEntry(it, entry) }
 
             val rangeHeaders = zipHeaders.newBuilder().set("Range", "bytes=${entry.dataRange.first}-${entry.dataRange.last}").build()
-            val response = client.get(zipUrl, rangeHeaders)
+            val response = client.get(zipUrl, rangeHeaders, Fetch.XHR)
             val body = response.body.bytes()
             if (response.code != 206) {
                 wholeFile = body
@@ -252,12 +254,24 @@ abstract class Cyrisia :
 
     private suspend fun fetchZipDirectory(url: String, zipHeaders: Headers): ZipDirectory {
         val rangeHeaders = zipHeaders.newBuilder().set("Range", "bytes=-$MAX_EOCD_SEARCH").build()
-        val response = client.get(url, rangeHeaders)
+        val response = client.get(url, rangeHeaders, Fetch.XHR)
         val tail = response.body.bytes()
         val total = response.header("Content-Range")?.substringAfterLast("/")?.toLongOrNull() ?: tail.size.toLong()
-        return readZipDirectory(tail, total) { range ->
-            client.newCall(GET(url, zipHeaders).newBuilder().range(range).build()).execute().body.source()
+        // Not core's zipDirectory: that requires a 206, but this server sometimes ignores Range and
+        // sends the whole archive, which readEntry then slices locally.
+        val eocd = findEocd(tail)
+        val zipStart = total - tail.size + eocd.recordOffset - eocd.cdSize - eocd.cdOffset
+        val cdWithinTail = eocd.recordOffset - eocd.cdSize
+        val cd = if (cdWithinTail >= 0) {
+            tail.copyOfRange(cdWithinTail.toInt(), (cdWithinTail + eocd.cdSize).toInt())
+        } else {
+            val cdStart = zipStart + eocd.cdOffset
+            client.newCall(GET(url, zipHeaders).newBuilder().range(cdStart..<cdStart + eocd.cdSize).build()).execute().body.bytes()
         }
+        val entries = parseCentralDirectory(cd).map {
+            Entry(it.name, it.method, it.compressedSize, zipStart + it.localHeaderOffset, it.localHeaderAllowance)
+        }
+        return ZipDirectory(entries, zipStart + eocd.cdOffset)
     }
 
     private fun sliceZipEntry(body: ByteArray, entry: Entry): ByteArray {

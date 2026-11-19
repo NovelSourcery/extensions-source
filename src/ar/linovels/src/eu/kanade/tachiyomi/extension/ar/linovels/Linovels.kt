@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -31,7 +32,7 @@ abstract class Linovels :
     override suspend fun getPopularManga(page: Int): MangasPage {
         if (page > 1) return MangasPage(emptyList(), false)
 
-        val document = client.get(baseUrl).asJsoup()
+        val document = client.get(baseUrl, Fetch.DOCUMENT).asJsoup()
         return MangasPage(parseCards(document.select("#PopularPosts2 a.zm-hc")), false)
     }
 
@@ -51,7 +52,7 @@ abstract class Linovels :
     }
 
     private suspend fun parseListPage(url: String): MangasPage {
-        val document = client.get(url).asJsoup()
+        val document = client.get(url, Fetch.DOCUMENT).asJsoup()
         return MangasPage(
             parseCards(document.select("div.zm-cgrid a.zm-cc")),
             document.selectFirst("a.next.page-numbers") != null,
@@ -83,7 +84,7 @@ abstract class Linovels :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list are both rendered on the novel page, so fetch it once.
-        val document = client.get(mangaPath.absolute(baseUrl, manga.url)).asJsoup()
+        val document = client.get(mangaPath.absolute(baseUrl, manga.url), Fetch.DOCUMENT).asJsoup()
 
         return SMangaUpdate(
             manga = if (fetchDetails) parseDetails(document, manga.url) else manga,
@@ -123,7 +124,7 @@ abstract class Linovels :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = url.encodedPath.seriesSlug() ?: return null
 
-        val response = client.get(mangaPath.absolute(baseUrl, slug), ensureSuccess = false)
+        val response = client.get(mangaPath.absolute(baseUrl, slug), Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val document = response.asJsoup()
         if (document.selectFirst("h1.zm-nv-title") == null) return null
@@ -140,7 +141,7 @@ abstract class Linovels :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val document = client.get(baseUrl + page.url).asJsoup()
+        val document = client.get(baseUrl + page.url, Fetch.DOCUMENT).asJsoup()
 
         // The reader container is filled by JS; the chapter body is served HTML-escaped inside
         // this hidden textarea, so it is the only source of the text.

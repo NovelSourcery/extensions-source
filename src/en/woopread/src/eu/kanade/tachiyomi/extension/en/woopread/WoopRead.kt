@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -54,9 +55,9 @@ abstract class WoopRead :
         return MangasPage(mangas, page * PER_PAGE < result.totalCount)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.get(browseUrl(page, "Popular", FilterList()), headers))
+    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.get(browseUrl(page, "Popular", FilterList()), headers, Fetch.XHR))
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(client.get(browseUrl(page, "Updated", FilterList()), headers))
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(client.get(browseUrl(page, "Updated", FilterList()), headers, Fetch.XHR))
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         if (query.isNotBlank()) {
@@ -64,10 +65,10 @@ abstract class WoopRead :
                 .addQueryParameter("q", query)
                 .addQueryParameter("page", page.toString())
                 .build()
-            return parseMangaListResponse(client.get(url, headers))
+            return parseMangaListResponse(client.get(url, headers, Fetch.XHR))
         }
         val sortBy = filters.filterIsInstance<SortFilter>().firstOrNull()?.toUriPart() ?: "Popular"
-        return parseMangaListResponse(client.get(browseUrl(page, sortBy, filters), headers))
+        return parseMangaListResponse(client.get(browseUrl(page, sortBy, filters), headers, Fetch.XHR))
     }
 
     private val mangaPathTemplate = SlugPath("/series/")
@@ -89,7 +90,7 @@ abstract class WoopRead :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = mangaPathTemplate.slug(url.encodedPath)
-        val response = client.get("$baseUrl/series/$slug", headers, ensureSuccess = false)
+        val response = client.get("$baseUrl/series/$slug", headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return fetchNovelDetails(SManga.create().apply { this.url = slug })
     }
@@ -110,7 +111,7 @@ abstract class WoopRead :
     }
 
     private suspend fun fetchNovelDetails(manga: SManga): SManga {
-        val response = client.get("$baseUrl/series/${manga.slug()}", headers)
+        val response = client.get("$baseUrl/series/${manga.slug()}", headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
         return SManga.create().apply {
             title = doc.selectFirst("meta[property=og:title]")?.attr("content")
@@ -141,7 +142,7 @@ abstract class WoopRead :
         val seriesSlug = manga.slug()
         // The old /api/novels/<slug>/chapters REST endpoint now returns an empty array (verified
         // live) - the real chapter list is embedded in the novel page's own RSC flight data.
-        val doc = client.get("$baseUrl/series/$seriesSlug", headers).asJsoup()
+        val doc = client.get("$baseUrl/series/$seriesSlug", headers, Fetch.DOCUMENT).asJsoup()
         val chapters = doc.extractNextJs<ChapterListDto> { it is kotlinx.serialization.json.JsonObject && "chapters" in it }
             ?.chapters ?: throw Exception("Could not find chapter list in page data")
         return chapters.sortedByDescending { it.number }.map { dto ->
@@ -160,7 +161,7 @@ abstract class WoopRead :
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else "$baseUrl/series/${page.url}"
-        val doc = client.get(url, headers).asJsoup()
+        val doc = client.get(url, headers, Fetch.DOCUMENT).asJsoup()
         val paragraphs = doc.select("[data-paragraph-index]")
             .sortedBy { it.attr("data-paragraph-index").toIntOrNull() ?: 0 }
         if (paragraphs.isNotEmpty()) {

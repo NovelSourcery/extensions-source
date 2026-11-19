@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.webnoveltranslation
 
-import android.app.Application
 import android.content.SharedPreferences
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
@@ -11,13 +10,15 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.getPreferences
+import keiyoushi.utils.jsonInstance
 import keiyoushi.utils.setAltTitles
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
@@ -26,9 +27,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl
 import okhttp3.Response
-import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
-import uy.kohesive.injekt.injectLazy
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -47,10 +46,8 @@ abstract class WebNovelTranslation :
 
     private val mangaPathTemplate: SlugPath = SlugPath("/series/")
 
-    private val json: Json by injectLazy()
-
     private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+        getPreferences()
     }
 
     private val dateFormat = DateTimeFormatter.ofPattern("MMM d, yyyy", Locale.US)
@@ -60,7 +57,7 @@ abstract class WebNovelTranslation :
     private fun popularMangaUrl(page: Int): String = "$baseUrl/api/novels?page=1"
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val novels = client.get(popularMangaUrl(page), headers).parseNovelsArray()
+        val novels = client.get(popularMangaUrl(page), headers, Fetch.XHR).parseNovelsArray()
         cacheGenres(novels)
         val mangas = novels.map { it.toSManga() }
         return MangasPage(mangas, hasNextPage = false)
@@ -72,7 +69,7 @@ abstract class WebNovelTranslation :
 
     // The API returns the full catalogue in one call, so search/filter runs client-side.
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val novels = client.get(popularMangaUrl(page), headers).parseNovelsArray()
+        val novels = client.get(popularMangaUrl(page), headers, Fetch.XHR).parseNovelsArray()
         cacheGenres(novels)
 
         val selectedGenres = filters.filterIsInstance<GenreFilter>()
@@ -108,7 +105,7 @@ abstract class WebNovelTranslation :
         val detailsDeferred = if (fetchDetails) {
             async {
                 val id = manga.novelId()
-                val novel = client.get(popularMangaUrl(1), headers).parseNovelsArray()
+                val novel = client.get(popularMangaUrl(1), headers, Fetch.XHR).parseNovelsArray()
                     .firstOrNull { it.id == id }
                     ?: return@async manga
                 novel.toSManga().apply {
@@ -132,7 +129,7 @@ abstract class WebNovelTranslation :
     // just means matching the id against that catalogue - same as fetchMangaUpdate's details path.
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val id = mangaPathTemplate.slug(url.encodedPath).substringBefore('/')
-        val response = client.get(popularMangaUrl(1), headers, ensureSuccess = false)
+        val response = client.get(popularMangaUrl(1), headers, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val novel = response.parseNovelsArray().firstOrNull { it.id == id } ?: return null
         return novel.toSManga().apply {
@@ -141,9 +138,9 @@ abstract class WebNovelTranslation :
     }
 
     private suspend fun loadChapterList(manga: SManga): List<SChapter> {
-        val response = client.get("$baseUrl/api/chapters/${manga.novelId()}", headers)
+        val response = client.get("$baseUrl/api/chapters/${manga.novelId()}", headers, Fetch.XHR)
         val novelId = response.request.url.pathSegments.last()
-        val chapters = json.parseToJsonElement(response.body.string())
+        val chapters = jsonInstance.parseToJsonElement(response.body.string())
             .jsonObject["chapters"]?.jsonArray
             ?: return emptyList()
 
@@ -170,7 +167,7 @@ abstract class WebNovelTranslation :
 
     override suspend fun fetchPageText(page: Page): String {
         val path = page.url.trimStart('/')
-        val response = client.get("$baseUrl/api/chapter-content/$path", headers)
+        val response = client.get("$baseUrl/api/chapter-content/$path", headers, Fetch.XHR)
         val content = response.body.string()
         return content
             .split("\n\n")
@@ -216,7 +213,7 @@ abstract class WebNovelTranslation :
     )
 
     private fun Response.parseNovelsArray(): List<Novel> {
-        val novels = json.parseToJsonElement(body.string())
+        val novels = jsonInstance.parseToJsonElement(body.string())
             .jsonObject["novels"]?.jsonArray
             ?: return emptyList()
 
