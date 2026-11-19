@@ -69,7 +69,7 @@ abstract class NovelLunar :
         return MangasPage(mangas, hasNextPage)
     }
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.url}"
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.slug()}"
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val segments = url.pathSegments
@@ -85,12 +85,16 @@ abstract class NovelLunar :
         fetchChapters: Boolean,
     ): SMangaUpdate = coroutineScope {
         val details = if (fetchDetails) async { parseDetails(client.get(getMangaUrl(manga), Fetch.DOCUMENT).asJsoup()) } else null
-        val updatedChapters = if (fetchChapters) fetchChapterList(manga.url) else chapters
+        val updatedChapters = if (fetchChapters) fetchChapterList(manga.slug()) else chapters
         SMangaUpdate(details?.await() ?: manga, updatedChapters)
     }
 
+    // Entries imported from a page url carry the full "/novel/<slug>" path instead of the bare slug.
+    private fun SManga.slug(): String = url.substringBefore('?').trimEnd('/').substringAfterLast("/novel/").trim('/')
+
     private fun parseDetails(document: Document): SManga = SManga.create().apply {
-        val header = document.selectFirst("h1")!!
+        // The site logo is also an h1, wrapped in a link.
+        val header = document.select("h1").first { it.parent()?.normalName() != "a" }
         val info = header.parent()!!
         title = header.text()
         thumbnail_url = document.selectFirst("img[src*=img.novellunar.com]")?.absUrl("src")
