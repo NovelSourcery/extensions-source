@@ -77,18 +77,20 @@ abstract class CrimsonScrolls :
                 }
             }
         }
-        // The browse page renders the recently-updated set in one shot (further pages load via a
-        // JS endpoint that no longer works), so there is no server-side next page to follow.
-        return MangasPage(mangas, hasNextPage = false)
+        return MangasPage(mangas, hasNextPage = doc.selectFirst("a.page-numbers.next") != null)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseBrowse(client.get("$baseUrl/novels/recently-updated/", headers, Fetch.DOCUMENT))
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val path = if (page > 1) "novels/recently-updated/page/$page/" else "novels/recently-updated/"
+        return parseBrowse(client.get("$baseUrl/$path", headers, Fetch.DOCUMENT))
+    }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage = getPopularManga(page)
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val url = "$baseUrl/novels/".toHttpUrl().newBuilder()
             .addQueryParameter("s", query)
+            .apply { if (page > 1) addQueryParameter("cs_page", page.toString()) }
             .build()
         return parseBrowse(client.get(url, headers, Fetch.DOCUMENT))
     }
