@@ -66,7 +66,9 @@ abstract class BotiTranslation :
         return MangasPage(data.list.map { it.toSManga() }, hasNextPage)
     }
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl/book/${manga.url}"
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl/book/${bookId(manga.url)}"
+
+    private fun bookId(url: String): String = url.trimEnd('/').substringAfterLast('/')
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -74,7 +76,7 @@ abstract class BotiTranslation :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val id = manga.url
+        val id = bookId(manga.url)
 
         val updatedManga = if (fetchDetails) {
             client.get("$API_URL/books/$id", headers, Fetch.XHR).parseAs<SingleResponse<BookDto>>().data.toSManga()
