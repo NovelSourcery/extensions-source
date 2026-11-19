@@ -121,9 +121,10 @@ abstract class LunarXNovels :
     private suspend fun fetchDetails(slug: String): SManga {
         val response = client.get("$API_URL/api/novels/title/$slug", Fetch.XHR, ensureSuccess = false)
         if (response.isSuccessful) return response.parseAs<TitleResponse>().novel.toSManga()
+        val code = response.code
         response.close()
 
-        val legacy = fetchLegacyNovel(slug) ?: throw Exception("Novel not found")
+        val legacy = fetchLegacyNovel(slug) ?: throw Exception(if (code == 404) "Novel not found" else "HTTP error $code")
         return legacy.toSManga()
     }
 
@@ -199,7 +200,11 @@ abstract class LunarXNovels :
             response.close()
             emptyList()
         }
-        val count = titles.size.takeIf { it > 0 } ?: fetchLegacyNovel(slug)?.chapters?.toIntOrNull() ?: 0
+        // The legacy list is scraped from NovelFire on demand; when that scrape fails the API
+        // answers with a 502 here and an "Error fetching novel" placeholder below.
+        val count = titles.size.takeIf { it > 0 }
+            ?: fetchLegacyNovel(slug)?.chapters?.toIntOrNull()
+            ?: throw Exception("LunarX couldn't load this novel's chapters, try again later")
 
         return (count downTo 1).map { number ->
             SChapter.create().apply {

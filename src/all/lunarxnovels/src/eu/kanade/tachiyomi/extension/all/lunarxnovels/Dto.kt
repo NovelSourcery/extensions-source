@@ -6,6 +6,11 @@ import keiyoushi.utils.parseAs
 import keiyoushi.utils.setAltTitles
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 
 // Community catalog (novels uploaded to Lunar itself)
 
@@ -191,7 +196,7 @@ class LegacyNovelDto(
     private val author: String? = null,
     val chapters: String? = null,
     private val status: String? = null,
-    private val genres: String? = null,
+    private val genres: JsonElement? = null,
     @SerialName("cover_url") private val coverUrl: String? = null,
     private val description: String? = null,
 ) {
@@ -201,8 +206,12 @@ class LegacyNovelDto(
         thumbnail_url = coverUrl?.ifBlank { null }
         author = this@LegacyNovelDto.author?.ifBlank { null }
         status = parseStatus(this@LegacyNovelDto.status)
-        // genres arrive as a Python list repr: "['Action', 'Fantasy']"
-        genre = genres?.let { PYTHON_STRING.findAll(it).map { m -> m.groupValues[1] }.joinToString() }?.ifEmpty { null }
+        // genres arrive as a JSON array or, on older cache entries, a Python list repr: "['Action', 'Fantasy']"
+        genre = when (genres) {
+            is JsonArray -> genres.mapNotNull { it.jsonPrimitive.contentOrNull }
+            is JsonPrimitive -> genres.contentOrNull?.let { PYTHON_STRING.findAll(it).map { m -> m.groupValues[1] }.toList() }.orEmpty()
+            else -> emptyList()
+        }.joinToString().ifEmpty { null }
         setAltTitles(listOfNotNull(alternativeTitle?.trim()?.takeIf { it.isNotEmpty() && it != this@LegacyNovelDto.title }))
         description = buildString {
             this@LegacyNovelDto.description?.trim()?.let(::append)
