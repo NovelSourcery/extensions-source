@@ -64,7 +64,7 @@ abstract class NoBadNovel :
         return MangasPage(mangas, hasNextPage)
     }
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl/series/${manga.url}"
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl/series/${mangaSlug(manga.url)}"
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -90,7 +90,7 @@ abstract class NoBadNovel :
     }
 
     private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
-        title = doc.selectFirst("h1")!!.text()
+        title = doc.selectFirst("h1")?.text() ?: throw Exception("Novel not found")
         thumbnail_url = doc.selectFirst("main img")?.attr("abs:src")
         author = doc.selectFirst("span:containsOwn(Author:)")?.nextElementSibling()?.text()
         description = doc.selectFirst("#intro .content")?.let { formatDescription(it.html()) }
