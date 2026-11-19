@@ -84,11 +84,14 @@ abstract class JadeScrolls :
         return fetchNovel(slug).toSMangaDetails()
     }
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.url}"
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.slug()}"
+
+    // Entries imported from a page url carry the full page path instead of the bare slug.
+    private fun SManga.slug(): String = url.substringBefore('?').trimEnd('/').substringAfterLast("/novel/").trim('/')
 
     private suspend fun fetchNovel(slug: String): NovelDto = client.get("$apiUrl/novels?slug=$slug", Fetch.XHR).parseAs()
 
-    private suspend fun novelId(manga: SManga): String = manga.memo[NovelDto.ID_KEY]?.stringOrNull ?: fetchNovel(manga.url).id
+    private suspend fun novelId(manga: SManga): String = manga.memo[NovelDto.ID_KEY]?.stringOrNull ?: fetchNovel(manga.slug()).id
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -97,9 +100,9 @@ abstract class JadeScrolls :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // The chapter list endpoint needs the novel id, which the details response also provides
-        val details = if (fetchDetails || manga.memo[NovelDto.ID_KEY] == null) fetchNovel(manga.url) else null
+        val details = if (fetchDetails || manga.memo[NovelDto.ID_KEY] == null) fetchNovel(manga.slug()) else null
         val updatedManga = if (fetchDetails) details!!.toSMangaDetails() else manga
-        val updatedChapters = if (fetchChapters) fetchChapterList(manga.url, details?.id ?: novelId(manga)) else chapters
+        val updatedChapters = if (fetchChapters) fetchChapterList(manga.slug(), details?.id ?: novelId(manga)) else chapters
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
