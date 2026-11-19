@@ -4,6 +4,7 @@ import eu.kanade.tachiyomi.multisrc.madaranovel.MadaraNovel
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
+import eu.kanade.tachiyomi.source.model.MangasPage
 import keiyoushi.annotation.Source
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -12,6 +13,30 @@ import okhttp3.Request
 @Source
 abstract class SonicMTL : MadaraNovel() {
     override val useNewChapterEndpointDefault = true
+
+    override suspend fun getPopularManga(page: Int): MangasPage = fetchListing(buildPopularMangaRequest(page))
+
+    override suspend fun getLatestUpdates(page: Int): MangasPage = fetchListing(buildLatestUpdatesRequest(page))
+
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = fetchListing(buildSearchMangaRequest(page, query, filters))
+
+    private fun fetchListing(request: Request): MangasPage {
+        val response = client.newCall(request).execute()
+        if (response.code == 404) {
+            response.close()
+            return MangasPage(emptyList(), false)
+        }
+        val doc = response.asJsoup()
+        val mangas = parseNovels(doc).distinctBy { it.url }
+        val pageInfo = PAGE_OF_REGEX.find(doc.title())
+        val hasNextPage = if (pageInfo != null) {
+            pageInfo.groupValues[1].toInt() < pageInfo.groupValues[2].toInt()
+        } else {
+            val total = RESULTS_REGEX.find(doc.select(".c-blog__heading h1").text())?.groupValues?.get(1)?.replace(",", "")?.toIntOrNull() ?: 0
+            mangas.isNotEmpty() && total > mangas.size
+        }
+        return MangasPage(mangas, hasNextPage)
+    }
 
     override fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val url = baseUrl.toHttpUrl().newBuilder().apply {
@@ -184,5 +209,10 @@ abstract class SonicMTL : MadaraNovel() {
             6 -> "new-manga"
             else -> ""
         }
+    }
+
+    companion object {
+        private val PAGE_OF_REGEX = Regex("""Page (\d+) of (\d+)""")
+        private val RESULTS_REGEX = Regex("""(\d[\d,]*) results""")
     }
 }
