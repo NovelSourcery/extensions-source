@@ -75,7 +75,10 @@ abstract class LightNovelTo :
         return MangasPage(mangas, hasNextPage)
     }
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.url}"
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.slug()}"
+
+    // Entries imported from a page url carry the full page path instead of the bare slug.
+    private fun SManga.slug(): String = url.substringBefore('?').trimEnd('/').substringAfterLast("/novel/").trim('/')
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         if (url.host != baseUrl.toHttpUrl().host || url.pathSegments.firstOrNull() != "novel") return null
@@ -96,10 +99,10 @@ abstract class LightNovelTo :
         val chapterList = async {
             if (fetchChapters) {
                 val url = "$baseUrl/api/novel-chapters".toHttpUrl().newBuilder()
-                    .addQueryParameter("slug", manga.url)
+                    .addQueryParameter("slug", manga.slug())
                     .build()
                 client.get(url, Fetch.XHR).parseAs<ChapterListDto>().chapters
-                    .map { it.toSChapter(manga.url) }
+                    .map { it.toSChapter(manga.slug()) }
                     .reversed()
             } else {
                 chapters
