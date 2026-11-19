@@ -23,9 +23,11 @@ import kotlinx.serialization.json.JsonElement
 import okhttp3.FormBody
 import okhttp3.Headers
 import okhttp3.HttpUrl
+import okhttp3.OkHttpClient
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import uy.kohesive.injekt.api.get
+import java.net.URLEncoder
 import java.util.Calendar
 
 @Source
@@ -36,10 +38,21 @@ abstract class ScribbleHub :
 
     override val supportsLatest = true
 
-    // Site's Cloudflare rule allowlists on this client hint alone; without it, the cf_clearance
-    // cookie from the WebView challenge solve isn't sufficient on its own for some requests.
+    // Site's Cloudflare rule allowlists on this client hint alone, but still challenges chapter
+    // pages sent with an Origin header and any request whose cookies contain "_ga".
     override fun Headers.Builder.configureHeaders(): Headers.Builder = this
+        .removeAll("Origin")
         .add("sec-ch-ua", "\"Chromium\"")
+
+    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addNetworkInterceptor { chain ->
+        val request = chain.request()
+        val cookie = request.header("Cookie")
+        if (cookie == null || !cookie.contains("_ga")) return@addNetworkInterceptor chain.proceed(request)
+        val kept = cookie.split(";").map { it.trim() }.filter { it.isNotEmpty() && !it.contains("_ga") }
+        val builder = request.newBuilder()
+        if (kept.isEmpty()) builder.removeHeader("Cookie") else builder.header("Cookie", kept.joinToString("; "))
+        chain.proceed(builder.build())
+    }
 
     private val preferences: SharedPreferences by lazy {
         getPreferences()
@@ -67,12 +80,9 @@ abstract class ScribbleHub :
     }
 
     // Search
-    protected open fun buildSearchMangaUrl(page: Int, query: String, filters: FilterList): String = if (query.isNotEmpty()) {
-        // Text search - ScribbleHub uses 'pgi' for text search pagination
-        "$baseUrl/?s=${query.replace(" ", "+")}&post_type=fictionposts&pgi=$page"
-    } else {
-        // Filter search - uses pg parameter
-        buildFilterUrl(page, filters)
+    protected open fun buildSearchMangaUrl(page: Int, query: String, filters: FilterList): String {
+        val finderUrl = if (filters.any { it is SortFilter }) buildFilterUrl(page, filters) else "$baseUrl/series-finder/?sf=1&pg=$page"
+        return if (query.isNotBlank()) "$finderUrl&sh=${URLEncoder.encode(query.trim(), "UTF-8")}" else finderUrl
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
@@ -180,7 +190,8 @@ abstract class ScribbleHub :
             .add("mypostid", novelId)
             .build()
 
-        val chaptersResponse = client.post("$baseUrl/wp-admin/admin-ajax.php", headers, Fetch.XHR, formBody)
+        val ajaxHeaders = headers.newBuilder().set("Origin", baseUrl).build()
+        val chaptersResponse = client.post("$baseUrl/wp-admin/admin-ajax.php", ajaxHeaders, Fetch.XHR, formBody)
         val chaptersHtml = chaptersResponse.body.string()
 
         val chaptersDoc = Jsoup.parse(chaptersHtml)
