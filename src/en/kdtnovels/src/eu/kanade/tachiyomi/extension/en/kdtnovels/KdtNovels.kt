@@ -16,6 +16,7 @@ import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.network.Fetch
 import keiyoushi.network.get
+import keiyoushi.network.post
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.extractNextJs
@@ -28,6 +29,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
@@ -139,16 +142,35 @@ abstract class KdtNovels :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapterPath.absolute(baseUrl, chapter.url)))
 
     override suspend fun fetchPageText(page: Page): String {
-        val document = client.get(page.url, headers, Fetch.DOCUMENT).asJsoup()
-        // Illustration-only chapters have no div.text-content, just image placeholders in the article.
-        val content = document.selectFirst("article.reader-content div.text-content")
-            ?: document.selectFirst("article.reader-content")
-            ?: throw Exception("Chapter content is locked or unavailable on KDT Novels")
-        // Illustrations are JS-rendered placeholders; the CDN rejects requests without a Referer, the site's /img/ proxy doesn't.
-        content.select("span.kdt-ilus[data-ilus]").forEach { span ->
-            span.replaceWith(Element("img").attr("src", baseUrl + span.attr("data-ilus")))
+        val slug = chapterPath.slug(page.url.toHttpUrl().encodedPath)
+        // The reader page renders content client-side; the API wants a short-lived kdt_reader cookie
+        // that the session endpoint only issues to requests carrying browser fetch metadata.
+        val sessionHeaders = headersBuilder()
+            .set("Origin", baseUrl)
+            .set("Referer", page.url)
+            .set("Sec-Fetch-Site", "same-origin")
+            .set("Sec-Fetch-Mode", "cors")
+            .set("Sec-Fetch-Dest", "empty")
+            .set("x-kdt-reader-bootstrap", "1")
+            .build()
+        client.post("$baseUrl/api/reader/session/", sessionHeaders, Fetch.XHR, EMPTY_BODY)
+
+        val apiHeaders = headersBuilder().set("Referer", page.url).set("Accept", "application/json").build()
+        val response = client.get("$baseUrl/api/reader/chapter/$slug/", apiHeaders, Fetch.XHR, ensureSuccess = false)
+        val chapter = response.parseAs<ReaderChapterDto>()
+        if (chapter.readLimit) throw Exception(chapter.readLimitMessage ?: "Read limit reached on KDT Novels")
+        val html = chapter.contentHtml
+            ?: throw Exception(chapter.message ?: "Chapter content is locked or unavailable on KDT Novels")
+
+        val document = Jsoup.parseBodyFragment(html, baseUrl)
+        // The CDN rejects requests without a site Referer; the site's /img/ proxy doesn't.
+        document.select("img[src]").forEach { img ->
+            val src = img.absUrl("src")
+            if (src.isNotEmpty() && !src.startsWith(baseUrl)) {
+                img.attr("src", "$baseUrl/img/" + Base64.encodeToString(src.toByteArray(), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP))
+            }
         }
-        return content.html()
+        return (document.selectFirst("div.text-content") ?: document.body()).html()
     }
 
     override suspend fun fetchFilterData(): JsonElement {
@@ -196,6 +218,7 @@ abstract class KdtNovels :
         private const val PREF_SHOW_LOCKED = "show_locked_chapters"
         private const val COVER_SELECTOR = "button[aria-label*=\"view full size\"] img[src]"
         private val COUNT_SUFFIX_REGEX = Regex("""\s*\(\d+\)$""")
+        private val EMPTY_BODY = ByteArray(0).toRequestBody(null)
     }
 }
 
@@ -233,6 +256,14 @@ private class FilterDataDto(
 
 @Serializable
 private class FilterOptionDto(val value: String, val name: String)
+
+@Serializable
+private class ReaderChapterDto(
+    @SerialName("read_limit") val readLimit: Boolean = false,
+    @SerialName("read_limit_message") val readLimitMessage: String? = null,
+    @SerialName("content_html") val contentHtml: String? = null,
+    val message: String? = null,
+)
 
 @Serializable
 private class ChapterVolumesDto(val groups: List<VolumeGroupDto>)
