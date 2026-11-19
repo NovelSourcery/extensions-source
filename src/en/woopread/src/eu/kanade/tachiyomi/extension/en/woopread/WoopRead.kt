@@ -48,11 +48,11 @@ abstract class WoopRead :
         return url.build()
     }
 
-    private fun parseMangaListResponse(response: Response): MangasPage {
+    private fun parseMangaListResponse(response: Response, perPage: Int = PER_PAGE): MangasPage {
         val result = response.parseAs<ListResponse>()
         val page = response.request.url.queryParameter("page")?.toIntOrNull() ?: 1
         val mangas = result.novels.map { it.toSManga() }
-        return MangasPage(mangas, page * PER_PAGE < result.totalCount)
+        return MangasPage(mangas, mangas.isNotEmpty() && page * perPage < result.totalCount)
     }
 
     override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.get(browseUrl(page, "Popular", FilterList()), headers, Fetch.XHR))
@@ -65,7 +65,7 @@ abstract class WoopRead :
                 .addQueryParameter("q", query)
                 .addQueryParameter("page", page.toString())
                 .build()
-            return parseMangaListResponse(client.get(url, headers, Fetch.XHR))
+            return parseMangaListResponse(client.get(url, headers, Fetch.XHR), SEARCH_PER_PAGE)
         }
         val sortBy = filters.filterIsInstance<SortFilter>().firstOrNull()?.toUriPart() ?: "Popular"
         return parseMangaListResponse(client.get(browseUrl(page, sortBy, filters), headers, Fetch.XHR))
@@ -215,6 +215,7 @@ abstract class WoopRead :
 
     companion object {
         private const val PER_PAGE = 20
+        private const val SEARCH_PER_PAGE = 10
         private val GENRES = listOf(
             "Action" to "action", "Adult" to "adult", "Adventure" to "adventure", "Comedy" to "comedy",
             "Drama" to "drama", "Ecchi" to "ecchi", "Fantasy" to "fantasy", "Gender Bender" to "gender-bender",

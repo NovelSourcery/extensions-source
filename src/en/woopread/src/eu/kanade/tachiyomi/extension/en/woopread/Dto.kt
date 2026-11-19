@@ -15,7 +15,6 @@ class NovelDto(
     val slug: String,
     val title: String,
     val cover: String? = null,
-    val rating: String? = null,
     val author: String? = null,
     val genres: List<String> = emptyList(),
     val tags: List<String> = emptyList(),
