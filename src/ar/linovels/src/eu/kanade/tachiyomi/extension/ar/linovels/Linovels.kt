@@ -14,6 +14,7 @@ import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.formattedText
+import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.jsoup.Jsoup
@@ -28,6 +29,11 @@ abstract class Linovels :
 
     /** Novels live at "/<slug>/", chapters at "/<slug>-chapter-<number>-<title>/". */
     private val mangaPath = SlugPath("/", "/")
+
+    // The site's WAF answers chapter URLs with 403 "الوصول الآلي غير مسموح" unless the request
+    // looks like a browser, and Accept-Language is the header it checks for.
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = this
+        .set("Accept-Language", "ar,en-US;q=0.9,en;q=0.8")
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         if (page > 1) return MangasPage(emptyList(), false)
