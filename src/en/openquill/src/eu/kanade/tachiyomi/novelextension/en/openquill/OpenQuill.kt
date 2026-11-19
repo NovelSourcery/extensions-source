@@ -39,7 +39,16 @@ abstract class OpenQuill :
         return paginate(stories, page)
     }
 
-    private suspend fun fetchAllStories(): List<StoryDto> = client.get("$baseUrl/api/stories?page=1&limit=$MAX_STORIES", headers, Fetch.XHR).parseAs<StoryListResponse>().stories
+    private suspend fun fetchAllStories(): List<StoryDto> {
+        val stories = mutableListOf<StoryDto>()
+        var page = 1
+        do {
+            val response = client.get("$baseUrl/api/stories?page=$page&limit=$API_LIMIT", headers, Fetch.XHR).parseAs<StoryListResponse>()
+            stories += response.stories
+            page++
+        } while (response.stories.isNotEmpty() && page <= response.totalPages)
+        return stories.distinctBy { it.slug }
+    }
 
     private fun paginate(stories: List<StoryDto>, page: Int): MangasPage {
         val from = (page - 1) * PAGE_SIZE
@@ -105,7 +114,7 @@ abstract class OpenQuill :
     }
 
     @Serializable
-    private class StoryListResponse(val stories: List<StoryDto> = emptyList())
+    private class StoryListResponse(val stories: List<StoryDto> = emptyList(), val totalPages: Int = 1)
 
     @Serializable
     private class ChapterContentResponse(val chapter: ChapterContentDto)
@@ -191,7 +200,7 @@ abstract class OpenQuill :
 
     companion object {
         private const val PAGE_SIZE = 20
-        private const val MAX_STORIES = 500
+        private const val API_LIMIT = 50
         private val CHAPTER_URL_REGEX = Regex("""/stories/([^/]+)/chapter/(\d+)""")
     }
 }
