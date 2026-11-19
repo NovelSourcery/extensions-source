@@ -14,4 +14,8 @@ keiyoushi {
         lang = "en"
         baseUrl = "https://orv.pages.dev"
     }
+
+    deeplink {
+        path("/stories/..*")
+    }
 }
