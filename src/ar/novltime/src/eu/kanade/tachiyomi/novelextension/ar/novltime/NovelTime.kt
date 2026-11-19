@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.parseAs
@@ -204,7 +205,7 @@ abstract class NovelTime :
             }
             .build()
 
-        return client.get(url, headers).parseAs<NovelListResponse>(json)
+        return client.get(url, headers, Fetch.XHR).parseAs<NovelListResponse>(json)
     }
 
     // ==================== Details ====================
@@ -227,7 +228,7 @@ abstract class NovelTime :
     }
 
     private suspend fun fetchNovelDto(slug: String): NovelDto? {
-        val response = client.get("$API_URL/novels/$slug", headers, ensureSuccess = false)
+        val response = client.get("$API_URL/novels/$slug", headers, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) {
             response.close()
             return null
@@ -241,7 +242,7 @@ abstract class NovelTime :
      * the `@handle`.
      */
     private suspend fun authorOf(slug: String): String? {
-        val response = client.get("$baseUrl/ar/novel/$slug", headers, ensureSuccess = false)
+        val response = client.get("$baseUrl/ar/novel/$slug", headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) {
             response.close()
             return null
@@ -304,7 +305,7 @@ abstract class NovelTime :
                 }
                 .build()
 
-            val response = client.get(url, headers).parseAs<ChapterListResponse>(json)
+            val response = client.get(url, headers, Fetch.XHR).parseAs<ChapterListResponse>(json)
             chapters += response.data
             pages++
 
@@ -325,7 +326,7 @@ abstract class NovelTime :
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val doc = client.get(url, headers).asJsoup()
+        val doc = client.get(url, headers, Fetch.DOCUMENT).asJsoup()
 
         val body = doc.selectFirst("div.chapter-body")
             ?: doc.selectFirst("article")

@@ -7,7 +7,7 @@ plugins {
 keiyoushi {
     name = "Lunox Scans"
     theme = "madaranovel"
-    versionCode = 1
+    versionCode = 2
     contentWarning = ContentWarning.SAFE
 
     source {

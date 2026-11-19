@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -65,12 +66,12 @@ abstract class NovelPing :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = buildListingRequest(page, sort = null)
-        return parseBrowse(client.get(request.url, request.headers))
+        return parseBrowse(client.get(request.url, request.headers, Fetch.DOCUMENT))
     }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val request = buildListingRequest(page, sort = "LASTEST")
-        return parseBrowse(client.get(request.url, request.headers))
+        return parseBrowse(client.get(request.url, request.headers, Fetch.DOCUMENT))
     }
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val url = "$baseUrl/ajax/search-results".toHttpUrl().newBuilder().apply {
@@ -120,7 +121,7 @@ abstract class NovelPing :
             putText(filters.firstInstanceOrNull<MaxChaptersFilter>(), "max_chapters")
         }.build()
 
-        return parseBrowse(client.get(url, headers))
+        return parseBrowse(client.get(url, headers, Fetch.DOCUMENT))
     }
 
     private fun parseBrowse(response: Response): MangasPage {
@@ -155,7 +156,7 @@ abstract class NovelPing :
         val slug = extractNovelSlug(url) ?: return null
         val tempManga = SManga.create().apply { this.url = slug }
         val req = buildMangaDetailsRequest(tempManga)
-        val res = client.get(req.url, req.headers, ensureSuccess = false)
+        val res = client.get(req.url, req.headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!res.isSuccessful) return null
         return parseMangaDetails(res.asJsoup()).apply { this.url = slug }
     }
@@ -168,7 +169,7 @@ abstract class NovelPing :
     ): SMangaUpdate {
         val updatedManga = if (fetchDetails) {
             val req = buildMangaDetailsRequest(manga)
-            parseMangaDetails(client.get(req.url, req.headers).asJsoup())
+            parseMangaDetails(client.get(req.url, req.headers, Fetch.DOCUMENT).asJsoup())
         } else {
             manga
         }
@@ -265,7 +266,7 @@ abstract class NovelPing :
     private suspend fun loadChapterList(manga: SManga): List<SChapter> {
         val slug = mangaSlug(manga.url)
 
-        val doc = client.get("$baseUrl/ajax/chapter-archive?novelId=$slug", headers).asJsoup()
+        val doc = client.get("$baseUrl/ajax/chapter-archive?novelId=$slug", headers, Fetch.XHR).asJsoup()
 
         return doc.select("li[data-chapter-item]").mapNotNull { li ->
             val link = li.selectFirst("a[href]") ?: return@mapNotNull null
@@ -309,7 +310,7 @@ abstract class NovelPing :
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val doc = client.get(url, headers).asJsoup()
+        val doc = client.get(url, headers, Fetch.DOCUMENT).asJsoup()
 
         val content = doc.selectFirst(
             "#chr-content, #chapter-content, .chapter-content, .chr-c, .chapter-text, .reading-content",
@@ -327,7 +328,7 @@ abstract class NovelPing :
     // ---------------------------------------------------------------------
 
     override suspend fun fetchFilterData(): JsonElement {
-        val doc = client.get("$baseUrl/search?advanced=1", headers).asJsoup()
+        val doc = client.get("$baseUrl/search?advanced=1", headers, Fetch.DOCUMENT).asJsoup()
 
         fun picker(name: String): List<FilterOption> {
             val root = doc.selectFirst("[data-picker-name=$name]") ?: return emptyList()

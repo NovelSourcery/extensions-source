@@ -6,6 +6,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.utils.formattedText
 import keiyoushi.utils.setAltTitles
@@ -20,7 +21,7 @@ abstract class DivineDaoLibrary : Fictioneer() {
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val pagePath = if (page == 1) "" else "page/$page/"
-        val response = client.get("$baseUrl/latest-chapters/$pagePath", headers)
+        val response = client.get("$baseUrl/latest-chapters/$pagePath", headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
         val novels = doc.select("a.card__link-list-link[href*=/story/]").mapNotNull { link ->
             val href = link.attr("href").trimEnd('/')

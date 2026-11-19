@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.crimsonscrolls
 
-import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
@@ -15,21 +14,21 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.formattedText
+import keiyoushi.utils.getPreferences
+import keiyoushi.utils.jsonInstance
 import keiyoushi.utils.stripChapterNumberPrefix
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
-import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
-import uy.kohesive.injekt.injectLazy
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -43,10 +42,8 @@ abstract class CrimsonScrolls :
 
     override val supportsLatest = false
 
-    private val json: Json by injectLazy()
-
     private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+        getPreferences()
     }
 
     private val dateFormat = DateTimeFormatter.ofPattern("MMMM d, yyyy", Locale.US)
@@ -85,7 +82,7 @@ abstract class CrimsonScrolls :
         return MangasPage(mangas, hasNextPage = false)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseBrowse(client.get("$baseUrl/novels/recently-updated/", headers))
+    override suspend fun getPopularManga(page: Int): MangasPage = parseBrowse(client.get("$baseUrl/novels/recently-updated/", headers, Fetch.DOCUMENT))
 
     override suspend fun getLatestUpdates(page: Int): MangasPage = getPopularManga(page)
 
@@ -93,7 +90,7 @@ abstract class CrimsonScrolls :
         val url = "$baseUrl/novels/".toHttpUrl().newBuilder()
             .addQueryParameter("s", query)
             .build()
-        return parseBrowse(client.get(url, headers))
+        return parseBrowse(client.get(url, headers, Fetch.DOCUMENT))
     }
 
     // Details + Chapters
@@ -109,7 +106,7 @@ abstract class CrimsonScrolls :
         // Details and the chapter list both live on the same novel page - fetch and parse it
         // once, since the response can only be consumed once.
         val detailsRequest = buildMangaDetailsRequest(manga)
-        val doc = client.get(detailsRequest.url, detailsRequest.headers).asJsoup()
+        val doc = client.get(detailsRequest.url, detailsRequest.headers, Fetch.DOCUMENT).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
@@ -171,8 +168,8 @@ abstract class CrimsonScrolls :
                     .addQueryParameter("order", "DESC")
                     .build()
                 val data = runCatching {
-                    json.decodeFromString<ChapterPage>(
-                        client.get(apiUrl, headers).body.string(),
+                    jsonInstance.decodeFromString<ChapterPage>(
+                        client.get(apiUrl, headers, Fetch.XHR).body.string(),
                     )
                 }.getOrNull() ?: break
 
@@ -197,7 +194,7 @@ abstract class CrimsonScrolls :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
-        val response = client.get(baseUrl + path, headers, ensureSuccess = false)
+        val response = client.get(baseUrl + path, headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response).apply { setSlugUrl(mangaPath, path) }
     }
@@ -208,7 +205,7 @@ abstract class CrimsonScrolls :
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val doc = client.get(url, headers).asJsoup()
+        val doc = client.get(url, headers, Fetch.DOCUMENT).asJsoup()
         val article = doc.selectFirst("article.cs-reader") ?: doc.selectFirst("#chapter-display") ?: return ""
         // Strip reader chrome, ads, tier gate, comments and inline copy-protection watermarks,
         // leaving only the story paragraphs.

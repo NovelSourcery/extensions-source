@@ -1,6 +1,5 @@
 ﻿package eu.kanade.tachiyomi.novelextension.en.noveldex
 
-import android.app.Application
 import android.content.SharedPreferences
 import android.util.Base64
 import androidx.preference.PreferenceScreen
@@ -15,9 +14,11 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.getPreferences
 import keiyoushi.utils.jsonInstance
 import keiyoushi.utils.setAltTitles
 import kotlinx.serialization.json.Json
@@ -32,7 +33,6 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import kotlin.time.Instant
 
@@ -49,7 +49,7 @@ abstract class NovelDex :
     private val json: Json = jsonInstance
 
     private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+        getPreferences()
     }
 
     // Stored value is "<type>/<slug>" (e.g. "novel/some-title") - the type prefix can't be
@@ -78,7 +78,7 @@ abstract class NovelDex :
             val path = REDIRECT_REGEX.find(body)?.groupValues?.get(1) ?: break
             finalPath = path
             hops++
-            body = client.get("$baseUrl$path", rscHeaders()).body.string()
+            body = client.get("$baseUrl$path", rscHeaders(), Fetch.DOCUMENT).body.string()
         }
         return body to finalPath
     }
@@ -91,7 +91,7 @@ abstract class NovelDex :
             .addQueryParameter("limit", "24")
             .addQueryParameter("sort", "popular")
             .build()
-        return parseApiResponse(client.get(url, headers).body.string())
+        return parseApiResponse(client.get(url, headers, Fetch.XHR).body.string())
     }
 
     // ======================== Latest ========================
@@ -102,7 +102,7 @@ abstract class NovelDex :
             .addQueryParameter("limit", "24")
             // no sort param = recently updated
             .build()
-        return parseApiResponse(client.get(url, headers).body.string())
+        return parseApiResponse(client.get(url, headers, Fetch.XHR).body.string())
     }
 
     // ======================== Search ========================
@@ -182,7 +182,7 @@ abstract class NovelDex :
             if (statusList.isNotEmpty()) addQueryParameter("status", statusList.joinToString(","))
         }.build()
 
-        return parseApiResponse(client.get(url, headers).body.string())
+        return parseApiResponse(client.get(url, headers, Fetch.XHR).body.string())
     }
 
     private fun parseApiResponse(body: String): MangasPage {
@@ -404,7 +404,7 @@ abstract class NovelDex :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and chapters both come from the same detail-page RSC response - fetch it once.
-        val response = client.get(mangaPath.absolute(baseUrl, manga.url), rscHeaders())
+        val response = client.get(mangaPath.absolute(baseUrl, manga.url), rscHeaders(), Fetch.XHR)
         val rawBody = response.body.string()
         val requestPath = response.request.url.encodedPath
 
@@ -458,7 +458,7 @@ abstract class NovelDex :
                 for (page in 2..totalPages) {
                     try {
                         val pageUrl = "$baseUrl/series/$seriesType/$novelSlug?page=$page"
-                        val pageResponse = client.get(pageUrl, rscHeaders())
+                        val pageResponse = client.get(pageUrl, rscHeaders(), Fetch.XHR)
                         val pageBody = pageResponse.body.string()
 
                         val pageChaptersMatch = Regex(""""chapters"\s*:\s*(\[.*?\])(?=\s*[,}])""", RegexOption.DOT_MATCHES_ALL)
@@ -494,7 +494,7 @@ abstract class NovelDex :
         if (chapters.isEmpty() && novelSlug.isNotEmpty() && !requestUrl.contains("/chapter/")) {
             try {
                 val chapterOneUrl = "$baseUrl/series/$seriesType/$novelSlug/chapter/1"
-                val chapterOneResponse = client.get(chapterOneUrl, rscHeaders())
+                val chapterOneResponse = client.get(chapterOneUrl, rscHeaders(), Fetch.XHR)
                 val chapterOneBody = chapterOneResponse.body.string()
 
                 val ch1AllChapters = Regex(""""allChapters"\s*:\s*(\[.*?\])(?=\s*[,}])""", RegexOption.DOT_MATCHES_ALL)
@@ -514,7 +514,7 @@ abstract class NovelDex :
                     .addQueryParameter("limit", "1")
                     .addQueryParameter("slug", novelSlug)
                     .build()
-                val apiResponse = client.get(apiUrl, headers)
+                val apiResponse = client.get(apiUrl, headers, Fetch.XHR)
                 val apiBody = apiResponse.body.string()
                 val apiRoot = json.parseToJsonElement(apiBody).jsonObject
                 val dataArray = apiRoot["data"]?.jsonArray
@@ -571,7 +571,7 @@ abstract class NovelDex :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
-        val response = client.get(baseUrl + path, rscHeaders(), ensureSuccess = false)
+        val response = client.get(baseUrl + path, rscHeaders(), Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val manga = parseMangaDetails(response.body.string(), path)
         if (manga.urlOrNull().isNullOrBlank()) {
@@ -591,7 +591,7 @@ abstract class NovelDex :
     // ======================== Novel Content ========================
 
     override suspend fun fetchPageText(page: Page): String {
-        val rscResponse = client.get("$baseUrl${page.url}", rscHeaders())
+        val rscResponse = client.get("$baseUrl${page.url}", rscHeaders(), Fetch.DOCUMENT)
         val (rscBody, _) = resolveRedirects(rscResponse.body.string())
 
         extractFromXorEncryption(rscBody)?.takeIf(String::isNotBlank)?.let { return it }

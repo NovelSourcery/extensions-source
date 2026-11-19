@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -47,12 +48,12 @@ abstract class Azora :
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseMangasPage(buildListRequest(page, "new", query), page)
 
     private suspend fun parseMangasPage(request: Request, page: Int): MangasPage {
-        val body = client.get(request.url, request.headers).parseAs<PostsResponse>()
+        val body = client.get(request.url, request.headers, Fetch.XHR).parseAs<PostsResponse>()
         return MangasPage(body.novelPosts.map { it.toSManga() }, body.novelTotalCount > page * perPage)
     }
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.get(url, headers, ensureSuccess = false)
+        val response = client.get(url, headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         // Raw body needed for the RSC `post:$R[...]` extraction below, in addition to Jsoup
         // parsing for the HTML fallback path - asJsoup() would consume it without giving the
@@ -68,7 +69,7 @@ abstract class Azora :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val slug = mangaPathTemplate.slug(mangaPathTemplate.resolve(manga.url))
-        val html = client.get(mangaPathTemplate.absolute(baseUrl, manga.url), headers).body.string()
+        val html = client.get(mangaPathTemplate.absolute(baseUrl, manga.url), headers, Fetch.DOCUMENT).body.string()
         val post = extractPost(html)
         post?.let { postIdCache[it.slug] = it.id }
 
@@ -109,7 +110,7 @@ abstract class Azora :
     private suspend fun resolvePostId(slug: String): Int? {
         postIdCache[slug]?.let { return it }
         val post = runCatching {
-            val html = client.get("$baseUrl/series/$slug", headers).body.string()
+            val html = client.get("$baseUrl/series/$slug", headers, Fetch.XHR).body.string()
             extractPost(html)
         }.getOrNull() ?: return null
         postIdCache[slug] = post.id
@@ -117,7 +118,7 @@ abstract class Azora :
     }
 
     private suspend fun fetchChapterList(postId: Int, slug: String): List<SChapter> {
-        val response = client.get("$apiUrl/api/chapters?postId=$postId&skip=0&take=all&order=desc", headers)
+        val response = client.get("$apiUrl/api/chapters?postId=$postId&skip=0&take=all&order=desc", headers, Fetch.XHR)
         // Locked/paid chapters are kept on purpose. Most Azora novels are fully locked, so the old
         // `isAccessible && !isLocked && !isPermanentlyLocked && price <= 0` filter produced an
         // empty list and the app showed "لا يوجد فصول" for those series. The reader page for a
@@ -131,7 +132,7 @@ abstract class Azora :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.get(baseUrl + page.url, headers).asJsoup()
+        val doc = client.get(baseUrl + page.url, headers, Fetch.DOCUMENT).asJsoup()
         val content = doc.selectFirst("div.novel-reader-content")
             ?: return "هذا الفصل مقفل. افتح الفصل من موقع Azora لقراءته."
         return content.select("p")

@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -41,7 +42,7 @@ abstract class FUCKNOVELPIA :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val popularRequest = buildPopularMangaRequest(page)
-        val document = client.get(popularRequest.url, popularRequest.headers).asJsoup()
+        val document = client.get(popularRequest.url, popularRequest.headers, Fetch.DOCUMENT).asJsoup()
 
         parseTotalPages(document)
 
@@ -92,7 +93,7 @@ abstract class FUCKNOVELPIA :
         }
 
         val effectiveRequest = request ?: GET(url, headers)
-        val document = client.get(effectiveRequest.url, effectiveRequest.headers).asJsoup()
+        val document = client.get(effectiveRequest.url, effectiveRequest.headers, Fetch.DOCUMENT).asJsoup()
         parseTotalPages(document)
         val novels = document.select("div.card").mapNotNull { parseNovelCard(it) }
         return MangasPage(novels, hasNextPage(document))
@@ -109,7 +110,7 @@ abstract class FUCKNOVELPIA :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val detailsRequest = buildMangaDetailsRequest(manga)
-        val document = client.get(detailsRequest.url, detailsRequest.headers).asJsoup()
+        val document = client.get(detailsRequest.url, detailsRequest.headers, Fetch.DOCUMENT).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(document) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(document) else chapters
@@ -203,7 +204,7 @@ abstract class FUCKNOVELPIA :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
-        val response = client.get(baseUrl + path, headers, ensureSuccess = false)
+        val response = client.get(baseUrl + path, headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val document = response.asJsoup()
         return parseMangaDetails(document).apply { this.url = mangaPath.slug(path) }
@@ -216,7 +217,7 @@ abstract class FUCKNOVELPIA :
     // ======================== Page Text (Novel) ========================
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val response = client.get(url, headers)
+        val response = client.get(url, headers, Fetch.DOCUMENT)
         val document = response.asJsoup()
 
         // Try multiple content selectors (adjust based on actual site structure)

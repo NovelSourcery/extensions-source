@@ -10,12 +10,13 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.post
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.jsonInstance
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -27,7 +28,6 @@ import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import uy.kohesive.injekt.injectLazy
 
 // NOTE: manga.url is stored as the composite "$visitPath?id=$id" (two unrelated fields jammed
 // into one string) - not a clean single-prefix shape, so it's left as full-path storage rather
@@ -36,8 +36,6 @@ import uy.kohesive.injekt.injectLazy
 abstract class NovelCool :
     KeiSource(),
     NovelSource {
-
-    private val json: Json by injectLazy()
 
     private val apiUrl = "https://api.novelcool.com"
     private val langCode = "en"
@@ -70,8 +68,8 @@ abstract class NovelCool :
             .add("chapter_id", chapterId)
             .build()
 
-        val response = client.post("$apiUrl/chapter/info/", apiHeaders(), body)
-        val jsonObject = json.parseToJsonElement(response.body.string()).jsonObject
+        val response = client.post("$apiUrl/chapter/info/", apiHeaders(), Fetch.XHR, body)
+        val jsonObject = jsonInstance.parseToJsonElement(response.body.string()).jsonObject
         val info = jsonObject["info"]?.jsonObject ?: return ""
         return info["content"]?.jsonPrimitive?.contentOrNull ?: ""
     }
@@ -88,11 +86,11 @@ abstract class NovelCool :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = buildPopularMangaRequest(page)
-        return parseNovelListResponse(client.post(request.url, request.headers, request.body!!))
+        return parseNovelListResponse(client.post(request.url, request.headers, Fetch.XHR, request.body!!))
     }
 
     private fun parseNovelListResponse(response: Response): MangasPage {
-        val jsonObject = json.parseToJsonElement(response.body.string()).jsonObject
+        val jsonObject = jsonInstance.parseToJsonElement(response.body.string()).jsonObject
         val list = jsonObject["list"]?.jsonArray ?: return MangasPage(emptyList(), false)
 
         val mangas = list.mapNotNull { element ->
@@ -122,7 +120,7 @@ abstract class NovelCool :
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val request = buildLatestUpdatesRequest(page)
-        return parseNovelListResponse(client.post(request.url, request.headers, request.body!!))
+        return parseNovelListResponse(client.post(request.url, request.headers, Fetch.XHR, request.body!!))
     }
 
     private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
@@ -172,7 +170,7 @@ abstract class NovelCool :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val request = buildSearchMangaRequest(page, query, filters)
-        return parseNovelListResponse(client.post(request.url, request.headers, request.body!!))
+        return parseNovelListResponse(client.post(request.url, request.headers, Fetch.XHR, request.body!!))
     }
 
     // Webview should open the site page, not the JSON API endpoint
@@ -186,7 +184,7 @@ abstract class NovelCool :
         while (visitPath.endsWith(".html")) visitPath = visitPath.removeSuffix(".html")
         if (visitPath.isBlank()) return null
 
-        val response = client.get(url, headers, ensureSuccess = false)
+        val response = client.get(url, headers, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val html = response.body.string()
         val bookId = Regex("""book_id="(\d+)"""").find(html)?.groupValues?.get(1) ?: return null
@@ -198,8 +196,8 @@ abstract class NovelCool :
 
     private suspend fun fetchBookInfo(bookId: String): JsonObject {
         val body = baseBodyBuilder().add("book_id", bookId).build()
-        val response = client.post("$apiUrl/book/info/", apiHeaders(), body)
-        return json.parseToJsonElement(response.body.string()).jsonObject
+        val response = client.post("$apiUrl/book/info/", apiHeaders(), Fetch.XHR, body)
+        return jsonInstance.parseToJsonElement(response.body.string()).jsonObject
     }
 
     private suspend fun parseMangaDetails(manga: SManga): SManga {
@@ -248,8 +246,8 @@ abstract class NovelCool :
             .add("book_id", id)
             .build()
 
-        val response = client.post("$apiUrl/chapter/book_list/?visit_path=$visitPath", apiHeaders(), body)
-        val jsonObject = json.parseToJsonElement(response.body.string()).jsonObject
+        val response = client.post("$apiUrl/chapter/book_list/?visit_path=$visitPath", apiHeaders(), Fetch.XHR, body)
+        val jsonObject = jsonInstance.parseToJsonElement(response.body.string()).jsonObject
         val list = jsonObject["list"]?.jsonArray ?: return emptyList()
 
         return list.mapNotNull { element ->

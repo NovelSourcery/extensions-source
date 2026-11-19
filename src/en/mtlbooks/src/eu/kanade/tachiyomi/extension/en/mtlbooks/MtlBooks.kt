@@ -13,6 +13,7 @@ import keiyoushi.annotation.Source
 import keiyoushi.lib.chapterutils.incrementalStartPage
 import keiyoushi.lib.chapterutils.mergeChapters
 import keiyoushi.lib.chapterutils.shouldReturnExisting
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.post
 import keiyoushi.source.KeiSource
@@ -46,7 +47,7 @@ abstract class MtlBooks :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val url = "$apiUrl/search/?page=$page&order=popular&sort=DESC&source=all"
-        return parseSearchResponse(client.get(url, headers))
+        return parseSearchResponse(client.get(url, headers, Fetch.XHR))
     }
 
     private fun parseSearchResponse(response: Response): MangasPage {
@@ -76,7 +77,7 @@ abstract class MtlBooks :
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val url = "$apiUrl/search/?page=$page&order=recent&sort=DESC&source=all"
-        return parseSearchResponse(client.get(url, headers))
+        return parseSearchResponse(client.get(url, headers, Fetch.XHR))
     }
     // ======================== Search ========================
 
@@ -88,7 +89,7 @@ abstract class MtlBooks :
             .substringBefore('/')
         if (slug.isBlank()) return null
         return try {
-            parseMangaDetails(client.get("$apiUrl/novels/$slug", headers).body.string())
+            parseMangaDetails(client.get("$apiUrl/novels/$slug", headers, Fetch.XHR).body.string())
         } catch (_: Exception) {
             null
         }
@@ -180,7 +181,7 @@ abstract class MtlBooks :
         }
 
         val url = "$apiUrl/search/?${params.joinToString("&")}"
-        return parseSearchResponse(client.get(url, headers))
+        return parseSearchResponse(client.get(url, headers, Fetch.XHR))
     }
     // ======================== Details ========================
 
@@ -231,7 +232,7 @@ abstract class MtlBooks :
         // Details and chapters come from different endpoints - fire both concurrently when both
         // flags are set, rather than awaiting them sequentially.
         val detailsDeferred = if (fetchDetails) {
-            async { parseMangaDetails(client.get(buildMangaDetailsUrl(manga), headers).body.string()) }
+            async { parseMangaDetails(client.get(buildMangaDetailsUrl(manga), headers, Fetch.XHR).body.string()) }
         } else {
             null
         }
@@ -249,7 +250,7 @@ abstract class MtlBooks :
         // Page 1 is always required for the total chapter count. The API sometimes returns a
         // result missing the expected fields instead of an HTTP error - fall back to the cached
         // list rather than crash when we have one.
-        val page1Response = client.post("$apiUrl/chapters/list", headers, buildChapterListBody(slug))
+        val page1Response = client.post("$apiUrl/chapters/list", headers, Fetch.XHR, buildChapterListBody(slug))
         val page1Body = page1Response.body.string()
         val page1 = try {
             json.decodeFromString<ChapterListResponse>(page1Body)
@@ -288,7 +289,7 @@ abstract class MtlBooks :
         for (page in maxOf(startPage, 2)..totalPages) {
             try {
                 val pageData = json.decodeFromString<ChapterListResponse>(
-                    client.post("$apiUrl/chapters/list", headers, buildChapterListBody(novelSlug, page)).body.string(),
+                    client.post("$apiUrl/chapters/list", headers, Fetch.XHR, buildChapterListBody(novelSlug, page)).body.string(),
                 )
                 pageData.result.chapterLists.forEach { freshChapters.add(chapterItemToSChapter(novelSlug, it)) }
             } catch (e: Exception) {
@@ -322,7 +323,7 @@ abstract class MtlBooks :
             ChapterReadRequest(novelSlug, chapterSlug),
         ).toRequestBody("application/json".toMediaType())
 
-        val response = client.post("$apiUrl/chapters/read", headers, body)
+        val response = client.post("$apiUrl/chapters/read", headers, Fetch.XHR, body)
         val responseBody = response.body.string()
         if (!response.isSuccessful) {
             throw Exception("MTLBooks server error (${response.code}): ${responseBody.take(200)}")

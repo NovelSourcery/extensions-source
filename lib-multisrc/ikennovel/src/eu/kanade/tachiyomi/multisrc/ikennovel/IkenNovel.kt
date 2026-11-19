@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.getPreferencesLazy
@@ -51,7 +52,7 @@ abstract class IkenNovel :
             filters.filterIsInstance<UrlPartFilter>().forEach { it.addUrlParameter(this) }
         }.build()
 
-        val data = client.get(url).parseAs<SearchResponse>()
+        val data = client.get(url, Fetch.XHR).parseAs<SearchResponse>()
         val mangas = data.posts.filter { it.isNovel }.map { it.toSManga() }
         return MangasPage(mangas, data.totalCount > page * perPage)
     }
@@ -76,7 +77,7 @@ abstract class IkenNovel :
         "A-Z" to "postTitle",
     )
 
-    override suspend fun fetchFilterData(): JsonElement = client.get("$apiUrl/api/genres").parseAs<JsonElement>()
+    override suspend fun fetchFilterData(): JsonElement = client.get("$apiUrl/api/genres", Fetch.XHR).parseAs<JsonElement>()
 
     override fun getFilterList(data: JsonElement?): FilterList {
         val genres = data?.parseAs<List<Genre>>()?.map { it.name.trim() to it.id.toString() }.orEmpty()
@@ -105,7 +106,7 @@ abstract class IkenNovel :
         val url = "$apiUrl/api/post".toHttpUrl().newBuilder()
             .addQueryParameter("postSlug", slug)
             .build()
-        return client.get(url).parseAs<PostResponse>()
+        return client.get(url, Fetch.XHR).parseAs<PostResponse>()
     }
 
     override suspend fun fetchMangaUpdate(
@@ -119,7 +120,7 @@ abstract class IkenNovel :
         val postId = knownId ?: details!!.await().post.id
 
         val updatedChapters = if (fetchChapters) {
-            client.get("$apiUrl/api/chapters?postId=$postId").parseAs<ChaptersResponse>()
+            client.get("$apiUrl/api/chapters?postId=$postId", Fetch.XHR).parseAs<ChaptersResponse>()
                 .post.chapters
                 .filter { showLockedChapters || !it.isLocked }
                 .map { it.toSChapter(manga.url) }
@@ -139,7 +140,7 @@ abstract class IkenNovel :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, "$apiUrl/api/chapter?chapterId=${chapter.url}"))
 
     override suspend fun fetchPageText(page: Page): String {
-        val chapter = client.get(page.url).parseAs<ChapterResponse>().chapter
+        val chapter = client.get(page.url, Fetch.XHR).parseAs<ChapterResponse>().chapter
         val content = chapter.content?.takeIf { it.isNotBlank() }
             ?: throw Exception("This chapter is locked. Unlock it on the website to read it.")
 

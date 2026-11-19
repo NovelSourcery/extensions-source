@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -44,7 +45,7 @@ abstract class NovelHall :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val popularRequest = buildPopularMangaRequest(page)
-        val response = client.get(popularRequest.url, popularRequest.headers)
+        val response = client.get(popularRequest.url, popularRequest.headers, Fetch.DOCUMENT)
         val document = response.asJsoup()
         return parseNovelList(document, response.request.url.toString())
     }
@@ -99,7 +100,7 @@ abstract class NovelHall :
     // lastupdate.html is a single static page with no pagination.
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val latestRequest = buildLatestUpdatesRequest(page)
-        val response = client.get(latestRequest.url, latestRequest.headers)
+        val response = client.get(latestRequest.url, latestRequest.headers, Fetch.DOCUMENT)
         val document = response.asJsoup()
         return MangasPage(parseNovelList(document).mangas, false)
     }
@@ -140,7 +141,7 @@ abstract class NovelHall :
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val request = buildSearchMangaRequest(page, query, filters)
         val requestUrl = request.url.toString()
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.DOCUMENT)
 
         if (requestUrl.contains("/genre/") || requestUrl.contains("/type/") ||
             requestUrl.contains("/lastupdate") || requestUrl.contains("all2022")
@@ -185,7 +186,7 @@ abstract class NovelHall :
     ): SMangaUpdate {
         // Details and the chapter list both live on the same novel page - fetch it once.
         val mangaDetailsRequest = buildMangaDetailsRequest(manga)
-        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, Fetch.DOCUMENT)
         val document = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(document, response) else manga
@@ -259,7 +260,7 @@ abstract class NovelHall :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
         val mangaDetailsRequest = buildMangaDetailsRequest(manga)
-        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, ensureSuccess = false)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val document = response.asJsoup()
         return parseMangaDetails(document, response)
@@ -269,7 +270,7 @@ abstract class NovelHall :
 
     override suspend fun fetchPageText(page: Page): String {
         val pageUrl = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val response = client.get(pageUrl, headers)
+        val response = client.get(pageUrl, headers, Fetch.DOCUMENT)
         val document = response.asJsoup()
 
         // Parse chapter content from #htmlContent div

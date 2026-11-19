@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -70,11 +71,11 @@ abstract class LeafStudio :
             .build()
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelList(client.get(buildPopularMangaUrl(page), headers).asJsoup())
+    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelList(client.get(buildPopularMangaUrl(page), headers, Fetch.DOCUMENT).asJsoup())
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelList(client.get(buildLatestUpdatesUrl(page), headers).asJsoup())
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelList(client.get(buildLatestUpdatesUrl(page), headers, Fetch.DOCUMENT).asJsoup())
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseNovelList(client.get(buildSearchMangaUrl(page, query, filters), headers).asJsoup())
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseNovelList(client.get(buildSearchMangaUrl(page, query, filters), headers, Fetch.DOCUMENT).asJsoup())
 
     private fun parseNovelList(document: Document): MangasPage {
         val mangas = document.select("a.novel-item").map { element ->
@@ -99,7 +100,7 @@ abstract class LeafStudio :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list both live on the same novel page - fetch it once.
-        val doc = client.get(buildMangaDetailsUrl(manga), headers).asJsoup()
+        val doc = client.get(buildMangaDetailsUrl(manga), headers, Fetch.DOCUMENT).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
@@ -145,7 +146,7 @@ abstract class LeafStudio :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPath.slug(url.encodedPath) }
-        val response = client.get(buildMangaDetailsUrl(manga), headers, ensureSuccess = false)
+        val response = client.get(buildMangaDetailsUrl(manga), headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.asJsoup()).apply { this.url = manga.url }
     }
@@ -159,7 +160,7 @@ abstract class LeafStudio :
 
     override suspend fun fetchPageText(page: Page): String {
         val pageUrl = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val response = client.get(pageUrl, headers)
+        val response = client.get(pageUrl, headers, Fetch.DOCUMENT)
         val document = response.asJsoup()
         return document.select("article > p.chapter_content").joinToString("") { paragraphToHtml(it) }
     }

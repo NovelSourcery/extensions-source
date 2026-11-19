@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.lib.chapterutils.paginatedChapterList
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.utils.firstInstanceOrNull
 import keiyoushi.utils.formattedText
@@ -59,7 +60,7 @@ abstract class NovelPhoenixNet : ReadNovelFull() {
     override suspend fun getMangaByUrl(url: HttpUrl): SManga {
         val slug = url.pathSegments.first().removeSuffix(".html")
         val manga = SManga.create().apply { this.url = slug }
-        return mangaDetailsParse(client.get(getMangaUrl(manga)).asJsoup()).apply { this.url = slug }
+        return mangaDetailsParse(client.get(getMangaUrl(manga), Fetch.DOCUMENT).asJsoup()).apply { this.url = slug }
     }
 
     override fun mangaDetailsParse(document: Document): SManga = SManga.create().apply {
@@ -95,7 +96,7 @@ abstract class NovelPhoenixNet : ReadNovelFull() {
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val document = client.get(getMangaUrl(manga)).asJsoup()
+        val document = client.get(getMangaUrl(manga), Fetch.DOCUMENT).asJsoup()
         val updatedManga = if (fetchDetails) mangaDetailsParse(document) else manga
         val updatedChapters = if (fetchChapters) fetchChapterList(manga, document, chapters) else chapters
         return SMangaUpdate(updatedManga, updatedChapters)
@@ -114,7 +115,7 @@ abstract class NovelPhoenixNet : ReadNovelFull() {
             assumedPageSize = 40,
             sortChapters = { it },
             fetchPage = { page ->
-                val doc = if (page == 1) detailDoc else client.get("${getMangaUrl(manga)}?page=$page").asJsoup()
+                val doc = if (page == 1) detailDoc else client.get("${getMangaUrl(manga)}?page=$page", Fetch.DOCUMENT).asJsoup()
                 Pair(parseChapterPage(doc), page < pageCount)
             },
         )
@@ -122,7 +123,7 @@ abstract class NovelPhoenixNet : ReadNovelFull() {
         return ascending.reversed()
     }
 
-    override suspend fun fetchPageText(page: Page): String = client.get(page.url).asJsoup()
+    override suspend fun fetchPageText(page: Page): String = client.get(page.url, Fetch.DOCUMENT).asJsoup()
         .selectFirst("#chapter-content")
         ?.html()
         ?: throw Exception("Chapter content not found")

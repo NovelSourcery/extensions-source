@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.firstInstanceOrNull
@@ -35,7 +36,7 @@ abstract class NovelLunar :
             val url = "$baseUrl/api/novels/search".toHttpUrl().newBuilder()
                 .addQueryParameter("q", query.trim())
                 .build()
-            val mangas = client.get(url).parseAs<SearchResponse>().data.map { it.toSManga() }
+            val mangas = client.get(url, Fetch.XHR).parseAs<SearchResponse>().data.map { it.toSManga() }
             return MangasPage(mangas, false)
         }
         return getListing(
@@ -52,7 +53,7 @@ abstract class NovelLunar :
             if (status.isNotEmpty()) addQueryParameter("status", status)
             addQueryParameter("page", page.toString())
         }.build()
-        return client.get(url).asJsoup().parseListing()
+        return client.get(url, Fetch.DOCUMENT).asJsoup().parseListing()
     }
 
     private fun Document.parseListing(): MangasPage {
@@ -74,7 +75,7 @@ abstract class NovelLunar :
         val segments = url.pathSegments
         if (segments.getOrNull(0) != "novel") return null
         val slug = segments.getOrNull(1)?.takeIf { it.isNotEmpty() } ?: return null
-        return parseDetails(client.get("$baseUrl/novel/$slug").asJsoup()).apply { this.url = slug }
+        return parseDetails(client.get("$baseUrl/novel/$slug", Fetch.DOCUMENT).asJsoup()).apply { this.url = slug }
     }
 
     override suspend fun fetchMangaUpdate(
@@ -83,7 +84,7 @@ abstract class NovelLunar :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate = coroutineScope {
-        val details = if (fetchDetails) async { parseDetails(client.get(getMangaUrl(manga)).asJsoup()) } else null
+        val details = if (fetchDetails) async { parseDetails(client.get(getMangaUrl(manga), Fetch.DOCUMENT).asJsoup()) } else null
         val updatedChapters = if (fetchChapters) fetchChapterList(manga.url) else chapters
         SMangaUpdate(details?.await() ?: manga, updatedChapters)
     }
@@ -139,7 +140,7 @@ abstract class NovelLunar :
                 .addQueryParameter("limit", CHAPTER_PAGE_SIZE.toString())
                 .addQueryParameter("sort", "desc")
                 .build()
-            val data = client.get(url).parseAs<ChaptersResponse>().data
+            val data = client.get(url, Fetch.XHR).parseAs<ChaptersResponse>().data
             data.mapTo(this) { it.toSChapter(slug) }
             if (data.size < CHAPTER_PAGE_SIZE) break
             page++
@@ -155,7 +156,7 @@ abstract class NovelLunar :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, getChapterUrl(chapter)))
 
     override suspend fun fetchPageText(page: Page): String {
-        val content = client.get(page.url).asJsoup().selectFirst("article div[style*=pre-wrap]")
+        val content = client.get(page.url, Fetch.DOCUMENT).asJsoup().selectFirst("article div[style*=pre-wrap]")
             ?: throw Exception("Chapter content not found")
         return content.wholeText()
             .split(PARAGRAPH_SPLIT_REGEX)

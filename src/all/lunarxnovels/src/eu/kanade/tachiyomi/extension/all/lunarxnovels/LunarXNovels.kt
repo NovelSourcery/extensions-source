@@ -13,6 +13,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
@@ -57,7 +58,7 @@ abstract class LunarXNovels :
             .addQueryParameter("page", page.toString())
             .addQueryParameter("limit", PAGE_SIZE.toString())
             .build()
-        val novels = client.get(url).parseAs<RecentResponse>().data
+        val novels = client.get(url, Fetch.XHR).parseAs<RecentResponse>().data
         return MangasPage(novels.map { it.toSManga() }, novels.size == PAGE_SIZE)
     }
 
@@ -69,7 +70,7 @@ abstract class LunarXNovels :
                 .addQueryParameter("page", "1")
                 .build()
             // Later pages of this endpoint come back as a bare empty array.
-            return MangasPage(client.get(url).parseAs<LegacySearchResponse>().results.novels.map { it.toSManga() }, false)
+            return MangasPage(client.get(url, Fetch.XHR).parseAs<LegacySearchResponse>().results.novels.map { it.toSManga() }, false)
         }
 
         val url = "$API_URL/api/novels/db/search".toHttpUrl().newBuilder().apply {
@@ -84,7 +85,7 @@ abstract class LunarXNovels :
             val sort = filters.firstInstanceOrNull<SortFilter>()?.selected ?: if (query.isBlank()) "popular" else "relevance"
             addQueryParameter("sort", sort)
         }.build()
-        val result = client.get(url).parseAs<SearchResponse>()
+        val result = client.get(url, Fetch.XHR).parseAs<SearchResponse>()
         return MangasPage(result.novels.map { it.toSManga() }, result.page < result.totalPages)
     }
 
@@ -118,7 +119,7 @@ abstract class LunarXNovels :
 
     // Lunar's own novels live under /title; anything else is a legacy (NovelPhoenix-scraped) entry.
     private suspend fun fetchDetails(slug: String): SManga {
-        val response = client.get("$API_URL/api/novels/title/$slug", ensureSuccess = false)
+        val response = client.get("$API_URL/api/novels/title/$slug", Fetch.XHR, ensureSuccess = false)
         if (response.isSuccessful) return response.parseAs<TitleResponse>().novel.toSManga()
         response.close()
 
@@ -128,12 +129,12 @@ abstract class LunarXNovels :
 
     private suspend fun fetchLegacyNovel(slug: String): LegacyNovelDto? {
         val url = "$API_URL/api/novels".toHttpUrl().newBuilder().addQueryParameter("slug", slug).build()
-        return client.get(url).parseAs<LegacyNovelResponse>().novel
+        return client.get(url, Fetch.XHR).parseAs<LegacyNovelResponse>().novel
             ?.takeUnless { it.title == "Error fetching novel" }
     }
 
     private suspend fun fetchChapters(slug: String): List<SChapter> {
-        val all = client.get("$API_URL/api/novels/chapters/$slug").parseAs<ChapterListResponse>().chapters
+        val all = client.get("$API_URL/api/novels/chapters/$slug", Fetch.XHR).parseAs<ChapterListResponse>().chapters
         // Same rule as the site: the legacy list is only used when Lunar has no chapters of its own.
         if (all.isEmpty()) return if (lang == "all" || lang == "en") fetchLegacyChapters(slug) else emptyList()
 
@@ -151,9 +152,9 @@ abstract class LunarXNovels :
     }
 
     private suspend fun fetchLockRule(slug: String, chapters: List<ChapterDto>): (ChapterDto) -> Boolean = coroutineScope {
-        val points = async { client.get("$API_URL/api/points-lock/novel/$slug").parseAs<PointsLockResponse>() }
-        val gates = async { client.get("$API_URL/api/novel-gate/$slug").parseAs<GateResponse>().gates }
-        val passwords = async { client.get("$API_URL/api/novels/password/info/$slug").parseAs<PasswordInfoResponse>() }
+        val points = async { client.get("$API_URL/api/points-lock/novel/$slug", Fetch.XHR).parseAs<PointsLockResponse>() }
+        val gates = async { client.get("$API_URL/api/novel-gate/$slug", Fetch.XHR).parseAs<GateResponse>().gates }
+        val passwords = async { client.get("$API_URL/api/novels/password/info/$slug", Fetch.XHR).parseAs<PasswordInfoResponse>() }
 
         val pointsInfo = points.await()
         val gateList = gates.await()
@@ -191,7 +192,7 @@ abstract class LunarXNovels :
 
     // Legacy chapters are numbered 1..N, with titles[N - 1] as the title of chapter N.
     private suspend fun fetchLegacyChapters(slug: String): List<SChapter> {
-        val response = client.get("$API_URL/api/novels/chapter-titles?slug=$slug", ensureSuccess = false)
+        val response = client.get("$API_URL/api/novels/chapter-titles?slug=$slug", Fetch.XHR, ensureSuccess = false)
         val titles = if (response.isSuccessful) {
             response.parseAs<LegacyTitlesResponse>().titles
         } else {
@@ -221,13 +222,13 @@ abstract class LunarXNovels :
     }
 
     private suspend fun fetchContent(chapterUrl: HttpUrl, slug: String, number: String, language: String): String {
-        val seeds = LunarCrypto.extractSeeds(client.get(chapterUrl).asJsoup())
+        val seeds = LunarCrypto.extractSeeds(client.get(chapterUrl, Fetch.DOCUMENT).asJsoup())
         val url = "$API_URL/api/novels/r".toHttpUrl().newBuilder()
             .addPathSegment(LunarCrypto.mint(seeds, slug, number))
             .addQueryParameter("language", language)
             .build()
 
-        val response = client.get(url, ensureSuccess = false)
+        val response = client.get(url, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) {
             val code = response.code
             val error = runCatching { response.parseAs<ErrorDto>() }.getOrNull()
@@ -247,7 +248,7 @@ abstract class LunarXNovels :
             .addQueryParameter("slug", slug)
             .addQueryParameter("chapter", number)
             .build()
-        val chapter = client.get(url).parseAs<LegacyChapterResponse>().chapter
+        val chapter = client.get(url, Fetch.XHR).parseAs<LegacyChapterResponse>().chapter
         val content = chapter?.content
         if (content.isNullOrBlank() || chapter.chapterTitle == "Error fetching chapter" || chapter.wordCount == 0) {
             throw Exception("Chapter not available")

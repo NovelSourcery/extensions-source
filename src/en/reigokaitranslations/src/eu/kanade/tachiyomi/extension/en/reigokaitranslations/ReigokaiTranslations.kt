@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.parseAs
@@ -37,7 +38,7 @@ abstract class ReigokaiTranslations :
 
     private suspend fun fetchNovels(): List<SManga> {
         val host = baseUrl.toHttpUrl().host
-        val menu = client.get(baseUrl).asJsoup()
+        val menu = client.get(baseUrl, Fetch.DOCUMENT).asJsoup()
             .select("#primary-menu li:not(.menu-item-has-children) > a[href]")
             .mapNotNull { a ->
                 val url = a.absUrl("href").toHttpUrlOrNull()?.takeIf { it.host == host } ?: return@mapNotNull null
@@ -51,7 +52,7 @@ abstract class ReigokaiTranslations :
             .addQueryParameter("per_page", "100")
             .addQueryParameter("_fields", PAGE_FIELDS)
             .build()
-        val pages = client.get(url).parseAs<List<PageDto>>().associateBy { it.slug }
+        val pages = client.get(url, Fetch.XHR).parseAs<List<PageDto>>().associateBy { it.slug }
 
         return menu.mapNotNull { (slug, label) ->
             pages[slug]?.let { it.toSManga(it.document(), label) }
@@ -70,7 +71,7 @@ abstract class ReigokaiTranslations :
                 }
             }
             .build()
-        val page = client.get(pageUrl).parseAs<List<PageDto>>().firstOrNull() ?: return null
+        val page = client.get(pageUrl, Fetch.XHR).parseAs<List<PageDto>>().firstOrNull() ?: return null
         return page.toSManga(page.document(), null)
     }
 
@@ -84,7 +85,7 @@ abstract class ReigokaiTranslations :
             .addEncodedQueryParameter("slug", getMangaUrl(manga).toHttpUrl().postSlug())
             .addQueryParameter("_fields", PAGE_FIELDS)
             .build()
-        val page = client.get(url).parseAs<List<PageDto>>().firstOrNull() ?: throw Exception("Novel not found")
+        val page = client.get(url, Fetch.XHR).parseAs<List<PageDto>>().firstOrNull() ?: throw Exception("Novel not found")
         val document = page.document()
         return SMangaUpdate(
             manga = page.toSManga(document, manga.title) ?: manga,
@@ -109,7 +110,7 @@ abstract class ReigokaiTranslations :
                 .addQueryParameter("page", page.toString())
                 .addQueryParameter("_fields", "date_gmt,link,title")
                 .build()
-            val response = client.get(url)
+            val response = client.get(url, Fetch.XHR)
             val totalPages = response.header("X-WP-TotalPages")?.toIntOrNull() ?: 1
             response.parseAs<List<PostDto>>()
                 .map { it.toSChapter() }
@@ -124,7 +125,7 @@ abstract class ReigokaiTranslations :
             .addEncodedQueryParameter("slug", "$baseUrl$chapterPath".toHttpUrl().postSlug())
             .addQueryParameter("_fields", "categories")
             .build()
-        return client.get(url).parseAs<List<PostCategoriesDto>>()
+        return client.get(url, Fetch.XHR).parseAs<List<PostCategoriesDto>>()
             .firstOrNull()?.categories?.firstOrNull { it != UNCATEGORIZED_ID }
     }
 
@@ -135,7 +136,7 @@ abstract class ReigokaiTranslations :
             .addEncodedQueryParameter("slug", page.url.toHttpUrl().postSlug())
             .addQueryParameter("_fields", "content")
             .build()
-        val content = client.get(url).parseAs<List<PostContentDto>>().firstOrNull()?.content?.rendered
+        val content = client.get(url, Fetch.XHR).parseAs<List<PostContentDto>>().firstOrNull()?.content?.rendered
             ?: throw Exception("Chapter not found")
         val document = Jsoup.parseBodyFragment(content, page.url)
         document.select("p:has(a)")

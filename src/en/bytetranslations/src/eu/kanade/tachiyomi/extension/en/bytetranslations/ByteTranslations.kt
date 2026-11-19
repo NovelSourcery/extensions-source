@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.firstInstanceOrNull
@@ -46,7 +47,7 @@ abstract class ByteTranslations :
             addQueryParameter("novel_status", filters.firstInstanceOrNull<StatusFilter>()?.toUriPart().orEmpty())
             addQueryParameter("novel_orderby", (filters.firstInstanceOrNull<OrderFilter>() ?: OrderFilter()).toUriPart())
         }.build()
-        val document = client.get(listUrl).asJsoup()
+        val document = client.get(listUrl, Fetch.DOCUMENT).asJsoup()
         val mangas = document.select("article.novel-list-card").map { card ->
             SManga.create().apply {
                 url = card.selectFirst("a.novel-list-card-link")!!.absUrl("href").toHttpUrl().novelSlug()!!
@@ -59,7 +60,7 @@ abstract class ByteTranslations :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = url.novelSlug() ?: return null
-        return parseDetails(client.get(novelUrl(slug)).asJsoup(), slug)
+        return parseDetails(client.get(novelUrl(slug), Fetch.DOCUMENT).asJsoup(), slug)
     }
 
     // Novel pages live under /novel/{slug}/, chapters under /{slug}/chapter-N/
@@ -82,7 +83,7 @@ abstract class ByteTranslations :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val document = client.get(novelUrl(manga.url)).asJsoup()
+        val document = client.get(novelUrl(manga.url), Fetch.DOCUMENT).asJsoup()
         return SMangaUpdate(parseDetails(document, manga.url), parseChapters(document))
     }
 
@@ -157,7 +158,7 @@ abstract class ByteTranslations :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val document = client.get(baseUrl + page.url).asJsoup()
+        val document = client.get(baseUrl + page.url, Fetch.DOCUMENT).asJsoup()
         val restriction = document.selectFirst(".access-restriction")
         if (restriction != null) {
             val reason = restriction.selectFirst("p")?.text()?.ifEmpty { null } ?: "This chapter is locked."

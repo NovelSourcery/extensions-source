@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import kotlinx.serialization.json.JsonElement
@@ -48,7 +49,7 @@ abstract class NoBadNovel :
                 if (keyword.isNotBlank()) addQueryParameter("keyword", keyword)
             }
             .build()
-        val doc = client.get(url, headers).asJsoup()
+        val doc = client.get(url, headers, Fetch.DOCUMENT).asJsoup()
 
         val mangas = doc.select("h4 > a[href*=/series/]").mapNotNull { link ->
             val title = link.text()
@@ -71,7 +72,7 @@ abstract class NoBadNovel :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val doc = client.get(getMangaUrl(manga), headers).asJsoup()
+        val doc = client.get(getMangaUrl(manga), headers, Fetch.DOCUMENT).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
@@ -80,7 +81,7 @@ abstract class NoBadNovel :
     }
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.get(url, headers, ensureSuccess = false)
+        val response = client.get(url, headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         return parseMangaDetails(doc).apply {
@@ -119,7 +120,7 @@ abstract class NoBadNovel :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.get(baseUrl + chapterPath(page.url), headers).asJsoup()
+        val doc = client.get(baseUrl + chapterPath(page.url), headers, Fetch.DOCUMENT).asJsoup()
         val content = doc.selectFirst("p.para")?.parent() ?: throw Exception("Chapter content not found")
         content.select("script, ins.adsbygoogle").remove()
         return content.html()

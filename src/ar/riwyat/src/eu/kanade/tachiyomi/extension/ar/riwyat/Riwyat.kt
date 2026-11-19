@@ -7,6 +7,7 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SManga
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import okhttp3.Headers
 import okhttp3.Interceptor
@@ -83,17 +84,17 @@ abstract class Riwyat : MadaraNovel() {
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = buildPopularMangaRequest(page)
-        return parseCeneleNovels(client.get(request.url, request.headers).asJsoup())
+        return parseCeneleNovels(client.get(request.url, request.headers, Fetch.DOCUMENT).asJsoup())
     }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val request = buildLatestUpdatesRequest(page)
-        return parseCeneleNovels(client.get(request.url, request.headers).asJsoup())
+        return parseCeneleNovels(client.get(request.url, request.headers, Fetch.DOCUMENT).asJsoup())
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val request = buildSearchMangaRequest(page, query, filters)
-        return parseCeneleNovels(client.get(request.url, request.headers).asJsoup())
+        return parseCeneleNovels(client.get(request.url, request.headers, Fetch.DOCUMENT).asJsoup())
     }
 
     override fun buildChapterListRequest(manga: SManga): Request = GET(baseUrl + manga.url, browserHeaders())
@@ -150,7 +151,7 @@ abstract class Riwyat : MadaraNovel() {
     override suspend fun fetchPageText(page: Page): String {
         val pageUrl = if (page.url.startsWith("http")) page.url else baseUrl + page.url
         // Use browser headers (no Referer) so Cloudflare WAF accepts chapter fetches.
-        val response = client.get(pageUrl, browserHeaders())
+        val response = client.get(pageUrl, browserHeaders(), Fetch.DOCUMENT)
         val doc = response.asJsoup()
 
         val contentElement = doc.selectFirst(".reading-content.current .text-left")

@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.parseAs
@@ -90,7 +91,7 @@ abstract class Rechapters :
         lastChapterAtMin?.let { urlBuilder.addQueryParameter("lastChapterAtMin", it.toString()) }
         buildCursor(page)?.let { urlBuilder.addQueryParameter("cursor", it) }
 
-        val envelope = client.get(urlBuilder.build(), headers).parseAs<SearchResponseDto>()
+        val envelope = client.get(urlBuilder.build(), headers, Fetch.XHR).parseAs<SearchResponseDto>()
         val data = envelope.data ?: return MangasPage(emptyList(), false)
         return MangasPage(data.items.map { it.toSManga() }, data.hasMore)
     }
@@ -135,7 +136,7 @@ abstract class Rechapters :
     }
 
     private suspend fun loadMangaDetails(manga: SManga): SManga {
-        val doc = client.get(baseUrl + manga.url, headers).asJsoup()
+        val doc = client.get(baseUrl + manga.url, headers, Fetch.DOCUMENT).asJsoup()
 
         return SManga.create().apply {
             url = manga.url
@@ -187,7 +188,7 @@ abstract class Rechapters :
                 .addQueryParameter("languageCode", lang)
                 .addQueryParameter("order", "asc")
                 .build()
-            val page = client.get(url, headers).parseAs<ChaptersResponseDto>().data?.items.orEmpty()
+            val page = client.get(url, headers, Fetch.XHR).parseAs<ChaptersResponseDto>().data?.items.orEmpty()
             if (page.isEmpty()) break
             items += page
             if (page.size < CHAPTER_BUCKET_SIZE) break
@@ -209,7 +210,7 @@ abstract class Rechapters :
     override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapter.url
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.get(baseUrl + page.url, headers).asJsoup()
+        val doc = client.get(baseUrl + page.url, headers, Fetch.DOCUMENT).asJsoup()
         val paragraphs = doc.select("p[data-block-index]")
         if (paragraphs.isEmpty()) throw Exception("Could not find chapter content")
         return paragraphs.joinToString("") { "<p>${it.html()}</p>" }

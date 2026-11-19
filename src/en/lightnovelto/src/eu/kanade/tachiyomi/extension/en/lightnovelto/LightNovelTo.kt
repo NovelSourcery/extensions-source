@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.formattedText
@@ -39,7 +40,7 @@ abstract class LightNovelTo :
             .addQueryParameter("sort", sort)
             .addQueryParameter("page", page.toString())
             .build()
-        return client.get(url).asJsoup().parseNovelList(page)
+        return client.get(url, Fetch.DOCUMENT).asJsoup().parseNovelList(page)
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
@@ -56,7 +57,7 @@ abstract class LightNovelTo :
             }
             addQueryParameter("page", page.toString())
         }.build()
-        return client.get(url).asJsoup().parseNovelList(page)
+        return client.get(url, Fetch.DOCUMENT).asJsoup().parseNovelList(page)
     }
 
     private fun Document.parseNovelList(page: Int): MangasPage {
@@ -79,7 +80,7 @@ abstract class LightNovelTo :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         if (url.host != baseUrl.toHttpUrl().host || url.pathSegments.firstOrNull() != "novel") return null
         val slug = url.pathSegments.getOrNull(1)?.takeIf { it.isNotEmpty() } ?: return null
-        val document = client.get("$baseUrl/novel/$slug").asJsoup()
+        val document = client.get("$baseUrl/novel/$slug", Fetch.DOCUMENT).asJsoup()
         return parseMangaDetails(document).apply { this.url = slug }
     }
 
@@ -90,14 +91,14 @@ abstract class LightNovelTo :
         fetchChapters: Boolean,
     ): SMangaUpdate = coroutineScope {
         val details = async {
-            if (fetchDetails) parseMangaDetails(client.get(getMangaUrl(manga)).asJsoup()) else manga
+            if (fetchDetails) parseMangaDetails(client.get(getMangaUrl(manga), Fetch.DOCUMENT).asJsoup()) else manga
         }
         val chapterList = async {
             if (fetchChapters) {
                 val url = "$baseUrl/api/novel-chapters".toHttpUrl().newBuilder()
                     .addQueryParameter("slug", manga.url)
                     .build()
-                client.get(url).parseAs<ChapterListDto>().chapters
+                client.get(url, Fetch.XHR).parseAs<ChapterListDto>().chapters
                     .map { it.toSChapter(manga.url) }
                     .reversed()
             } else {
@@ -156,12 +157,12 @@ abstract class LightNovelTo :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, getChapterUrl(chapter)))
 
     override suspend fun fetchPageText(page: Page): String {
-        val content = client.get(page.url).asJsoup().selectFirst("div.ln-prose") ?: return ""
+        val content = client.get(page.url, Fetch.DOCUMENT).asJsoup().selectFirst("div.ln-prose") ?: return ""
         content.select("script, style, ins").remove()
         return content.html()
     }
 
-    override suspend fun fetchFilterData(): JsonElement = client.get("$baseUrl/api/genres").parseAs<List<GenreDto>>().toJsonElement()
+    override suspend fun fetchFilterData(): JsonElement = client.get("$baseUrl/api/genres", Fetch.XHR).parseAs<List<GenreDto>>().toJsonElement()
 
     override fun getFilterList(data: JsonElement?): FilterList {
         val filters = mutableListOf<Filter<*>>(

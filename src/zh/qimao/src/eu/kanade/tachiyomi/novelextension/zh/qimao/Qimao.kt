@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.getPreferencesLazy
@@ -35,7 +36,7 @@ abstract class Qimao :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         if (page > 1) return MangasPage(emptyList(), false)
-        val data = client.get("$baseUrl/api/search/result?keyword=&page=1", headers).parseAs<SearchResponse>().data
+        val data = client.get("$baseUrl/api/search/result?keyword=&page=1", headers, Fetch.XHR).parseAs<SearchResponse>().data
         return MangasPage(data.doYouLikeList.map { it.toSManga() }, false)
     }
 
@@ -46,7 +47,7 @@ abstract class Qimao :
             .addQueryParameter("keyword", query)
             .addQueryParameter("page", page.toString())
             .build()
-        val data = client.get(url, headers).parseAs<SearchResponse>().data
+        val data = client.get(url, headers, Fetch.XHR).parseAs<SearchResponse>().data
 
         val count = data.pageData.count.toIntOrNull() ?: 0
         val pageSize = data.pageData.pageSize.toIntOrNull() ?: data.searchList.size
@@ -66,7 +67,7 @@ abstract class Qimao :
         val bookId = manga.url
 
         val updatedManga = if (fetchDetails) {
-            val detailDeferred = async { client.get("$baseUrl/api/book-detail/main-info?book_id=$bookId", headers).parseAs<MainInfoResponse>().data.bookDetail }
+            val detailDeferred = async { client.get("$baseUrl/api/book-detail/main-info?book_id=$bookId", headers, Fetch.XHR).parseAs<MainInfoResponse>().data.bookDetail }
             val introDeferred = async { fetchIntro(bookId) }
             detailDeferred.await().toSManga(bookId, introDeferred.await())
         } else {
@@ -75,7 +76,7 @@ abstract class Qimao :
 
         val updatedChapters = if (fetchChapters) {
             val showLocked = preferences.getBoolean(PREF_SHOW_LOCKED, false)
-            client.get("$baseUrl/api/book/chapter-list?book_id=$bookId", headers).parseAs<ChapterListResponse>().data.chapters
+            client.get("$baseUrl/api/book/chapter-list?book_id=$bookId", headers, Fetch.XHR).parseAs<ChapterListResponse>().data.chapters
                 .mapNotNull { it.toSChapter(bookId, showLocked) }
                 .reversed()
         } else {
@@ -86,12 +87,12 @@ abstract class Qimao :
     }
 
     private suspend fun fetchIntro(bookId: String): String? = runCatching {
-        client.get("$baseUrl/api/book-detail/intro?book_id=$bookId", headers).parseAs<IntroResponse>().data.intro
+        client.get("$baseUrl/api/book-detail/intro?book_id=$bookId", headers, Fetch.XHR).parseAs<IntroResponse>().data.intro
     }.getOrNull()
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val bookId = url.pathSegments.getOrNull(1)?.substringBefore("-") ?: return null
-        val response = client.get("$baseUrl/api/book-detail/main-info?book_id=$bookId", headers, ensureSuccess = false)
+        val response = client.get("$baseUrl/api/book-detail/main-info?book_id=$bookId", headers, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val detail = response.parseAs<MainInfoResponse>().data.bookDetail
         return detail.toSManga(bookId, fetchIntro(bookId))
@@ -100,7 +101,7 @@ abstract class Qimao :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.get(baseUrl + page.url, headers).asJsoup()
+        val doc = client.get(baseUrl + page.url, headers, Fetch.DOCUMENT).asJsoup()
         val content = doc.selectFirst("div.chapter-detail-article div.article")
             ?: throw Exception("This chapter is locked. Unlock it on the website, or disable \"Show locked chapters\".")
         return content.html()

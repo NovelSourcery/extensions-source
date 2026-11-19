@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.tryParseDate
@@ -40,14 +41,14 @@ abstract class Markazriwayat :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = buildPopularMangaRequest(page)
-        return parseLibraryResponse(client.get(request.url, request.headers))
+        return parseLibraryResponse(client.get(request.url, request.headers, Fetch.XHR))
     }
 
     private fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/wp-json/theam/v1/library?page=$page&per_page=$PER_PAGE&sort=new", headers)
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val request = buildLatestUpdatesRequest(page)
-        return parseLibraryResponse(client.get(request.url, request.headers))
+        return parseLibraryResponse(client.get(request.url, request.headers, Fetch.XHR))
     }
 
     private fun parseLibraryResponse(response: Response): MangasPage {
@@ -76,7 +77,7 @@ abstract class Markazriwayat :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val request = buildSearchMangaRequest(page, query, filters)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.XHR)
         val body = json.decodeFromString<SearchResponse>(response.body.string())
         val novels = body.items.mapNotNull { item ->
             val link = item.link.ifBlank { return@mapNotNull null }
@@ -94,7 +95,7 @@ abstract class Markazriwayat :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
-        val response = client.get(url, headers)
+        val response = client.get(url, headers, Fetch.DOCUMENT)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         return parseMangaDetails(doc).apply { this.url = path }
@@ -107,7 +108,7 @@ abstract class Markazriwayat :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val request = buildMangaDetailsRequest(manga)
-        val doc = client.get(request.url, request.headers).asJsoup()
+        val doc = client.get(request.url, request.headers, Fetch.DOCUMENT).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) fetchChapterList(doc) else chapters
@@ -157,7 +158,7 @@ abstract class Markazriwayat :
         while (true) {
             val url = "$baseUrl/wp-json/theam/v1/manga-chapters?manga_id=$mangaId&order=DESC&page=$page&per_page=100"
             val body = try {
-                val resp = client.get(url, headers)
+                val resp = client.get(url, headers, Fetch.XHR)
                 val parsed = json.decodeFromString<ChaptersResponse>(resp.body.string())
                 resp.close()
                 parsed
@@ -194,7 +195,7 @@ abstract class Markazriwayat :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.get(baseUrl + page.url, headers).asJsoup()
+        val doc = client.get(baseUrl + page.url, headers, Fetch.DOCUMENT).asJsoup()
         val content = doc.selectFirst(".reading-content .text-right")
             ?: doc.selectFirst(".reading-content")
             ?: return ""

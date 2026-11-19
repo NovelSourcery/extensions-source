@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.boolean
@@ -50,7 +51,7 @@ abstract class Kakuyomu :
             .apply { if (genre.isNotEmpty()) addQueryParameter("genres[]", genre) }
             .build()
 
-        val doc = client.get(url, headers).asJsoup()
+        val doc = client.get(url, headers, Fetch.DOCUMENT).asJsoup()
         val apollo = doc.extractApolloState() ?: return MangasPage(emptyList(), false)
 
         val rootQuery = apollo["ROOT_QUERY"]?.let { it as? JsonObject } ?: return MangasPage(emptyList(), false)
@@ -71,7 +72,7 @@ abstract class Kakuyomu :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val workId = workIdOf(manga.url)
-        val doc = client.get("$baseUrl/works/$workId", headers).asJsoup()
+        val doc = client.get("$baseUrl/works/$workId", headers, Fetch.DOCUMENT).asJsoup()
         val apollo = doc.extractApolloState() ?: return SMangaUpdate(manga, chapters)
         val work = apollo["Work:$workId"]?.parseAs<WorkDto>()
 
@@ -110,7 +111,7 @@ abstract class Kakuyomu :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val workId = url.pathSegments.getOrNull(1) ?: return null
-        val response = client.get("$baseUrl/works/$workId", headers, ensureSuccess = false)
+        val response = client.get("$baseUrl/works/$workId", headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val apollo = response.asJsoup().extractApolloState() ?: return null
         return apollo["Work:$workId"]?.parseAs<WorkDto>()?.toSManga(apollo)
@@ -119,7 +120,7 @@ abstract class Kakuyomu :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.get(baseUrl + chapterPath(page.url), headers).asJsoup()
+        val doc = client.get(baseUrl + chapterPath(page.url), headers, Fetch.DOCUMENT).asJsoup()
         val body = doc.selectFirst(".widget-episodeBody") ?: throw Exception("Kakuyomu: episode body not found")
 
         body.select("rt, rp").remove()

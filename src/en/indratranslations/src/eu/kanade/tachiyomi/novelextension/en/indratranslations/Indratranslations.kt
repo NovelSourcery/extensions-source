@@ -13,6 +13,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -42,9 +43,9 @@ abstract class Indratranslations :
 
     private val mangaPath = SlugPath("/", "/")
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseSeriesListing(client.get("$baseUrl/series/?orderby=views", headers).asJsoup())
+    override suspend fun getPopularManga(page: Int): MangasPage = parseSeriesListing(client.get("$baseUrl/series/?orderby=views", headers, Fetch.DOCUMENT).asJsoup())
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseSeriesListing(client.get("$baseUrl/series/?orderby=update", headers).asJsoup())
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseSeriesListing(client.get("$baseUrl/series/?orderby=update", headers, Fetch.DOCUMENT).asJsoup())
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val url = "$baseUrl/series/".toHttpUrl().newBuilder()
@@ -64,7 +65,7 @@ abstract class Indratranslations :
         }
         url.addQueryParameter("orderby", orderBy)
 
-        return parseSeriesListing(client.get(url.build(), headers).asJsoup())
+        return parseSeriesListing(client.get(url.build(), headers, Fetch.DOCUMENT).asJsoup())
     }
 
     private fun parseSeriesListing(doc: Document): MangasPage {
@@ -89,7 +90,7 @@ abstract class Indratranslations :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val doc = client.get(getMangaUrl(manga), headers).asJsoup()
+        val doc = client.get(getMangaUrl(manga), headers, Fetch.DOCUMENT).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
@@ -98,7 +99,7 @@ abstract class Indratranslations :
     }
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.get(url, headers, ensureSuccess = false)
+        val response = client.get(url, headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.asJsoup()).apply { this.url = mangaPath.slug(url.encodedPath) }
     }
@@ -146,7 +147,7 @@ abstract class Indratranslations :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.get(baseUrl + page.url, headers).asJsoup()
+        val doc = client.get(baseUrl + page.url, headers, Fetch.DOCUMENT).asJsoup()
         val content = doc.selectFirst("#chapter-content-text")
             ?: throw Exception("Chapter content unavailable (locked or removed)")
         content.select(JUNK_SELECTOR).remove()

@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
@@ -66,7 +67,7 @@ abstract class Chikari :
         filters: FilterList,
     ): MangasPage {
         val offset = (page - 1) * PAGE_SIZE
-        val dto = client.get(novelsListUrl(query, sort, adult, PAGE_SIZE, offset, filters), headers)
+        val dto = client.get(novelsListUrl(query, sort, adult, PAGE_SIZE, offset, filters), headers, Fetch.XHR)
             .parseAs<NovelListDto>()
         return MangasPage(
             mangas = dto.items.map { it.toSManga() },
@@ -83,11 +84,11 @@ abstract class Chikari :
         val half = PAGE_SIZE / 2
         val offset = (page - 1) * half
         val safeDeferred = async {
-            client.get(novelsListUrl(query, sort, adult = false, half, offset, filters), headers)
+            client.get(novelsListUrl(query, sort, adult = false, half, offset, filters), headers, Fetch.XHR)
                 .parseAs<NovelListDto>()
         }
         val adultDeferred = async {
-            client.get(novelsListUrl(query, sort, adult = true, half, offset, filters), headers)
+            client.get(novelsListUrl(query, sort, adult = true, half, offset, filters), headers, Fetch.XHR)
                 .parseAs<NovelListDto>()
         }
         val safe = safeDeferred.await()
@@ -149,10 +150,10 @@ abstract class Chikari :
 
     override suspend fun fetchFilterData(): JsonElement = coroutineScope {
         val genresDeferred = async {
-            client.get("$baseUrl/api/novels/genres", headers).parseAs<List<NamedSlugDto>>()
+            client.get("$baseUrl/api/novels/genres", headers, Fetch.XHR).parseAs<List<NamedSlugDto>>()
         }
         val tagsDeferred = async {
-            client.get("$baseUrl/api/novels/tags", headers).parseAs<List<NamedIdDto>>()
+            client.get("$baseUrl/api/novels/tags", headers, Fetch.XHR).parseAs<List<NamedIdDto>>()
         }
         FilterDataDto(genres = genresDeferred.await(), tags = tagsDeferred.await()).toJsonElement()
     }
@@ -184,7 +185,7 @@ abstract class Chikari :
             .firstOrNull()
             ?.takeIf { it.isNotEmpty() }
             ?: return null
-        return client.get("$baseUrl/api/novels/$slug", headers).parseAs<NovelDto>().toSMangaDetails()
+        return client.get("$baseUrl/api/novels/$slug", headers, Fetch.XHR).parseAs<NovelDto>().toSMangaDetails()
     }
 
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/novels/${manga.url}"
@@ -200,7 +201,7 @@ abstract class Chikari :
         val slug = manga.url
         // Details and chapters are independent — don't serialize chapter fetch behind details.
         val detailsDeferred = if (fetchDetails) {
-            async { client.get("$baseUrl/api/novels/$slug", headers).parseAs<NovelDto>() }
+            async { client.get("$baseUrl/api/novels/$slug", headers, Fetch.XHR).parseAs<NovelDto>() }
         } else {
             null
         }
@@ -246,6 +247,7 @@ abstract class Chikari :
             .addQueryParameter("offset", offset.toString())
             .build(),
         headers,
+        Fetch.XHR,
     ).parseAs()
 
     private fun ChapterDto.toSChapter(slug: String) = SChapter.create().apply {
@@ -261,7 +263,7 @@ abstract class Chikari :
         val parts = page.url.split('/', limit = 2)
         require(parts.size == 2) { "Invalid chapter url: ${page.url}" }
         val (slug, number) = parts
-        val chapter = client.get("$baseUrl/api/novels/$slug/chapters/$number/read", headers)
+        val chapter = client.get("$baseUrl/api/novels/$slug/chapters/$number/read", headers, Fetch.XHR)
             .parseAs<ChapterReadDto>()
         if (chapter.locked) {
             throw Exception(chapter.lockReason.ifEmpty { "Chapter is locked" })

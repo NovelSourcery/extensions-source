@@ -13,6 +13,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -127,19 +128,19 @@ abstract class FlameComics :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = browseRequest()
-        val novels = novelsFrom(client.get(request.url, request.headers)).sortedByDescending { it.likes ?: 0 }
+        val novels = novelsFrom(client.get(request.url, request.headers, Fetch.DOCUMENT)).sortedByDescending { it.likes ?: 0 }
         return MangasPage(novels.map { it.toSManga() }, false)
     }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val request = browseRequest()
-        val novels = novelsFrom(client.get(request.url, request.headers)).sortedByDescending { it.last_edit ?: 0L }
+        val novels = novelsFrom(client.get(request.url, request.headers, Fetch.DOCUMENT)).sortedByDescending { it.last_edit ?: 0L }
         return MangasPage(novels.map { it.toSManga() }, false)
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val request = searchBrowseRequest(query)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.DOCUMENT)
         val requestedQuery = response.request.url.fragment.orEmpty()
         val novels = novelsFrom(response).filter { it.title.contains(requestedQuery, ignoreCase = true) }
         return MangasPage(novels.map { it.toSManga() }, false)
@@ -149,7 +150,7 @@ abstract class FlameComics :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
-        val response = client.get(getMangaUrl(manga), headers, ensureSuccess = false)
+        val response = client.get(getMangaUrl(manga), headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val data = parseNovelPage(response)
         return parseMangaDetails(data.details.novels).apply { this.url = manga.url }
@@ -176,7 +177,7 @@ abstract class FlameComics :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val response = client.get(getMangaUrl(manga), headers)
+        val response = client.get(getMangaUrl(manga), headers, Fetch.DOCUMENT)
         val data = parseNovelPage(response)
 
         val updatedManga = if (fetchDetails) parseMangaDetails(data.details.novels) else manga
@@ -238,7 +239,7 @@ abstract class FlameComics :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(dataApiUrl("${page.url}.json"), headers)
+        val response = client.get(dataApiUrl("${page.url}.json"), headers, Fetch.XHR)
         val data = json.decodeFromString<ChapterContentPageData>(response.body.string()).pageProps.chapter
         return data.content
     }

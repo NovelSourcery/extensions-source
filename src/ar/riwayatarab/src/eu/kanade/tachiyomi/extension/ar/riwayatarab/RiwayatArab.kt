@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.parseAs
@@ -101,7 +102,7 @@ abstract class RiwayatArab :
             }
             .build()
 
-        val response = client.get(url, headers).parseAs<NovelListResponse>()
+        val response = client.get(url, headers, Fetch.XHR).parseAs<NovelListResponse>()
         return MangasPage(response.novels.map { it.toSManga() }, response.pagination.hasNext)
     }
 
@@ -116,7 +117,7 @@ abstract class RiwayatArab :
     }
 
     private suspend fun fetchNovel(slug: String): SManga? {
-        val response = client.get("$API_URL/api/novels/$slug", headers, ensureSuccess = false)
+        val response = client.get("$API_URL/api/novels/$slug", headers, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) {
             response.close()
             return null
@@ -163,6 +164,7 @@ abstract class RiwayatArab :
     private suspend fun fetchChapterPage(slug: String, page: Int): ChapterListResponse = client.get(
         "$API_URL/api/novels/$slug/chapters?page=$page&limit=$CHAPTERS_PER_PAGE&order=asc",
         headers,
+        Fetch.XHR,
     ).parseAs<ChapterListResponse>()
 
     // ==================== Reader ====================
@@ -176,7 +178,7 @@ abstract class RiwayatArab :
         val novelSlug = segments[1]
         val chapterSlug = segments.drop(3).joinToString("/")
 
-        val chapter = client.get("$API_URL/api/novels/$novelSlug/chapter/$chapterSlug", headers)
+        val chapter = client.get("$API_URL/api/novels/$novelSlug/chapter/$chapterSlug", headers, Fetch.XHR)
             .parseAs<ChapterResponse>()
             .chapter
 

@@ -7,6 +7,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.formattedText
@@ -158,7 +159,7 @@ abstract class KolNovel : LightNovelWPNovel() {
     }
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(baseUrl + page.url, headers)
+        val response = client.get(baseUrl + page.url, headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
 
         // Remove code blocks

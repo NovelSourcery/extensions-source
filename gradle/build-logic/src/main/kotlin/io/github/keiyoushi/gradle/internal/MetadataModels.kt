@@ -20,6 +20,7 @@ internal data class ExtensionMetadata(
     // by publish-repo.py and passed through to index_pb2.Extension.isNovel (fork-reserved 8000+
     // field block in index.proto).
     val isNovel: Boolean = true,
+    val contentHash: String,
 )
 
 @Serializable

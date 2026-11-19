@@ -1,6 +1,5 @@
 ﻿package eu.kanade.tachiyomi.novelextension.en.novelupdates
 
-import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
@@ -17,10 +16,12 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.post
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.getPreferences
 import kotlinx.serialization.json.JsonElement
 import novelsourcery.lib.siteparsers.SiteParserRegistry
 import okhttp3.FormBody
@@ -31,7 +32,6 @@ import okhttp3.Protocol
 import okhttp3.Request
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
-import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
 @Source
@@ -57,7 +57,7 @@ abstract class NovelUpdates :
     private val mangaPathTemplate = SlugPath("/series/")
 
     private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+        getPreferences()
     }
 
     private val http11OnlyHosts = setOf(
@@ -73,10 +73,10 @@ abstract class NovelUpdates :
     override suspend fun fetchPageText(page: Page): String {
         val chapterUrl = if (page.url.startsWith("http")) page.url else baseUrl + page.url
 
-        var response = client.get(chapterUrl, headers, ensureSuccess = false)
+        var response = client.get(chapterUrl, headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (response.code == 403 && response.request.url.host in http11OnlyHosts) {
             response.close()
-            response = http11Client.get(response.request.url, headers, ensureSuccess = false)
+            response = http11Client.get(response.request.url, headers, Fetch.DOCUMENT, ensureSuccess = false)
         }
         val body = response.body.string()
         val resolvedUrl = response.request.url
@@ -260,7 +260,7 @@ abstract class NovelUpdates :
         val chapterId = Regex("/(\\d+)/").find(chapter.url)?.groupValues?.get(1) ?: return false
         val url = "$baseUrl/readinglist_update.php?rid=$chapterId&sid=$novelId&checked=$checked"
         return try {
-            client.get(url, trackingHeaders(manga), ensureSuccess = false).use { resp -> resp.isSuccessful }
+            client.get(url, trackingHeaders(manga), Fetch.DOCUMENT, ensureSuccess = false).use { resp -> resp.isSuccessful }
         } catch (e: Exception) {
             false
         }
@@ -272,7 +272,7 @@ abstract class NovelUpdates :
             .add("action", "wi_notestagsfic")
             .add("strSID", novelId)
             .build()
-        val getResponse = client.post("$baseUrl/wp-admin/admin-ajax.php", ajaxHeaders, getBody, ensureSuccess = false)
+        val getResponse = client.post("$baseUrl/wp-admin/admin-ajax.php", ajaxHeaders, Fetch.XHR, getBody, ensureSuccess = false)
         val responseText = getResponse.use { it.body.string() }
         val cleaned = responseText.trim().replace(Regex("\\}\\s*0+$"), "}")
         val existingNotes = Regex("\"notes\"\\s*:\\s*\"([^\"]*)\"").find(cleaned)?.groupValues?.get(1) ?: ""
@@ -292,7 +292,7 @@ abstract class NovelUpdates :
             .add("strNotes", updatedNotes)
             .add("strTags", existingTags)
             .build()
-        client.post("$baseUrl/wp-admin/admin-ajax.php", ajaxHeaders, updateBody, ensureSuccess = false).use { resp -> resp.isSuccessful }
+        client.post("$baseUrl/wp-admin/admin-ajax.php", ajaxHeaders, Fetch.XHR, updateBody, ensureSuccess = false).use { resp -> resp.isSuccessful }
     } catch (e: Exception) {
         false
     }
@@ -307,7 +307,7 @@ abstract class NovelUpdates :
 
         val url = if (resolvedPath.startsWith("http")) resolvedPath else baseUrl + resolvedPath
         val resolved: String? = try {
-            val response = client.get(url, headers, ensureSuccess = false)
+            val response = client.get(url, headers, Fetch.DOCUMENT, ensureSuccess = false)
             val doc = Jsoup.parse(response.use { it.body.string() }, url)
             val shortlink: String = doc.select("link[rel=shortlink]").attr("href")
             val shortlinkId: String? = Regex("\\?p=(\\d+)").find(shortlink)?.groupValues?.get(1)
@@ -406,7 +406,7 @@ abstract class NovelUpdates :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val popularRequest = buildPopularMangaRequest(page)
-        val doc = client.get(popularRequest.url, popularRequest.headers).asJsoup()
+        val doc = client.get(popularRequest.url, popularRequest.headers, Fetch.DOCUMENT).asJsoup()
         return parseNovelsFromSearch(doc, popularRequest.url, page)
     }
 
@@ -414,7 +414,7 @@ abstract class NovelUpdates :
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val latestRequest = buildLatestUpdatesRequest(page)
-        val doc = client.get(latestRequest.url, latestRequest.headers).asJsoup()
+        val doc = client.get(latestRequest.url, latestRequest.headers, Fetch.DOCUMENT).asJsoup()
         return parseNovelsFromSearch(doc)
     }
 
@@ -432,7 +432,7 @@ abstract class NovelUpdates :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val searchRequest = buildSearchMangaRequest(page, query, filters)
-        val doc = client.get(searchRequest.url, searchRequest.headers).asJsoup()
+        val doc = client.get(searchRequest.url, searchRequest.headers, Fetch.DOCUMENT).asJsoup()
         return parseNovelsFromSearch(doc, searchRequest.url, page)
     }
 
@@ -471,7 +471,7 @@ abstract class NovelUpdates :
     override fun getChapterUrl(chapter: SChapter): String = if (chapter.url.startsWith("http")) chapter.url else baseUrl + chapter.url
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.get(url, headers, ensureSuccess = false)
+        val response = client.get(url, headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val requestPath = response.request.url.encodedPath
         val doc = response.asJsoup()
@@ -488,7 +488,7 @@ abstract class NovelUpdates :
     ): SMangaUpdate {
         // Details and the chapter list both live on the same novel page - fetch it once.
         val mangaDetailsRequest = buildMangaDetailsRequest(manga)
-        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, Fetch.DOCUMENT)
         val requestPath = response.request.url.encodedPath
         val doc = response.asJsoup()
 
@@ -559,7 +559,7 @@ abstract class NovelUpdates :
             .add("mypostid", novelId)
             .build()
 
-        val chaptersResponse = client.post("$baseUrl/wp-admin/admin-ajax.php", headers, formBody)
+        val chaptersResponse = client.post("$baseUrl/wp-admin/admin-ajax.php", headers, Fetch.XHR, formBody)
         val chaptersHtml = chaptersResponse.body.string()
 
         val chaptersDoc = Jsoup.parse(chaptersHtml, baseUrl)

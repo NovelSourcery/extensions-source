@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -124,17 +125,17 @@ abstract class MVLEMPYR :
     private fun buildNovelListUrl(): String = "$chapSite/wp-json/wp/v2/mvl-novels?per_page=10000"
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        ensureCache(client.get(buildNovelListUrl(), headers))
+        ensureCache(client.get(buildNovelListUrl(), headers, Fetch.XHR))
         return getFilteredPage(page, "", FilterList())
     }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        ensureCache(client.get(buildNovelListUrl(), headers))
+        ensureCache(client.get(buildNovelListUrl(), headers, Fetch.XHR))
         return getFilteredPage(page, "", FilterList(), sortBy = "created")
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        ensureCache(client.get(buildNovelListUrl(), headers))
+        ensureCache(client.get(buildNovelListUrl(), headers, Fetch.XHR))
         return getFilteredPage(page, query, filters)
     }
 
@@ -275,7 +276,7 @@ abstract class MVLEMPYR :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter list both live on the same novel page - fetch it once.
-        val doc = client.get(buildMangaDetailsUrl(manga), headers).asJsoup()
+        val doc = client.get(buildMangaDetailsUrl(manga), headers, Fetch.DOCUMENT).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
@@ -323,6 +324,7 @@ abstract class MVLEMPYR :
             val chapResponse = client.get(
                 "$chapSite/wp-json/wp/v2/posts?tags=$convertedId&per_page=500&page=$page",
                 headers,
+                Fetch.XHR,
             )
 
             val chaptersJson = chapResponse.body.string()
@@ -371,7 +373,7 @@ abstract class MVLEMPYR :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = mangaPathTemplate.slug(url.encodedPath)
         val tempManga = SManga.create().apply { this.url = slug }
-        val response = client.get(buildMangaDetailsUrl(tempManga), headers, ensureSuccess = false)
+        val response = client.get(buildMangaDetailsUrl(tempManga), headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.asJsoup()).apply { this.url = slug }
     }
@@ -382,7 +384,7 @@ abstract class MVLEMPYR :
         // Chapter text is served from the main site (the WP host is Cloudflare-blocked). The text
         // span has a dynamic id, so target it by class.
         val url = if (page.url.startsWith("http")) page.url else "$baseUrl${page.url}"
-        val response = client.get(url, headers)
+        val response = client.get(url, headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
         val content = doc.selectFirst("#chapter .ct-span")
             ?: doc.selectFirst("#chapter .oxy-stock-content-styles")

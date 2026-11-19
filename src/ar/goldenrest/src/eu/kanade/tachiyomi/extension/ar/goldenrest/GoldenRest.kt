@@ -11,13 +11,14 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.post
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.jsonInstance
 import keiyoushi.utils.toJsonRequestBody
 import keiyoushi.utils.tryParse
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import okhttp3.Headers
 import okhttp3.HttpUrl
@@ -25,7 +26,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
-import uy.kohesive.injekt.injectLazy
 import kotlin.time.Instant
 
 @Source
@@ -34,8 +34,6 @@ abstract class GoldenRest :
     NovelSource {
 
     override val supportsLatest = true
-
-    private val json: Json by injectLazy()
 
     /** [SManga.url] stored as bare manga id via [mangaPathTemplate]. */
     private val mangaPathTemplate = SlugPath("/mangas/")
@@ -48,18 +46,18 @@ abstract class GoldenRest :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = buildPopularMangaRequest(page)
-        return parseReleasesResponse(client.get(request.url, request.headers))
+        return parseReleasesResponse(client.get(request.url, request.headers, Fetch.XHR))
     }
 
     private fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/api/releases?page=$page", headers)
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val request = buildLatestUpdatesRequest(page)
-        return parseReleasesResponse(client.get(request.url, request.headers))
+        return parseReleasesResponse(client.get(request.url, request.headers, Fetch.XHR))
     }
 
     private fun parseReleasesResponse(response: Response): MangasPage {
-        val data = json.decodeFromString<ReleasesResponse>(response.body.string())
+        val data = jsonInstance.decodeFromString<ReleasesResponse>(response.body.string())
         val mangas = data.releases
             .filter { it.manga?.is_novel == true }
             .map { release ->
@@ -82,12 +80,12 @@ abstract class GoldenRest :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val request = buildSearchMangaRequest(page, query, filters)
-        val response = request.body?.let { client.post(request.url, request.headers, it) }
-            ?: client.get(request.url, request.headers)
+        val response = request.body?.let { client.post(request.url, request.headers, Fetch.XHR, it) }
+            ?: client.get(request.url, request.headers, Fetch.XHR)
         val body = response.body.string()
 
         val mangaResponse = try {
-            json.decodeFromString<MangaResponse>(body)
+            jsonInstance.decodeFromString<MangaResponse>(body)
         } catch (_: Exception) {
             null
         }
@@ -97,7 +95,7 @@ abstract class GoldenRest :
         }
 
         val searchResponse = try {
-            json.decodeFromString<MangaSearchResponse>(body)
+            jsonInstance.decodeFromString<MangaSearchResponse>(body)
         } catch (_: Exception) {
             MangaSearchResponse()
         }
@@ -120,8 +118,8 @@ abstract class GoldenRest :
     ): SMangaUpdate {
         val updatedManga = if (fetchDetails) {
             val request = buildMangaDetailsRequest(manga)
-            val response = client.get(request.url, request.headers)
-            val data = json.decodeFromString<MangaResponse>(response.body.string())
+            val response = client.get(request.url, request.headers, Fetch.XHR)
+            val data = jsonInstance.decodeFromString<MangaResponse>(response.body.string())
             data.mangaData?.toSManga() ?: throw Exception("Manga not found")
         } else {
             manga
@@ -133,8 +131,8 @@ abstract class GoldenRest :
     }
 
     private suspend fun loadChapterList(manga: SManga): List<SChapter> {
-        val response = client.get("$baseUrl/api/mangas/${mangaId(manga)}/releases?page=1", headers)
-        val data = json.decodeFromString<ReleasesResponse>(response.body.string())
+        val response = client.get("$baseUrl/api/mangas/${mangaId(manga)}/releases?page=1", headers, Fetch.XHR)
+        val data = jsonInstance.decodeFromString<ReleasesResponse>(response.body.string())
         val seen = mutableSetOf<Float>()
 
         return data.releases
@@ -159,11 +157,11 @@ abstract class GoldenRest :
     override suspend fun fetchPageText(page: Page): String {
         val releaseId = page.url.substringAfterLast("/").substringBefore("?")
 
-        val releaseResponse = client.get("$baseUrl/api/releases/$releaseId", headers)
+        val releaseResponse = client.get("$baseUrl/api/releases/$releaseId", headers, Fetch.XHR)
         val releaseBody = releaseResponse.body.string()
 
         val releaseData = try {
-            json.decodeFromString<ReleaseDto>(releaseBody)
+            jsonInstance.decodeFromString<ReleaseDto>(releaseBody)
         } catch (_: Exception) {
             null
         }
@@ -178,13 +176,14 @@ abstract class GoldenRest :
         val downloadResponse = client.post(
             "$baseUrl/api/releases/$releaseId/download",
             headers,
+            Fetch.XHR,
             "{}".toRequestBody("application/json".toMediaType()),
         )
 
         val downloadBody = downloadResponse.body.string()
 
         val imageUrl = try {
-            json.decodeFromString<Map<String, Any?>>(downloadBody)["url"]?.toString()
+            jsonInstance.decodeFromString<Map<String, Any?>>(downloadBody)["url"]?.toString()
         } catch (_: Exception) {
             null
         }
@@ -203,9 +202,9 @@ abstract class GoldenRest :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
         val request = buildMangaDetailsRequest(manga)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.XHR)
         if (!response.isSuccessful) return null
-        val data = json.decodeFromString<MangaResponse>(response.body.string()).mangaData ?: return null
+        val data = jsonInstance.decodeFromString<MangaResponse>(response.body.string()).mangaData ?: return null
         return data.toSManga()
     }
 

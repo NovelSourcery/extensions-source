@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
@@ -68,7 +69,7 @@ abstract class R18Novel :
     }
 
     private suspend fun parseListing(url: String): MangasPage {
-        val document = client.get(url).asJsoup()
+        val document = client.get(url, Fetch.DOCUMENT).asJsoup()
         val mangas = document.select("#results-grid a.nl2-book-card, main a.nl2-book-card").distinctBy { it.attr("href") }.map { card ->
             SManga.create().apply {
                 setSlugUrl(mangaPath, card.absUrl("href"))
@@ -86,7 +87,7 @@ abstract class R18Novel :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         if (url.pathSegments.firstOrNull() != "webnovel") return null
         val id = url.pathSegments.getOrNull(1)?.takeIf { it.isNotEmpty() } ?: return null
-        val document = client.get(mangaPath.absolute(baseUrl, id)).asJsoup()
+        val document = client.get(mangaPath.absolute(baseUrl, id), Fetch.DOCUMENT).asJsoup()
         return parseDetails(document).apply { this.url = id }
     }
 
@@ -96,7 +97,7 @@ abstract class R18Novel :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val document = client.get(getMangaUrl(manga)).asJsoup()
+        val document = client.get(getMangaUrl(manga), Fetch.DOCUMENT).asJsoup()
         val updatedManga = if (fetchDetails) parseDetails(document) else manga
         val updatedChapters = if (fetchChapters) fetchChapterList(document) else chapters
         return SMangaUpdate(updatedManga, updatedChapters)
@@ -127,10 +128,10 @@ abstract class R18Novel :
     private suspend fun fetchChapterList(detailDocument: Document): List<SChapter> {
         val firstChapter = detailDocument.selectFirst("a.folio-primary-action[href]")?.absUrl("href") ?: return emptyList()
         // The chapter-list endpoint is keyed by a text slug that only the reader page exposes.
-        val readerHtml = client.get(firstChapter).use { it.body.string() }
+        val readerHtml = client.get(firstChapter, Fetch.XHR).use { it.body.string() }
         val slug = TOC_SLUG_REGEX.find(readerHtml)?.groupValues?.get(1) ?: return emptyList()
         val url = "$baseUrl/ajax/chapter-list".toHttpUrl().newBuilder().addQueryParameter("slug", slug).build()
-        val chapters = client.get(url).parseAs<ChapterListDto>().chapters
+        val chapters = client.get(url, Fetch.XHR).parseAs<ChapterListDto>().chapters
         val updated = DATE_FORMAT.tryParseDate(detailDocument.facts()["Updated"], ZoneOffset.UTC)
         return chapters.mapIndexed { index, chapter ->
             SChapter.create().apply {
@@ -145,12 +146,12 @@ abstract class R18Novel :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, getChapterUrl(chapter)))
 
     override suspend fun fetchPageText(page: Page): String {
-        val document = client.get(page.url).asJsoup()
+        val document = client.get(page.url, Fetch.DOCUMENT).asJsoup()
         return document.selectFirst("#chr-content")?.html() ?: throw Exception("Chapter content not found")
     }
 
     override suspend fun fetchFilterData(): JsonElement {
-        val document = client.get("$baseUrl/allvisit/").asJsoup()
+        val document = client.get("$baseUrl/allvisit/", Fetch.DOCUMENT).asJsoup()
         return document.select("#filters-sidebar a[href*=/genre/]")
             .map { FilterOptionDto(it.attr("href").substringAfter("/genre/").trimEnd('/'), it.text()) }
             .filter { it.name.isNotEmpty() }

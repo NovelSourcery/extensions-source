@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.fictionzone
 
-import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
@@ -18,10 +17,12 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.post
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.getPreferences
 import keiyoushi.utils.jsonInstance
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.setAltTitles
@@ -44,9 +45,7 @@ import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.parser.Parser
-import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
-import uy.kohesive.injekt.injectLazy
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -67,8 +66,6 @@ abstract class FictionZone :
     // hits this single api-party endpoint, which 429s hard under mass-import's sequential load.
     override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = rateLimit(1, 1.seconds)
 
-    private val json: Json by injectLazy()
-
     // The api-party envelope omits "query"/"body" entirely when absent; the shared jsonInstance
     // doesn't guarantee that for null fields, so this overrides just that behavior for encoding.
     private val requestJson = Json(jsonInstance) { explicitNulls = false }
@@ -76,7 +73,7 @@ abstract class FictionZone :
     private val dateFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.US)
 
     private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+        getPreferences()
     }
 
     private fun getAccessToken(): String? {
@@ -133,7 +130,7 @@ abstract class FictionZone :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = buildPopularMangaRequest(page)
-        val envelope = client.post(request.url, request.headers, request.body!!).parseAs<ApiEnvelope<BrowseData>>()
+        val envelope = client.post(request.url, request.headers, Fetch.XHR, request.body!!).parseAs<ApiEnvelope<BrowseData>>()
         return parseBrowseData(envelope.data ?: return MangasPage(emptyList(), false))
     }
 
@@ -174,7 +171,7 @@ abstract class FictionZone :
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val request = buildLatestUpdatesRequest(page)
-        val envelope = client.post(request.url, request.headers, request.body!!).parseAs<ApiEnvelope<BrowseData>>()
+        val envelope = client.post(request.url, request.headers, Fetch.XHR, request.body!!).parseAs<ApiEnvelope<BrowseData>>()
         return parseBrowseData(envelope.data ?: return MangasPage(emptyList(), false))
     }
 
@@ -182,7 +179,7 @@ abstract class FictionZone :
         // AI semantic search — text query only, other filters don't apply
         val aiSearch = filters.find { it is AiSearchFilter } as? AiSearchFilter
         if (aiSearch?.state == true && query.isNotBlank()) {
-            val body = json.encodeToJsonElement(AiSearchRequestDto(query, 20, (page - 1) * 20)).jsonObject
+            val body = jsonInstance.encodeToJsonElement(AiSearchRequestDto(query, 20, (page - 1) * 20)).jsonObject
             // The endpoint requires a logged-in fz_access_token regardless - confirmed live, it
             // 401s even for a plain unauthenticated request - so the token (if the user has set
             // one) must actually be attached, unlike the includeAuth=false this used to pass.
@@ -257,7 +254,7 @@ abstract class FictionZone :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val request = buildSearchMangaRequest(page, query, filters)
-        val response = client.post(request.url, request.headers, request.body!!)
+        val response = client.post(request.url, request.headers, Fetch.XHR, request.body!!)
         val data = response.parseAs<ApiEnvelope<BrowseData>>().data ?: return MangasPage(emptyList(), false)
 
         // AI search responses carry data.results instead of data.novels
@@ -308,7 +305,7 @@ abstract class FictionZone :
             else -> return null
         }
         val request = buildMangaDetailsRequest(SManga.create().apply { this.url = stored })
-        val response = client.post(request.url, request.headers, request.body!!, ensureSuccess = false)
+        val response = client.post(request.url, request.headers, Fetch.XHR, request.body!!, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response).apply { this.url = stored }
     }
@@ -327,13 +324,13 @@ abstract class FictionZone :
     }
 
     private fun parseMangaDetails(response: Response): SManga {
-        val dataElement = json.parseToJsonElement(response.body.string()).jsonObject["data"]!!.jsonObject
+        val dataElement = jsonInstance.parseToJsonElement(response.body.string()).jsonObject["data"]!!.jsonObject
         // Observed shape has the novel flat under "data"; "data.novel" is a defensive fallback
         // for a shape this session couldn't verify (needs omniportal auth) - see Dto.kt.
         val data = if ("novel" in dataElement) {
-            json.decodeFromJsonElement<NovelDetailsWrapperDto>(dataElement).novel ?: NovelDetailsDto()
+            jsonInstance.decodeFromJsonElement<NovelDetailsWrapperDto>(dataElement).novel ?: NovelDetailsDto()
         } else {
-            json.decodeFromJsonElement<NovelDetailsDto>(dataElement)
+            jsonInstance.decodeFromJsonElement<NovelDetailsDto>(dataElement)
         }
 
         return SManga.create().apply {
@@ -385,13 +382,13 @@ abstract class FictionZone :
             Quadruple(req, "", srcId, srcKey)
         } else {
             val detailsRequest = buildMangaDetailsRequest(manga)
-            val detailsResponse = client.post(detailsRequest.url, detailsRequest.headers, detailsRequest.body!!)
-            val id = json.parseToJsonElement(detailsResponse.body.string()).jsonObject["data"]!!.jsonObject["id"]!!.jsonPrimitive.content
+            val detailsResponse = client.post(detailsRequest.url, detailsRequest.headers, Fetch.XHR, detailsRequest.body!!)
+            val id = jsonInstance.parseToJsonElement(detailsResponse.body.string()).jsonObject["data"]!!.jsonObject["id"]!!.jsonPrimitive.content
             val req = apiRequest("/platform/chapter-lists?novel_id=$id")
             Quadruple(req, id, "", "")
         }
 
-        val response = client.post(request.url, request.headers, request.body!!)
+        val response = client.post(request.url, request.headers, Fetch.XHR, request.body!!)
         val data = response.parseAs<ApiEnvelope<ChapterListData>>().data ?: return emptyList()
         val chapters = data.chapters.toMutableList()
 
@@ -403,7 +400,7 @@ abstract class FictionZone :
                     val pageReq = apiRequest(
                         "/omniportal/novels/chapters?source_id=$sourceId&source_key=$sourceKey&translate=en&engine=google-trans&page=$p",
                     )
-                    val pageRes = client.post(pageReq.url, pageReq.headers, pageReq.body!!)
+                    val pageRes = client.post(pageReq.url, pageReq.headers, Fetch.XHR, pageReq.body!!)
                     pageRes.parseAs<ApiEnvelope<ChapterListData>>().data?.chapters?.let { chapters.addAll(it) }
                 } catch (_: Exception) {
                     break
@@ -449,7 +446,7 @@ abstract class FictionZone :
         val detailsDeferred = if (fetchDetails) {
             async {
                 val request = buildMangaDetailsRequest(manga)
-                parseMangaDetails(client.post(request.url, request.headers, request.body!!))
+                parseMangaDetails(client.post(request.url, request.headers, Fetch.XHR, request.body!!))
             }
         } else {
             null
@@ -516,7 +513,7 @@ abstract class FictionZone :
      * Scrape the chapter content from the HTML page.
      */
     private suspend fun fetchFromHtml(fullUrl: String): String {
-        val response = client.get(fullUrl, headers)
+        val response = client.get(fullUrl, headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
 
         // Find the main content container
@@ -572,7 +569,7 @@ abstract class FictionZone :
         }
 
         val request = apiRequest(apiPath, "GET", includeAuth = true)
-        val response = client.post(request.url, request.headers, request.body!!)
+        val response = client.post(request.url, request.headers, Fetch.XHR, request.body!!)
         val envelope = response.parseAs<ApiEnvelope<ChapterContentDto>>()
 
         if (envelope.success != true) {
@@ -699,7 +696,7 @@ abstract class FictionZone :
     private fun getSources(): List<Pair<String, String>> {
         val cached = preferences.getString("sources_cache", null) ?: return emptyList()
         return try {
-            json.decodeFromString(cached)
+            jsonInstance.decodeFromString(cached)
         } catch (e: Exception) {
             emptyList()
         }
@@ -708,7 +705,7 @@ abstract class FictionZone :
     private fun getGenres(): List<Pair<String, String>> {
         val cached = preferences.getString("genres_cache", null) ?: return emptyList()
         return try {
-            json.decodeFromString(cached)
+            jsonInstance.decodeFromString(cached)
         } catch (e: Exception) {
             emptyList()
         }
@@ -717,7 +714,7 @@ abstract class FictionZone :
     private fun getTags(): List<Pair<String, String>> {
         val cached = preferences.getString("tags_cache", null) ?: return emptyList()
         return try {
-            json.decodeFromString(cached)
+            jsonInstance.decodeFromString(cached)
         } catch (e: Exception) {
             emptyList()
         }
@@ -729,7 +726,7 @@ abstract class FictionZone :
             val genresData = client.newCall(genresReq).execute().parseAs<ApiEnvelope<List<NamedIdDto>>>().data
             if (genresData != null) {
                 val genres = genresData.map { Pair(it.idString(), it.name) }
-                preferences.edit().putString("genres_cache", json.encodeToString(genres)).apply()
+                preferences.edit().putString("genres_cache", jsonInstance.encodeToString(genres)).apply()
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -740,7 +737,7 @@ abstract class FictionZone :
             val tagsData = client.newCall(tagsReq).execute().parseAs<ApiEnvelope<List<NamedIdDto>>>().data
             if (tagsData != null) {
                 val tags = tagsData.map { Pair(it.idString(), it.name) }
-                preferences.edit().putString("tags_cache", json.encodeToString(tags)).apply()
+                preferences.edit().putString("tags_cache", jsonInstance.encodeToString(tags)).apply()
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -751,7 +748,7 @@ abstract class FictionZone :
             val sourcesData = client.newCall(sourcesReq).execute().parseAs<ApiEnvelope<SourcesData>>().data?.sources
             if (sourcesData != null) {
                 val sources = sourcesData.map { Pair(it.idString(), it.name) }
-                preferences.edit().putString("sources_cache", json.encodeToString(sources)).apply()
+                preferences.edit().putString("sources_cache", jsonInstance.encodeToString(sources)).apply()
             }
         } catch (e: Exception) {
             e.printStackTrace()

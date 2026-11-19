@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -61,12 +62,12 @@ abstract class NovelBuddy :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = searchApiRequest(page, sort = "views")
-        return parseApiResponse(client.get(request.url, request.headers))
+        return parseApiResponse(client.get(request.url, request.headers, Fetch.XHR))
     }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val request = searchApiRequest(page, sort = "latest")
-        return parseApiResponse(client.get(request.url, request.headers))
+        return parseApiResponse(client.get(request.url, request.headers, Fetch.XHR))
     }
 
     private fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
@@ -100,7 +101,7 @@ abstract class NovelBuddy :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val request = buildSearchMangaRequest(page, query, filters)
-        return parseApiResponse(client.get(request.url, request.headers))
+        return parseApiResponse(client.get(request.url, request.headers, Fetch.XHR))
     }
 
     private fun searchApiRequest(page: Int, sort: String): Request {
@@ -153,7 +154,7 @@ abstract class NovelBuddy :
         val slug = mangaPathTemplate.slug(url.encodedPath)
         val tempManga = SManga.create().apply { this.url = slug }
         val mangaDetailsRequest = buildMangaDetailsRequest(tempManga)
-        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, ensureSuccess = false)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response).apply { this.url = slug }
     }
@@ -167,7 +168,7 @@ abstract class NovelBuddy :
         // Details and the chapter list both come from the same novel page - fetch and parse the
         // body once, since the response can only be consumed once.
         val mangaDetailsRequest = buildMangaDetailsRequest(manga)
-        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, Fetch.DOCUMENT)
         val initialManga = response.asJsoup().selectFirst("#__NEXT_DATA__")?.html()?.initialManga()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(initialManga) else manga
@@ -230,7 +231,7 @@ abstract class NovelBuddy :
             .apply { if (!cv.isNullOrBlank()) addQueryParameter("cv", cv) }
             .build()
         val apiChapters = runCatching {
-            json.parseToJsonElement(client.get(chaptersApi, headers).body.string())
+            json.parseToJsonElement(client.get(chaptersApi, headers, Fetch.XHR).body.string())
                 .jsonObject["data"]?.jsonObject?.get("chapters")?.jsonArray
         }.getOrNull()
 
@@ -280,7 +281,7 @@ abstract class NovelBuddy :
         var content = ""
         if (mangaId != null && chapterId != null) {
             content = runCatching {
-                val apiResponse = client.get("$apiUrl/titles/$mangaId/chapters/$chapterId", headers)
+                val apiResponse = client.get("$apiUrl/titles/$mangaId/chapters/$chapterId", headers, Fetch.XHR)
                 json.parseToJsonElement(apiResponse.body.string())
                     .jsonObject["data"]?.jsonObject?.get("chapter")?.jsonObject
                     ?.get("content")?.jsonPrimitive?.contentOrNull.orEmpty()
@@ -288,7 +289,7 @@ abstract class NovelBuddy :
         }
 
         if (content.isBlank()) {
-            val document = client.get(buildUrl(page.url), headers).asJsoup()
+            val document = client.get(buildUrl(page.url), headers, Fetch.DOCUMENT).asJsoup()
             val script = document.selectFirst("#__NEXT_DATA__")?.html()
             content = if (script != null) {
                 runCatching {

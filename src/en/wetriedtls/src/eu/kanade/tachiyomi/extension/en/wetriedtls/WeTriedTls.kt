@@ -9,6 +9,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -53,14 +54,14 @@ abstract class WeTriedTls :
         return MangasPage(entries, result.meta.nextPageUrl != null)
     }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.get(queryUrl(page, "", "total_views", "All"), headers))
+    override suspend fun getPopularManga(page: Int): MangasPage = parseMangaListResponse(client.get(queryUrl(page, "", "total_views", "All"), headers, Fetch.XHR))
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(client.get(queryUrl(page, "", "latest", "All"), headers))
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseMangaListResponse(client.get(queryUrl(page, "", "latest", "All"), headers, Fetch.XHR))
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val status = filters.filterIsInstance<StatusFilter>().firstOrNull()?.toUriPart() ?: "All"
         val orderBy = filters.filterIsInstance<SortFilter>().firstOrNull()?.toUriPart() ?: "created_at"
-        return parseMangaListResponse(client.get(queryUrl(page, query, orderBy, status), headers))
+        return parseMangaListResponse(client.get(queryUrl(page, query, orderBy, status), headers, Fetch.XHR))
     }
 
     private val mangaPathTemplate = SlugPath("/series/")
@@ -80,7 +81,7 @@ abstract class WeTriedTls :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = mangaPathTemplate.slug(url.encodedPath)
-        val response = client.get("$apiUrl/series/$slug", headers, ensureSuccess = false)
+        val response = client.get("$apiUrl/series/$slug", headers, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return fetchNovelDetails(SManga.create().apply { this.url = slug })
     }
@@ -101,7 +102,7 @@ abstract class WeTriedTls :
     }
 
     private suspend fun fetchNovelDetails(manga: SManga): SManga {
-        val response = client.get("$apiUrl/series/${manga.slug()}", headers)
+        val response = client.get("$apiUrl/series/${manga.slug()}", headers, Fetch.XHR)
         val dto = response.parseAs<SeriesDto>()
         return SManga.create().apply {
             title = dto.title
@@ -136,7 +137,7 @@ abstract class WeTriedTls :
         val chapters = mutableListOf<SChapter>()
         var page = 1
         while (true) {
-            val response = client.get("$apiUrl/chapters/$seriesSlug?page=$page&perPage=100", headers)
+            val response = client.get("$apiUrl/chapters/$seriesSlug?page=$page&perPage=100", headers, Fetch.XHR)
             val result = response.parseAs<ChaptersResponse>()
             result.data.forEach { dto ->
                 chapters.add(
@@ -162,7 +163,7 @@ abstract class WeTriedTls :
         val (seriesSlug, chapterSlug) = page.url.removePrefix(baseUrl).trim('/').split("/").let {
             it[it.size - 2] to it[it.size - 1]
         }
-        val response = client.get("$apiUrl/chapter/$seriesSlug/$chapterSlug", headers)
+        val response = client.get("$apiUrl/chapter/$seriesSlug/$chapterSlug", headers, Fetch.XHR)
         return response.parseAs<ChapterContentResponse>().chapter.chapterContent.orEmpty()
     }
 

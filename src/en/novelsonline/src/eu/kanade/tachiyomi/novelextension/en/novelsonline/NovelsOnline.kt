@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.post
 import keiyoushi.source.KeiSource
@@ -27,7 +28,7 @@ abstract class NovelsOnline :
 
     override val supportsLatest = false
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelList(client.get("$baseUrl/top-novel/$page", headers))
+    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelList(client.get("$baseUrl/top-novel/$page", headers, Fetch.DOCUMENT))
 
     override suspend fun getLatestUpdates(page: Int): MangasPage = getPopularManga(page)
 
@@ -35,7 +36,7 @@ abstract class NovelsOnline :
         val form = buildSearchForm(query, filters)
         if (form == null) return getPopularManga(page)
         if (page > 1) return MangasPage(emptyList(), false)
-        return parseNovelList(client.post("$baseUrl/detailed-search", headers, form))
+        return parseNovelList(client.post("$baseUrl/detailed-search", headers, Fetch.DOCUMENT, form))
     }
 
     private fun buildSearchForm(query: String, filters: FilterList): FormBody? {
@@ -104,7 +105,7 @@ abstract class NovelsOnline :
                 append(it)
             }
         }
-        val response = client.get(baseUrl + path, headers, ensureSuccess = false)
+        val response = client.get(baseUrl + path, headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.asJsoup()).apply { this.url = path }
     }
@@ -115,7 +116,7 @@ abstract class NovelsOnline :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val doc = client.get(baseUrl + manga.url, headers).asJsoup()
+        val doc = client.get(baseUrl + manga.url, headers, Fetch.DOCUMENT).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc).apply { this.url = manga.url } else manga
         val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
@@ -162,7 +163,7 @@ abstract class NovelsOnline :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.get(baseUrl + page.url, headers).asJsoup()
+        val doc = client.get(baseUrl + page.url, headers, Fetch.DOCUMENT).asJsoup()
         return doc.selectFirst("#contentall")?.html() ?: ""
     }
 

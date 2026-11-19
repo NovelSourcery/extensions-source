@@ -8,18 +8,18 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.jsonInstance
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Response
-import uy.kohesive.injekt.injectLazy
 
 /**
  * WordExcerpt is a React SPA backed by a public Supabase REST API.
@@ -31,8 +31,6 @@ abstract class WordExcerpt :
     NovelSource {
 
     override val supportsLatest = true
-
-    private val json: Json by injectLazy()
 
     private val api = "https://debebcxopcfhukeqweco.supabase.co/rest/v1"
     private val anonKey =
@@ -106,11 +104,11 @@ abstract class WordExcerpt :
             .add("Range-Unit", "items")
             .add("Range", "$from-$to")
             .build()
-        return client.get(url, rangeHeaders)
+        return client.get(url, rangeHeaders, Fetch.XHR)
     }
 
     private fun parseNovels(response: Response): MangasPage {
-        val novels = json.decodeFromString<List<Novel>>(response.body.string())
+        val novels = jsonInstance.decodeFromString<List<Novel>>(response.body.string())
         return MangasPage(novels.map { it.toSManga() }, novels.size >= pageSize)
     }
 
@@ -132,9 +130,9 @@ abstract class WordExcerpt :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = url.encodedPath.trim('/')
-        val response = client.get(novelBySlugUrl(slug), headers, ensureSuccess = false)
+        val response = client.get(novelBySlugUrl(slug), headers, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) return null
-        val novel = json.decodeFromString<List<Novel>>(response.body.string()).firstOrNull() ?: return null
+        val novel = jsonInstance.decodeFromString<List<Novel>>(response.body.string()).firstOrNull() ?: return null
         return novel.toSManga()
     }
 
@@ -146,8 +144,8 @@ abstract class WordExcerpt :
     ): SMangaUpdate = coroutineScope {
         // Both details and chapters need the novel's internal id, so resolve the novel row once
         // and fan out from there instead of looking it up twice.
-        val novel = client.get(novelBySlugUrl(slugOf(manga.url)), headers)
-            .let { json.decodeFromString<List<Novel>>(it.body.string()) }
+        val novel = client.get(novelBySlugUrl(slugOf(manga.url)), headers, Fetch.XHR)
+            .let { jsonInstance.decodeFromString<List<Novel>>(it.body.string()) }
             .firstOrNull()
 
         val detailsDeferred = if (fetchDetails) async { novel?.toSManga() ?: manga } else null
@@ -166,8 +164,8 @@ abstract class WordExcerpt :
             .addQueryParameter("status", "in.(published,scheduled)")
             .addQueryParameter("order", "number.asc")
             .build()
-        val chapters = json.decodeFromString<List<Chapter>>(
-            client.get(url, headers).body.string(),
+        val chapters = jsonInstance.decodeFromString<List<Chapter>>(
+            client.get(url, headers, Fetch.XHR).body.string(),
         )
 
         return chapters.map { ch ->
@@ -192,8 +190,8 @@ abstract class WordExcerpt :
             .addQueryParameter("id", "eq.$chapterId")
             .addQueryParameter("limit", "1")
             .build()
-        val chapter = json.decodeFromString<List<Chapter>>(
-            client.get(url, headers).body.string(),
+        val chapter = jsonInstance.decodeFromString<List<Chapter>>(
+            client.get(url, headers, Fetch.XHR).body.string(),
         ).firstOrNull()
         return chapter?.content.orEmpty()
     }

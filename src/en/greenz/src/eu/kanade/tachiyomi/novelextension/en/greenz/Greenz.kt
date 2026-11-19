@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.getPreferencesLazy
@@ -35,9 +36,9 @@ abstract class Greenz :
 
     private val preferences by getPreferencesLazy()
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelList(client.get("$API_URL/novels/trending?page=$page&limit=$PAGE_SIZE", headers))
+    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelList(client.get("$API_URL/novels/trending?page=$page&limit=$PAGE_SIZE", headers, Fetch.XHR))
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelList(client.get("$API_URL/novels?page=$page&limit=$PAGE_SIZE", headers))
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelList(client.get("$API_URL/novels?page=$page&limit=$PAGE_SIZE", headers, Fetch.XHR))
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val url = "$API_URL/novels".toHttpUrl().newBuilder()
@@ -47,7 +48,7 @@ abstract class Greenz :
         filters.filterIsInstance<StatusFilter>().firstOrNull()?.toUriPart()?.takeIf { it.isNotEmpty() }
             ?.let { url.addQueryParameter("status", it) }
 
-        return parseNovelList(client.get(url.build(), headers))
+        return parseNovelList(client.get(url.build(), headers, Fetch.XHR))
     }
 
     private fun parseNovelList(response: Response): MangasPage {
@@ -67,7 +68,7 @@ abstract class Greenz :
         val slug = manga.url.substringBefore("#").substringAfterLast("/")
 
         val updatedManga = if (fetchDetails) {
-            client.get("$API_URL/novels/$id", headers).parseAs<SingleResponse<NovelDto>>().data.toSManga()
+            client.get("$API_URL/novels/$id", headers, Fetch.XHR).parseAs<SingleResponse<NovelDto>>().data.toSManga()
         } else {
             manga
         }
@@ -77,7 +78,7 @@ abstract class Greenz :
             val allChapters = mutableListOf<ChapterDto>()
             var page = 1
             while (true) {
-                val data = client.get("$API_URL/chapters?novelId=$id&limit=$CHAPTER_PAGE_SIZE&page=$page", headers)
+                val data = client.get("$API_URL/chapters?novelId=$id&limit=$CHAPTER_PAGE_SIZE&page=$page", headers, Fetch.XHR)
                     .parseAs<PageResponse<ChapterDto>>().data
                 allChapters += data.items
                 if (!data.meta.hasNextPage || data.items.isEmpty()) break
@@ -93,7 +94,7 @@ abstract class Greenz :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = url.pathSegments.lastOrNull { it.isNotEmpty() } ?: return null
-        val response = client.get("$API_URL/novels?slug=$slug", headers, ensureSuccess = false)
+        val response = client.get("$API_URL/novels?slug=$slug", headers, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return response.parseAs<PageResponse<NovelDto>>().data.items.firstOrNull()?.toSManga()
     }
@@ -104,7 +105,7 @@ abstract class Greenz :
 
     override suspend fun fetchPageText(page: Page): String {
         val chapterId = page.url.substringAfter("#")
-        val html = client.get("$API_URL/chapters/$chapterId", headers)
+        val html = client.get("$API_URL/chapters/$chapterId", headers, Fetch.XHR)
             .parseAs<SingleResponse<ChapterContentDto>>().data.content
             ?: throw Exception("This chapter is locked. Unlock it on the website, or disable \"Show locked chapters\".")
 

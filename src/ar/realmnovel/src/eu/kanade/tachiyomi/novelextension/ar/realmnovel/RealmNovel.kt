@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import kotlinx.serialization.json.Json
@@ -44,9 +45,9 @@ abstract class RealmNovel :
 
     // ======================== Catalog / Latest / Search ========================
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelCards(client.get(pageRequest(page), headers).asJsoup())
+    override suspend fun getPopularManga(page: Int): MangasPage = parseNovelCards(client.get(pageRequest(page), headers, Fetch.DOCUMENT).asJsoup())
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelCards(client.get(pageRequest(page), headers).asJsoup())
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseNovelCards(client.get(pageRequest(page), headers, Fetch.DOCUMENT).asJsoup())
 
     private fun pageRequest(page: Int): String {
         val url = if (page <= 1) {
@@ -59,7 +60,7 @@ abstract class RealmNovel :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val url = "$baseUrl/?q=${query.trim().replace(" ", "+")}"
-        return parseNovelCards(client.get(url, headers).asJsoup())
+        return parseNovelCards(client.get(url, headers, Fetch.DOCUMENT).asJsoup())
     }
 
     /** Parse the homepage / search results: `.g3card` novel cards. */
@@ -104,7 +105,7 @@ abstract class RealmNovel :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val doc = client.get(baseUrl + manga.url, headers).asJsoup()
+        val doc = client.get(baseUrl + manga.url, headers, Fetch.DOCUMENT).asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) parseChapterList(doc) else chapters
@@ -113,7 +114,7 @@ abstract class RealmNovel :
     }
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.get(url, headers, ensureSuccess = false)
+        val response = client.get(url, headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         return parseMangaDetails(doc).apply { this.url = url.encodedPath }

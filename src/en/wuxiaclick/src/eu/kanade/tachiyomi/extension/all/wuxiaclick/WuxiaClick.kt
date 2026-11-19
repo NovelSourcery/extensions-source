@@ -1,6 +1,5 @@
 ﻿package eu.kanade.tachiyomi.novelextension.en.wuxiaclick
 
-import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
@@ -15,8 +14,10 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.getPreferences
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.SerialName
@@ -31,7 +32,6 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
 @Source
@@ -49,7 +49,7 @@ abstract class WuxiaClick :
     }
 
     private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+        getPreferences()
     }
 
     @Serializable
@@ -207,7 +207,7 @@ abstract class WuxiaClick :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = buildPopularMangaRequest(page)
-        return parseMangaListResponse(client.get(request.url, request.headers))
+        return parseMangaListResponse(client.get(request.url, request.headers, Fetch.DOCUMENT))
     }
 
     // ======================== Latest ========================
@@ -221,7 +221,7 @@ abstract class WuxiaClick :
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val request = buildLatestUpdatesRequest(page)
-        return parseMangaListResponse(client.get(request.url, request.headers))
+        return parseMangaListResponse(client.get(request.url, request.headers, Fetch.DOCUMENT))
     }
 
     // ======================== Search ========================
@@ -327,7 +327,7 @@ abstract class WuxiaClick :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val request = buildSearchMangaRequest(page, query, filters)
-        return parseMangaListResponse(client.get(request.url, request.headers))
+        return parseMangaListResponse(client.get(request.url, request.headers, Fetch.DOCUMENT))
     }
 
     override fun getMangaUrl(manga: SManga): String {
@@ -365,7 +365,7 @@ abstract class WuxiaClick :
     }
 
     private suspend fun fetchMangaDetails(slug: String): SManga {
-        val response = client.get("$apiUrl/novels/$slug/", headers)
+        val response = client.get("$apiUrl/novels/$slug/", headers, Fetch.XHR)
         val body = response.body.string()
         // Prefer parsing __NEXT_DATA__ if present
         val doc = org.jsoup.Jsoup.parse(body)
@@ -445,7 +445,7 @@ abstract class WuxiaClick :
     }
 
     private suspend fun fetchChapterList(slug: String): List<SChapter> {
-        val response = client.get("$apiUrl/chapters/$slug/", headers)
+        val response = client.get("$apiUrl/chapters/$slug/", headers, Fetch.XHR)
         val chapters = json.decodeFromString<List<ChapterInfo>>(response.body.string())
 
         return chapters.map { chapter ->
@@ -469,7 +469,7 @@ abstract class WuxiaClick :
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val response = client.get(url, headers)
+        val response = client.get(url, headers, Fetch.XHR)
         val chapter = json.decodeFromString<ChapterContent>(response.body.string())
 
         val text = chapter.text

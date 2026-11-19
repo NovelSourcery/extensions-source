@@ -13,6 +13,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.post
 import keiyoushi.network.rateLimit
@@ -50,7 +51,7 @@ abstract class JadeScrolls :
             .addQueryParameter("page", page.toString())
             .addQueryParameter("limit", PAGE_SIZE.toString())
             .build()
-        return client.get(url).parseAs<NovelListDto>().toMangasPage()
+        return client.get(url, Fetch.XHR).parseAs<NovelListDto>().toMangasPage()
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
@@ -72,7 +73,7 @@ abstract class JadeScrolls :
                 (filter as UriPartFilter).toUriPart().takeIf { it.isNotEmpty() }?.let { addQueryParameter(param, it) }
             }
         }.build()
-        return client.get(url).parseAs<NovelListDto>().toMangasPage()
+        return client.get(url, Fetch.XHR).parseAs<NovelListDto>().toMangasPage()
     }
 
     private fun NovelListDto.toMangasPage() = MangasPage(data.map { it.toSManga() }, meta.hasNextPage())
@@ -85,7 +86,7 @@ abstract class JadeScrolls :
 
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.url}"
 
-    private suspend fun fetchNovel(slug: String): NovelDto = client.get("$apiUrl/novels?slug=$slug").parseAs()
+    private suspend fun fetchNovel(slug: String): NovelDto = client.get("$apiUrl/novels?slug=$slug", Fetch.XHR).parseAs()
 
     private suspend fun novelId(manga: SManga): String = manga.memo[NovelDto.ID_KEY]?.stringOrNull ?: fetchNovel(manga.url).id
 
@@ -114,7 +115,7 @@ abstract class JadeScrolls :
                 .addQueryParameter("isDeleted", "false")
                 .addQueryParameter("sortOrder", "desc")
                 .build()
-            val result = client.get(url).parseAs<ChapterListDto>()
+            val result = client.get(url, Fetch.XHR).parseAs<ChapterListDto>()
             chapters += result.data
             page++
         } while (result.meta.hasNextPage())
@@ -130,7 +131,7 @@ abstract class JadeScrolls :
 
     override suspend fun fetchPageText(page: Page): String {
         val (novelSlug, chapterSlug) = page.url.split("/", limit = 2)
-        val chapter = client.get("$apiUrl/novels-chapter/$novelSlug/chapters/$chapterSlug").parseAs<ChapterContentDto>()
+        val chapter = client.get("$apiUrl/novels-chapter/$novelSlug/chapters/$chapterSlug", Fetch.XHR).parseAs<ChapterContentDto>()
         if (chapter.userMetadata?.hasAccess == false) {
             throw Exception("This chapter is locked. Log in via WebView with an account that has access.")
         }
@@ -145,7 +146,7 @@ abstract class JadeScrolls :
 
     override val supportsFilterFetching = true
 
-    override suspend fun fetchFilterData(): JsonElement = client.get("$apiUrl/public/genres").parseAs<List<GenreDto>>().toJsonElement()
+    override suspend fun fetchFilterData(): JsonElement = client.get("$apiUrl/public/genres", Fetch.XHR).parseAs<List<GenreDto>>().toJsonElement()
 
     override fun getFilterList(data: JsonElement?): FilterList {
         val genres = data?.parseAs<List<GenreDto>>()
@@ -176,7 +177,7 @@ abstract class JadeScrolls :
         val requestHeaders = headers.newBuilder().apply {
             csrf?.let { set("X-CSRF-Token", URLDecoder.decode(it, "UTF-8")) }
         }.build()
-        client.post("$apiUrl/novels/${novelId(manga)}/user-interaction", requestHeaders, InteractionDto(action).toJsonRequestBody()).close()
+        client.post("$apiUrl/novels/${novelId(manga)}/user-interaction", requestHeaders, Fetch.XHR, InteractionDto(action).toJsonRequestBody()).close()
     }
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {

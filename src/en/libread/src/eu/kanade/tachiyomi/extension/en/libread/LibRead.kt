@@ -8,6 +8,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.utils.SlugPath
 import kotlinx.serialization.json.JsonElement
@@ -211,7 +212,7 @@ abstract class LibRead : ReadNovelFull() {
     // Content parsing
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val response = client.get(url, headers)
+        val response = client.get(url, headers, Fetch.DOCUMENT)
         val document = response.asJsoup()
 
         val content = document.selectFirst("div.txt div#article, div#chapter-content, div.chapter-content, div#chr-content")

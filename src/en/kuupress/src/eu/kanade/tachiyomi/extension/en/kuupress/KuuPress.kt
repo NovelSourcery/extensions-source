@@ -17,6 +17,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -73,7 +74,7 @@ abstract class KuuPress :
         val url = "$apiBase/novels_trending".toHttpUrl().newBuilder()
             .addQueryParameter("limit", "10")
             .build()
-        val body = client.get(url, headers).body.string()
+        val body = client.get(url, headers, Fetch.XHR).body.string()
         return parseNovelArrayResponse(body, key = "data", hasMore = false)
     }
 
@@ -82,7 +83,7 @@ abstract class KuuPress :
             .addQueryParameter("per_page", "15")
             .addQueryParameter("page", page.toString())
             .build()
-        val body = client.get(url, headers).body.string()
+        val body = client.get(url, headers, Fetch.XHR).body.string()
         return try {
             val root = json.parseToJsonElement(body).jsonObject
             val data = root["data"]?.jsonArray ?: JsonArray(emptyList())
@@ -102,7 +103,7 @@ abstract class KuuPress :
             .addQueryParameter("page", "1")
             .addQueryParameter("per_page", "1")
             .build()
-        val body = client.get(requestUrl, headers).body.string()
+        val body = client.get(requestUrl, headers, Fetch.XHR).body.string()
         return try {
             val root = json.parseToJsonElement(body).jsonObject
             val data = root["data"]?.jsonObject ?: return null
@@ -128,7 +129,7 @@ abstract class KuuPress :
             val url = "$apiBase/search".toHttpUrl().newBuilder()
                 .addQueryParameter("q", term)
                 .build()
-            val body = client.get(url, headers).body.string()
+            val body = client.get(url, headers, Fetch.DOCUMENT).body.string()
             return parseNovelArrayResponse(body, key = "results", hasMore = false)
         }
 
@@ -308,7 +309,7 @@ abstract class KuuPress :
         } else {
             "$apiBase/chapters/${extractChapterId(page.url)}"
         }
-        val response = client.get(contentUrl, headers)
+        val response = client.get(contentUrl, headers, Fetch.XHR)
         val body = response.body.string()
 
         return try {
@@ -385,7 +386,7 @@ abstract class KuuPress :
             .addQueryParameter("page", "1")
             .addQueryParameter("per_page", "1")
             .build()
-        val response = client.get(url, headers)
+        val response = client.get(url, headers, Fetch.XHR)
         val root = json.parseToJsonElement(response.use { it.body.string() }).jsonObject
         val state = root["meta"]?.jsonObject?.bool("is_bookmarked")
         state?.also { synchronized(bookmarkStateCache) { bookmarkStateCache[slug] = it } }
@@ -547,7 +548,7 @@ abstract class KuuPress :
                 .addQueryParameter("per_page", perPage.toString())
             volumeId?.let { builder.addQueryParameter("volume_id", it.toString()) }
 
-            val response = client.get(builder.build().toString(), headers, ensureSuccess = false)
+            val response = client.get(builder.build().toString(), headers, Fetch.XHR, ensureSuccess = false)
             if (!response.isSuccessful) return null
             val root = json.parseToJsonElement(response.body.string()).jsonObject
             cacheBookmarkState(slug, root)

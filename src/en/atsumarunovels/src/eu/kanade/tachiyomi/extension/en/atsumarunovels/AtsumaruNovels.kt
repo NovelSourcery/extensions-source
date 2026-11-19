@@ -16,6 +16,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.post
 import keiyoushi.network.rateLimit
@@ -65,6 +66,7 @@ abstract class AtsumaruNovels :
         val offset = (page - 1) * BROWSE_LIMIT
         val data = client.get(
             "$baseUrl/api/home2/$endpoint?offset=$offset&limit=$BROWSE_LIMIT&mediums=Novel$extra${adultQuery()}${excludedGenresQuery()}",
+            Fetch.XHR,
         ).parseAs<BrowseMangaDto>()
 
         return MangasPage(data.items.map { it.toSManga(baseUrl) }, data.items.size >= BROWSE_LIMIT)
@@ -141,7 +143,7 @@ abstract class AtsumaruNovels :
             addQueryParameter("per_page", BROWSE_LIMIT.toString())
         }.build()
 
-        val data = client.get(url).parseAs<SearchResultsDto>()
+        val data = client.get(url, Fetch.XHR).parseAs<SearchResultsDto>()
         return MangasPage(data.hits.map { it.document.toSManga(baseUrl) }, data.hasNextPage())
     }
 
@@ -153,9 +155,9 @@ abstract class AtsumaruNovels :
 
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.url}"
 
-    private suspend fun fetchDetails(id: String): MangaDto = client.get("$baseUrl/api/manga/page?id=$id").parseAs<MangaObjectDto>().mangaPage
+    private suspend fun fetchDetails(id: String): MangaDto = client.get("$baseUrl/api/manga/page?id=$id", Fetch.XHR).parseAs<MangaObjectDto>().mangaPage
 
-    private suspend fun fetchAllChapters(id: String): List<ChapterDto> = client.get("$baseUrl/api/manga/allChapters?mangaId=$id").parseAs<AllChaptersDto>().chapters
+    private suspend fun fetchAllChapters(id: String): List<ChapterDto> = client.get("$baseUrl/api/manga/allChapters?mangaId=$id", Fetch.XHR).parseAs<AllChaptersDto>().chapters
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -218,7 +220,7 @@ abstract class AtsumaruNovels :
             .addQueryParameter("chapterId", chapterId)
             .build()
 
-        val paragraphs = client.get(url).parseAs<NovelChapterObjectDto>().readNovelChapter.paragraphs
+        val paragraphs = client.get(url, Fetch.XHR).parseAs<NovelChapterObjectDto>().readNovelChapter.paragraphs
         if (paragraphs.isEmpty()) throw Exception("Chapter has no content")
 
         return paragraphs.joinToString("") { "<p>${Entities.escape(it)}</p>" }
@@ -226,7 +228,7 @@ abstract class AtsumaruNovels :
 
     override val supportsFilterFetching = true
 
-    override suspend fun fetchFilterData(): JsonElement = client.get("$baseUrl/api/explore/availableFilters").parseAs<FilterData>().toJsonElement()
+    override suspend fun fetchFilterData(): JsonElement = client.get("$baseUrl/api/explore/availableFilters", Fetch.XHR).parseAs<FilterData>().toJsonElement()
 
     override fun getFilterList(data: JsonElement?): FilterList {
         val excludedGenres = prefs.getStringSet(PREF_EXCLUDE_GENRES, emptySet()).orEmpty()
@@ -297,7 +299,7 @@ abstract class AtsumaruNovels :
 
         entries.chunked(SYNC_CHUNK_SIZE).forEach { chunk ->
             val body = buildJsonObject { put("progress", buildJsonArray { chunk.forEach(::add) }) }
-            client.post("$baseUrl/api/read/syncProgress", body.toJsonRequestBody()).close()
+            client.post("$baseUrl/api/read/syncProgress", Fetch.XHR, body.toJsonRequestBody()).close()
         }
 
         if (prefs.getBoolean(PREF_MARK_COMPLETED, true) && allChapters.isNotEmpty() && allChapters.all { it.isRead() }) {
@@ -319,7 +321,7 @@ abstract class AtsumaruNovels :
                 },
             )
         }
-        client.post("$baseUrl/api/user/syncBookmarks", body.toJsonRequestBody()).close()
+        client.post("$baseUrl/api/user/syncBookmarks", Fetch.XHR, body.toJsonRequestBody()).close()
     }
 
     private fun SChapter.isRead(): Boolean = try {

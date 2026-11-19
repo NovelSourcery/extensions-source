@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.novelight
 
-import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
@@ -15,10 +14,12 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.formattedText
+import keiyoushi.utils.getPreferences
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.setNumber
 import keiyoushi.utils.setVolume
@@ -30,7 +31,6 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
-import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.time.LocalDate
 import java.time.ZoneId
@@ -51,13 +51,13 @@ abstract class Novelight :
     private val chapterPath = SlugPath("/book/chapter/")
 
     private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+        getPreferences()
     }
     private val hideLocked get() = preferences.getBoolean(PREF_HIDE_LOCKED, true)
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseCatalog(client.get("$baseUrl/catalog/?ordering=popularity&page=$page", headers))
+    override suspend fun getPopularManga(page: Int): MangasPage = parseCatalog(client.get("$baseUrl/catalog/?ordering=popularity&page=$page", headers, Fetch.DOCUMENT))
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseCatalog(client.get("$baseUrl/catalog/?ordering=-time_updated&page=$page", headers))
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseCatalog(client.get("$baseUrl/catalog/?ordering=-time_updated&page=$page", headers, Fetch.DOCUMENT))
 
     private fun parseCatalog(response: Response): MangasPage {
         val doc = response.asJsoup()
@@ -81,7 +81,7 @@ abstract class Novelight :
             .addQueryParameter("search", query)
             .addQueryParameter("page", page.toString())
             .build()
-        return parseCatalog(client.get(url, headers))
+        return parseCatalog(client.get(url, headers, Fetch.DOCUMENT))
     }
 
     private fun parseMangaDetails(doc: Document): SManga = SManga.create().apply {
@@ -126,7 +126,7 @@ abstract class Novelight :
         }
 
         // fetchChapters is true: one fetch of the details page serves both outputs.
-        val rawBody = client.get(mangaPath.absolute(baseUrl, manga.url), headers).body.string()
+        val rawBody = client.get(mangaPath.absolute(baseUrl, manga.url), headers, Fetch.DOCUMENT).body.string()
         val detailDoc = Jsoup.parse(rawBody, baseUrl)
         val updatedManga = if (fetchDetails) parseMangaDetails(detailDoc) else manga
 
@@ -157,7 +157,7 @@ abstract class Novelight :
                     .add("X-Requested-With", "XMLHttpRequest")
                     .build(),
             )
-            val payload = client.get(req.url, req.headers).body.string().parseAs<HtmlPayload>()
+            val payload = client.get(req.url, req.headers, Fetch.XHR).body.string().parseAs<HtmlPayload>()
             return Jsoup.parse("<html>${payload.html}</html>", baseUrl).select("a").mapNotNull { a ->
                 val titleEl = a.selectFirst(".title")
                 val fullTitle = titleEl?.text().orEmpty()
@@ -228,7 +228,7 @@ abstract class Novelight :
         return SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private suspend fun fetchDetailsDoc(manga: SManga): Document = client.get(mangaPath.absolute(baseUrl, manga.url), headers).asJsoup()
+    private suspend fun fetchDetailsDoc(manga: SManga): Document = client.get(mangaPath.absolute(baseUrl, manga.url), headers, Fetch.DOCUMENT).asJsoup()
 
     private fun parseDate(date: String?): Long {
         if (date.isNullOrBlank()) return 0L
@@ -243,7 +243,7 @@ abstract class Novelight :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val path = url.encodedPath
-        val response = client.get(url, headers, ensureSuccess = false)
+        val response = client.get(url, headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         val doc = response.asJsoup()
         return parseMangaDetails(doc).apply { this.url = mangaPath.slug(path) }
@@ -265,7 +265,7 @@ abstract class Novelight :
                 .add("X-Requested-With", "XMLHttpRequest")
                 .build(),
         )
-        val data = client.get(req.url, req.headers).body.string().parseAs<ReadChapter>()
+        val data = client.get(req.url, req.headers, Fetch.XHR).body.string().parseAs<ReadChapter>()
         if (data.content.isBlank()) return ""
         val doc = Jsoup.parse(data.content, baseUrl)
         doc.select("script, ins, .advertisment, .adsbygoogle").remove()

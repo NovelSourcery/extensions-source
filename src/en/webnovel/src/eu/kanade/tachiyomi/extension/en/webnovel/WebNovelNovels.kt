@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.webnovel
 
-import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.CheckBoxPreference
 import androidx.preference.EditTextPreference
@@ -17,10 +16,12 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.firstInstanceOrNull
+import keiyoushi.utils.getPreferences
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonElement
@@ -28,7 +29,6 @@ import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Response
-import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
 @Source
@@ -51,7 +51,7 @@ abstract class WebNovelNovels :
         .set("User-Agent", userAgent)
 
     // Popular
-    override suspend fun getPopularManga(page: Int): MangasPage = parsePopularOrLatest(client.get("$baseUrl/stories/novel?orderBy=1&pageIndex=$page", headers))
+    override suspend fun getPopularManga(page: Int): MangasPage = parsePopularOrLatest(client.get("$baseUrl/stories/novel?orderBy=1&pageIndex=$page", headers, Fetch.DOCUMENT))
 
     private fun parsePopularOrLatest(response: Response): MangasPage {
         val document = response.asJsoup()
@@ -121,7 +121,7 @@ abstract class WebNovelNovels :
     }
 
     // Latest
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parsePopularOrLatest(client.get("$baseUrl/stories/novel?orderBy=5&pageIndex=$page", headers))
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parsePopularOrLatest(client.get("$baseUrl/stories/novel?orderBy=5&pageIndex=$page", headers, Fetch.DOCUMENT))
 
     // Search
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
@@ -129,13 +129,13 @@ abstract class WebNovelNovels :
             val searchType = filters.firstInstanceOrNull<SearchTypeFilter>()?.toUriPart() ?: defaultSearchType
             return when (searchType) {
                 "both" -> coroutineScope {
-                    val novelDeferred = async { parseSearchResponse(client.get(searchUrl(query, "novel", page), headers)) }
-                    val fanficDeferred = async { parseSearchResponse(client.get(searchUrl(query, "fanfic", page), headers)) }
+                    val novelDeferred = async { parseSearchResponse(client.get(searchUrl(query, "novel", page), headers, Fetch.DOCUMENT)) }
+                    val fanficDeferred = async { parseSearchResponse(client.get(searchUrl(query, "fanfic", page), headers, Fetch.DOCUMENT)) }
                     val novel = novelDeferred.await()
                     val fanfic = fanficDeferred.await()
                     MangasPage(novel.mangas + fanfic.mangas, novel.hasNextPage || fanfic.hasNextPage)
                 }
-                else -> parseSearchResponse(client.get(searchUrl(query, searchType, page), headers))
+                else -> parseSearchResponse(client.get(searchUrl(query, searchType, page), headers, Fetch.DOCUMENT))
             }
         }
 
@@ -185,7 +185,7 @@ abstract class WebNovelNovels :
                 .addQueryParameter("orderBy", sort)
                 .addQueryParameter("pageIndex", page.toString())
             applyContentType(fanficBuilder, type)
-            return parseSearchResponse(client.get(fanficBuilder.build().toString(), headers))
+            return parseSearchResponse(client.get(fanficBuilder.build().toString(), headers, Fetch.DOCUMENT))
         }
 
         if (genre.isNotEmpty()) {
@@ -194,7 +194,7 @@ abstract class WebNovelNovels :
                 .addQueryParameter("orderBy", sort)
                 .addQueryParameter("pageIndex", page.toString())
             applyContentType(genreBuilder, type)
-            return parseSearchResponse(client.get(genreBuilder.build().toString(), headers))
+            return parseSearchResponse(client.get(genreBuilder.build().toString(), headers, Fetch.DOCUMENT))
         }
 
         val builder = "$baseUrl/stories".toHttpUrl().newBuilder()
@@ -205,7 +205,7 @@ abstract class WebNovelNovels :
             .addQueryParameter("pageIndex", page.toString())
         applyContentType(builder, type)
 
-        return parseSearchResponse(client.get(builder.build().toString(), headers))
+        return parseSearchResponse(client.get(builder.build().toString(), headers, Fetch.DOCUMENT))
     }
 
     private fun searchUrl(query: String, type: String, page: Int): String = "$baseUrl/search?keywords=$query&type=$type&pageIndex=$page"
@@ -356,12 +356,12 @@ abstract class WebNovelNovels :
         fetchChapters: Boolean,
     ): SMangaUpdate = coroutineScope {
         val detailsDeferred = if (fetchDetails) {
-            async { parseMangaDetails(client.get(mangaPath.absolute(baseUrl, manga.url), headers)) }
+            async { parseMangaDetails(client.get(mangaPath.absolute(baseUrl, manga.url), headers, Fetch.DOCUMENT)) }
         } else {
             null
         }
         val chaptersDeferred = if (fetchChapters) {
-            async { parseChapterList(client.get(mangaPath.absolute(baseUrl, manga.url) + "/catalog", headers)) }
+            async { parseChapterList(client.get(mangaPath.absolute(baseUrl, manga.url) + "/catalog", headers, Fetch.DOCUMENT)) }
         } else {
             null
         }
@@ -404,7 +404,7 @@ abstract class WebNovelNovels :
     }
 
     private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+        getPreferences()
     }
 
     private val excludeLocked: Boolean
@@ -451,7 +451,7 @@ abstract class WebNovelNovels :
     override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val response = client.get(url.toString(), headers, ensureSuccess = false)
+        val response = client.get(url.toString(), headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response).apply { setSlugUrl(url.encodedPath) }
     }
@@ -460,7 +460,7 @@ abstract class WebNovelNovels :
 
     // Novel content
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(baseUrl + page.url, headers)
+        val response = client.get(baseUrl + page.url, headers, Fetch.DOCUMENT)
         val document = response.asJsoup()
 
         // Remove bloat elements (same as TS plugin)

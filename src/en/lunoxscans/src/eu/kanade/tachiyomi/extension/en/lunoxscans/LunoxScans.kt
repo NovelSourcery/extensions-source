@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.post
 import keiyoushi.utils.SlugPath
@@ -43,7 +44,7 @@ abstract class LunoxScans : MadaraNovel() {
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = parseListing(buildSearchMangaRequest(page, query, filters))
 
     private suspend fun parseListing(request: Request): MangasPage {
-        val document = client.get(request.url, headers).asJsoup()
+        val document = client.get(request.url, headers, Fetch.DOCUMENT).asJsoup()
         val mangas = document.select(".page-item-detail").map { card ->
             val link = card.selectFirst(".post-title a")!!
             SManga.create().apply {
@@ -59,7 +60,7 @@ abstract class LunoxScans : MadaraNovel() {
     override suspend fun getMangaByUrl(url: HttpUrl): SManga {
         val slug = url.pathSegments.takeIf { it.firstOrNull() == "series" }?.getOrNull(1)
             ?.takeIf { it.isNotEmpty() } ?: throw Exception("Unsupported URL")
-        return parseDetails(client.get("$baseUrl/series/$slug/", headers).asJsoup()).apply { this.url = slug }
+        return parseDetails(client.get("$baseUrl/series/$slug/", headers, Fetch.DOCUMENT).asJsoup()).apply { this.url = slug }
     }
 
     override suspend fun fetchMangaUpdate(
@@ -69,13 +70,13 @@ abstract class LunoxScans : MadaraNovel() {
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val mangaUrl = getMangaUrl(manga)
-        val document = client.get(mangaUrl, headers).asJsoup()
+        val document = client.get(mangaUrl, headers, Fetch.DOCUMENT).asJsoup()
         val updatedManga = if (fetchDetails) parseDetails(document) else manga
         extractPostId(document)?.let { cachePostId(mangaPathTemplate.resolve(manga.url), it) }
 
         val updatedChapters = if (fetchChapters) {
             val chapterHeaders = headersBuilder().set("Referer", mangaUrl).build()
-            val chapterDocument = client.post("${mangaUrl}ajax/chapters/", chapterHeaders, FormBody.Builder().build()).asJsoup()
+            val chapterDocument = client.post("${mangaUrl}ajax/chapters/", chapterHeaders, Fetch.XHR, FormBody.Builder().build()).asJsoup()
             parseChapters(chapterDocument, manga.url)
         } else {
             chapters

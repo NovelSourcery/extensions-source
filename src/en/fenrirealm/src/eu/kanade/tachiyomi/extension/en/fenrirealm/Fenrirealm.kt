@@ -16,6 +16,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.post
 import keiyoushi.source.KeiSource
@@ -170,7 +171,7 @@ abstract class Fenrirealm :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val request = buildPopularMangaRequest(page)
-        val novels = client.get(request.url, request.headers).parseAs<List<NovelDto>>()
+        val novels = client.get(request.url, request.headers, Fetch.XHR).parseAs<List<NovelDto>>()
         return MangasPage(novels.map { it.toSManga(baseUrl, mangaPathTemplate) }, false)
     }
 
@@ -178,7 +179,7 @@ abstract class Fenrirealm :
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val request = buildLatestUpdatesRequest(page)
-        return parseSearchResultsResponse(client.get(request.url, request.headers))
+        return parseSearchResultsResponse(client.get(request.url, request.headers, Fetch.XHR))
     }
 
     private fun parseSearchResultsResponse(response: Response): MangasPage {
@@ -193,7 +194,7 @@ abstract class Fenrirealm :
         if (!url.encodedPath.contains("/series/")) return null
         val slug = url.encodedPath.substringAfter("/series/").trim('/').substringBefore('/')
         if (slug.isBlank()) return null
-        val response = client.get("$apiBaseUrl/series/$slug", headers)
+        val response = client.get("$apiBaseUrl/series/$slug", headers, Fetch.XHR)
         return runCatching { response.parseAs<NovelDto>().toSManga(baseUrl, mangaPathTemplate) }.getOrNull()
     }
 
@@ -241,7 +242,7 @@ abstract class Fenrirealm :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val request = buildSearchMangaRequest(page, query, filters)
-        return parseSearchResultsResponse(client.get(request.url, request.headers))
+        return parseSearchResultsResponse(client.get(request.url, request.headers, Fetch.XHR))
     }
 
     override fun getMangaUrl(manga: SManga): String {
@@ -270,7 +271,7 @@ abstract class Fenrirealm :
         val detailsDeferred = if (fetchDetails) {
             async {
                 val request = buildMangaDetailsRequest(manga)
-                parseMangaDetails(client.get(request.url, request.headers))
+                parseMangaDetails(client.get(request.url, request.headers, Fetch.XHR))
             }
         } else {
             null
@@ -278,7 +279,7 @@ abstract class Fenrirealm :
         val chaptersDeferred = if (fetchChapters) {
             async {
                 val request = buildChapterListRequest(manga)
-                parseChapterList(client.get(request.url, request.headers))
+                parseChapterList(client.get(request.url, request.headers, Fetch.XHR))
             }
         } else {
             null
@@ -399,7 +400,7 @@ abstract class Fenrirealm :
     }
 
     private suspend fun fetchChapter(apiUrl: String): Pair<ChapterDto, String?> {
-        val response = client.get(apiUrl, chapterHeaders, ensureSuccess = false)
+        val response = client.get(apiUrl, chapterHeaders, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) {
             response.close()
             if (response.code == 429) throw Exception(RATE_LIMIT_MESSAGE)
@@ -421,6 +422,7 @@ abstract class Fenrirealm :
         val response = client.post(
             "$baseUrl/api/read-token",
             headers,
+            Fetch.XHR,
             ReadTokenRequest(target).toJsonRequestBody(),
             ensureSuccess = false,
         )
@@ -432,7 +434,7 @@ abstract class Fenrirealm :
     }
 
     private suspend fun activeReadToken(): String? {
-        val response = client.get("$baseUrl/api/read-token", headers, ensureSuccess = false)
+        val response = client.get("$baseUrl/api/read-token", headers, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) {
             response.close()
             return null
@@ -502,8 +504,8 @@ abstract class Fenrirealm :
     }
 
     override suspend fun fetchFilterData(): JsonElement = coroutineScope {
-        val genres = async { client.get("$apiBaseUrl/taxonomies/genres", headers).parseAs<List<TaxonomyDto>>() }
-        val tags = async { client.get("$apiBaseUrl/taxonomies/tags", headers).parseAs<List<TaxonomyDto>>() }
+        val genres = async { client.get("$apiBaseUrl/taxonomies/genres", headers, Fetch.XHR).parseAs<List<TaxonomyDto>>() }
+        val tags = async { client.get("$apiBaseUrl/taxonomies/tags", headers, Fetch.XHR).parseAs<List<TaxonomyDto>>() }
         FilterDataDto(
             genres = genres.await().map { TaxonomyDto(it.id, it.name) },
             tags = tags.await().filter { (it.seriesCount ?: 0) > 0 }.map { TaxonomyDto(it.id, it.name) }.sortedBy { it.name },

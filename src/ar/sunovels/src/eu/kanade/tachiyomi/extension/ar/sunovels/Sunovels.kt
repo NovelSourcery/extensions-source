@@ -13,6 +13,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -38,7 +39,7 @@ abstract class Sunovels :
      * pre-existing full-path entry and is resolved unchanged. */
     private val mangaPath = SlugPath("/novel/")
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parsePopularOrLatestResponse(client.get("$baseUrl/library?page=$page", headers))
+    override suspend fun getPopularManga(page: Int): MangasPage = parsePopularOrLatestResponse(client.get("$baseUrl/library?page=$page", headers, Fetch.DOCUMENT))
 
     private fun parsePopularOrLatestResponse(response: Response): MangasPage {
         val body = response.body?.string() ?: return MangasPage(emptyList(), false)
@@ -88,11 +89,11 @@ abstract class Sunovels :
         return MangasPage(novels.distinctBy { it.url }, hasNextPage)
     }
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parsePopularOrLatestResponse(client.get("$baseUrl/library?page=$page&sort=latest", headers))
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parsePopularOrLatestResponse(client.get("$baseUrl/library?page=$page&sort=latest", headers, Fetch.DOCUMENT))
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val q = java.net.URLEncoder.encode(query, "UTF-8")
-        val response = client.get("$baseUrl/search/?title=$q&page=$page", headers)
+        val response = client.get("$baseUrl/search/?title=$q&page=$page", headers, Fetch.DOCUMENT)
         val body = response.body?.string() ?: return MangasPage(emptyList(), false)
         val doc = Jsoup.parse(body, response.request.url.toString())
         val novels = mutableListOf<SManga>()
@@ -156,7 +157,7 @@ abstract class Sunovels :
         val detailsDeferred = if (fetchDetails) {
             async {
                 val request = buildMangaDetailsRequest(manga)
-                parseMangaDetails(client.get(request.url, request.headers))
+                parseMangaDetails(client.get(request.url, request.headers, Fetch.DOCUMENT))
             }
         } else {
             null
@@ -164,7 +165,7 @@ abstract class Sunovels :
         val chaptersDeferred = if (fetchChapters) {
             async {
                 val request = buildChapterListRequest(manga)
-                parseChapterList(client.get(request.url, request.headers))
+                parseChapterList(client.get(request.url, request.headers, Fetch.DOCUMENT))
             }
         } else {
             null
@@ -349,7 +350,7 @@ abstract class Sunovels :
         val path = mangaPath.slug(url.encodedPath)
         val manga = SManga.create().apply { this.url = path }
         val request = buildMangaDetailsRequest(manga)
-        val response = client.get(request.url, request.headers, ensureSuccess = false)
+        val response = client.get(request.url, request.headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response).apply { this.url = path }
     }
@@ -357,7 +358,7 @@ abstract class Sunovels :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get("$baseUrl${page.url}", headers)
+        val response = client.get("$baseUrl${page.url}", headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
         val content = doc.selectFirst(
             ".chapter-content, .content, .entry-content, .post-content, article, .text",

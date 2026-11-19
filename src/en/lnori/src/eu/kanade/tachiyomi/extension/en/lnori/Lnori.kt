@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.lnori
 
-import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
@@ -15,13 +14,15 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.getPreferences
+import keiyoushi.utils.jsonInstance
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -34,9 +35,7 @@ import okhttp3.HttpUrl
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
-import uy.kohesive.injekt.injectLazy
 
 @Source
 abstract class Lnori :
@@ -53,10 +52,8 @@ abstract class Lnori :
      */
     private val mangaPathTemplate = SlugPath("/series/")
 
-    private val json: Json by injectLazy()
-
     private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+        getPreferences()
     }
 
     private var cachedNovels: List<NovelData>? = null
@@ -112,7 +109,7 @@ abstract class Lnori :
 
         val novels = try {
             // Lnori exposes the entire series catalog at /library — fetch that page
-            val response = client.get("$baseUrl/library", headers)
+            val response = client.get("$baseUrl/library", headers, Fetch.DOCUMENT)
             // NOTE: the raw html string is also needed below (parseFromJsonScript regex-matches
             // over it), so the body can only be read once here - response.asJsoup() would
             // consume it a second time and throw, so parse the already-read string instead.
@@ -151,7 +148,7 @@ abstract class Lnori :
         val nextDataScript = document.selectFirst("script#__NEXT_DATA__")
         if (nextDataScript != null) {
             try {
-                val root = json.parseToJsonElement(nextDataScript.html()).jsonObject
+                val root = jsonInstance.parseToJsonElement(nextDataScript.html()).jsonObject
                 // Walk down props.pageProps to find an array of novels
                 val pageProps = root["props"]?.jsonObject?.get("pageProps")?.jsonObject
                 // Try common keys
@@ -179,7 +176,7 @@ abstract class Lnori :
                     .find(scriptBody)
             if (jsonMatch != null) {
                 try {
-                    val root = json.parseToJsonElement(jsonMatch.groupValues[1])
+                    val root = jsonInstance.parseToJsonElement(jsonMatch.groupValues[1])
                     val found = findNovelArrayInJson(root)
                     if (found.isNotEmpty()) return found
                 } catch (_: Exception) {}
@@ -188,7 +185,7 @@ abstract class Lnori :
             // Try JSON-LD with @type Book/CreativeWorkSeries
             if (scriptBody.contains("\"@type\"") && (scriptBody.contains("Book") || scriptBody.contains("Novel"))) {
                 try {
-                    val root = json.parseToJsonElement(scriptBody.trim())
+                    val root = jsonInstance.parseToJsonElement(scriptBody.trim())
                     val arr = when {
                         root.jsonObject.containsKey("@graph") -> root.jsonObject["@graph"]!!.jsonArray
                         root is JsonArray -> root.jsonArray
@@ -483,7 +480,7 @@ abstract class Lnori :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         // Details and the chapter/volume list both live on the same novel page - fetch it once.
-        val response = client.get(buildMangaDetailsUrl(manga), headers)
+        val response = client.get(buildMangaDetailsUrl(manga), headers, Fetch.DOCUMENT)
         val requestUrl = response.request.url
         val document = response.asJsoup()
 
@@ -497,7 +494,7 @@ abstract class Lnori :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
-        val response = client.get(buildMangaDetailsUrl(manga), headers, ensureSuccess = false)
+        val response = client.get(buildMangaDetailsUrl(manga), headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.asJsoup()).apply { this.url = manga.url }
     }
@@ -631,8 +628,8 @@ abstract class Lnori :
         if (allTags != cachedTags || allAuthors != cachedAuthors) {
             try {
                 preferences.edit()
-                    .putString(FILTERS_TAGS_KEY, json.encodeToString(allTags))
-                    .putString(FILTERS_AUTHORS_KEY, json.encodeToString(allAuthors))
+                    .putString(FILTERS_TAGS_KEY, jsonInstance.encodeToString(allTags))
+                    .putString(FILTERS_AUTHORS_KEY, jsonInstance.encodeToString(allAuthors))
                     .putLong(FILTERS_CACHE_TIME_KEY, System.currentTimeMillis())
                     .apply()
             } catch (_: Exception) {}
@@ -642,7 +639,7 @@ abstract class Lnori :
     private fun loadCachedNovels(): List<NovelData>? {
         val raw = preferences.getString(LIBRARY_CACHE_KEY, null) ?: return null
         return try {
-            json.decodeFromString(raw)
+            jsonInstance.decodeFromString(raw)
         } catch (_: Exception) {
             null
         }
@@ -653,7 +650,7 @@ abstract class Lnori :
     private fun saveCachedNovels(novels: List<NovelData>, timestamp: Long) {
         try {
             preferences.edit()
-                .putString(LIBRARY_CACHE_KEY, json.encodeToString(novels))
+                .putString(LIBRARY_CACHE_KEY, jsonInstance.encodeToString(novels))
                 .putLong(LIBRARY_CACHE_TIME_KEY, timestamp)
                 .apply()
         } catch (_: Exception) {}
@@ -676,7 +673,7 @@ abstract class Lnori :
     private fun loadCachedTags(): List<String> {
         val raw = preferences.getString(FILTERS_TAGS_KEY, null) ?: return emptyList()
         return try {
-            json.decodeFromString(raw)
+            jsonInstance.decodeFromString(raw)
         } catch (_: Exception) {
             emptyList()
         }
@@ -685,7 +682,7 @@ abstract class Lnori :
     private fun loadCachedAuthors(): List<String> {
         val raw = preferences.getString(FILTERS_AUTHORS_KEY, null) ?: return emptyList()
         return try {
-            json.decodeFromString(raw)
+            jsonInstance.decodeFromString(raw)
         } catch (_: Exception) {
             emptyList()
         }
@@ -754,7 +751,7 @@ abstract class Lnori :
             val jsonLd = document.selectFirst("script[type='application/ld+json']")
             if (jsonLd != null) {
                 try {
-                    val obj = json.parseToJsonElement(jsonLd.html().trim()).jsonObject
+                    val obj = jsonInstance.parseToJsonElement(jsonLd.html().trim()).jsonObject
                     val hasPart = obj["hasPart"]?.jsonArray ?: obj["bookEdition"]?.jsonArray
                     hasPart?.forEachIndexed { index, elem ->
                         try {
@@ -814,7 +811,7 @@ abstract class Lnori :
 
     override suspend fun fetchPageText(page: Page): String {
         val url = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val response = client.get(url, headers)
+        val response = client.get(url, headers, Fetch.DOCUMENT)
         val document = response.asJsoup()
 
         // Extract the main content container and return its HTML directly

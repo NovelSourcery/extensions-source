@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.brightnovels
 
-import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
@@ -14,9 +13,11 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
+import keiyoushi.utils.getPreferences
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -33,7 +34,6 @@ import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.parser.Parser
-import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.net.URLDecoder
 
@@ -83,7 +83,7 @@ abstract class BrightNovels :
         }
 
     private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+        getPreferences()
     }
 
     @kotlinx.serialization.Serializable
@@ -97,7 +97,7 @@ abstract class BrightNovels :
                 "order" to "desc",
             ),
         )
-        return parseSeriesListing(client.get(request.url, request.headers))
+        return parseSeriesListing(client.get(request.url, request.headers, Fetch.XHR))
     }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
@@ -108,7 +108,7 @@ abstract class BrightNovels :
                 "order" to "desc",
             ),
         )
-        return parseSeriesListing(client.get(request.url, request.headers))
+        return parseSeriesListing(client.get(request.url, request.headers, Fetch.XHR))
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
@@ -117,7 +117,7 @@ abstract class BrightNovels :
                 .addQueryParameter("query", query)
                 .build()
                 .toString()
-            return parseApiSearch(client.get(searchUrl, headers))
+            return parseApiSearch(client.get(searchUrl, headers, Fetch.XHR))
         }
 
         val params = mutableMapOf<String, String>()
@@ -176,7 +176,7 @@ abstract class BrightNovels :
         }
 
         val request = seriesRequest(page, params)
-        return parseSeriesListing(client.get(request.url, request.headers))
+        return parseSeriesListing(client.get(request.url, request.headers, Fetch.XHR))
     }
 
     private fun slugOf(manga: SManga): String = decodePathSegment(
@@ -197,7 +197,7 @@ abstract class BrightNovels :
         // Details and the chapter list both come from the same series page - fetch and parse the
         // body once, since the response can only be consumed once.
         val request = buildMangaDetailsRequest(manga)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.DOCUMENT)
         val fallbackSeriesSlug = response.request.url.pathSegments
             .lastOrNull { it.isNotBlank() }
             ?.let(::decodePathSegment)
@@ -286,7 +286,7 @@ abstract class BrightNovels :
         // The app's getPageList short-circuit hands us the raw (relative) chapter url,
         // so rebuild an absolute url before requesting it.
         val request = inertiaRequest(absoluteUrl(page.url))
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.DOCUMENT)
         val body = response.body.string()
         val props = extractInertiaProps(body, response.headers)
         val chapter = props["chapter"].asObject() ?: return ""
@@ -301,7 +301,7 @@ abstract class BrightNovels :
         val slug = url.pathSegments.lastOrNull { it.isNotBlank() }?.let(::decodePathSegment) ?: return null
         val manga = SManga.create().apply { this.url = encodePathSegment(slug) }
         val request = buildMangaDetailsRequest(manga)
-        val response = client.get(request.url, request.headers, ensureSuccess = false)
+        val response = client.get(request.url, request.headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response)
     }
@@ -746,7 +746,7 @@ abstract class BrightNovels :
 
     private suspend fun fetchChapterObjectsFromEndpoint(seriesSlug: String, premium: Boolean): List<JsonElement> = try {
         val request = chapterEndpointRequest(seriesSlug, premium)
-        val response = client.get(request.url, request.headers)
+        val response = client.get(request.url, request.headers, Fetch.XHR)
         parseChapterObjectsFromBody(response.body.string(), response.headers)
     } catch (_: Exception) {
         emptyList()

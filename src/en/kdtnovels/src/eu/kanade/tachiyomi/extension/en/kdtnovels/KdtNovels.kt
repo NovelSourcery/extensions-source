@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -46,7 +47,7 @@ abstract class KdtNovels :
     private val chapterPath = SlugPath("/", "/")
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val document = client.get("$baseUrl/?page=$page", headers).asJsoup()
+        val document = client.get("$baseUrl/?page=$page", headers, Fetch.DOCUMENT).asJsoup()
         return document.parseSeriesPage(page)
     }
 
@@ -62,7 +63,7 @@ abstract class KdtNovels :
                 filters.firstInstanceOrNull<TypeFilter>()?.toValue()?.let { addQueryParameter("novel_type", it) }
             }.build()
 
-        val document = client.get(url, headers).asJsoup()
+        val document = client.get(url, headers, Fetch.DOCUMENT).asJsoup()
         return document.parseSeriesPage(page)
     }
 
@@ -83,7 +84,7 @@ abstract class KdtNovels :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         if (!url.encodedPath.startsWith("/series/")) return null
         val slug = mangaPath.slug(url.encodedPath)
-        val response = client.get(mangaPath.absolute(baseUrl, slug), headers, ensureSuccess = false)
+        val response = client.get(mangaPath.absolute(baseUrl, slug), headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.asJsoup()).apply { this.url = slug }
     }
@@ -94,7 +95,7 @@ abstract class KdtNovels :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val document = client.get(mangaPath.absolute(baseUrl, manga.url), headers).asJsoup()
+        val document = client.get(mangaPath.absolute(baseUrl, manga.url), headers, Fetch.DOCUMENT).asJsoup()
         val updatedManga = parseMangaDetails(document)
         val updatedChapters = document.extractNextJs<ChapterVolumesDto>()?.let { parseChapterList(it) }.orEmpty()
         return SMangaUpdate(updatedManga, updatedChapters)
@@ -138,7 +139,7 @@ abstract class KdtNovels :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapterPath.absolute(baseUrl, chapter.url)))
 
     override suspend fun fetchPageText(page: Page): String {
-        val document = client.get(page.url, headers).asJsoup()
+        val document = client.get(page.url, headers, Fetch.DOCUMENT).asJsoup()
         // Illustration-only chapters have no div.text-content, just image placeholders in the article.
         val content = document.selectFirst("article.reader-content div.text-content")
             ?: document.selectFirst("article.reader-content")
@@ -151,7 +152,7 @@ abstract class KdtNovels :
     }
 
     override suspend fun fetchFilterData(): JsonElement {
-        val document = client.get("$baseUrl/search/", headers).asJsoup()
+        val document = client.get("$baseUrl/search/", headers, Fetch.DOCUMENT).asJsoup()
         return FilterDataDto(
             genres = document.select("select[aria-label*=genre] option[value]:not([value=\"\"])").map {
                 FilterOptionDto(it.attr("value"), it.text().replace(COUNT_SUFFIX_REGEX, ""))

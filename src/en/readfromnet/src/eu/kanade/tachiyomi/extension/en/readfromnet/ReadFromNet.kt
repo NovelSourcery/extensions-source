@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -42,7 +43,7 @@ abstract class ReadFromNet :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val popularRequest = buildPopularMangaRequest(page)
-        val doc = client.get(popularRequest.url, popularRequest.headers).asJsoup()
+        val doc = client.get(popularRequest.url, popularRequest.headers, Fetch.DOCUMENT).asJsoup()
         val novels = parseNovels(doc, isSearch = false)
         val hasNextPage = doc.selectFirst("div.navigation a:contains(Next)") != null
         return MangasPage(novels, hasNextPage)
@@ -53,7 +54,7 @@ abstract class ReadFromNet :
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val latestRequest = buildLatestUpdatesRequest(page)
-        val doc = client.get(latestRequest.url, latestRequest.headers).asJsoup()
+        val doc = client.get(latestRequest.url, latestRequest.headers, Fetch.DOCUMENT).asJsoup()
         val novels = parseNovels(doc, isSearch = false)
         val hasNextPage = doc.selectFirst("div.navigation a:contains(Next)") != null
         return MangasPage(novels, hasNextPage)
@@ -67,7 +68,7 @@ abstract class ReadFromNet :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val searchRequest = buildSearchMangaRequest(page, query, filters)
-        val doc = client.get(searchRequest.url, searchRequest.headers).asJsoup()
+        val doc = client.get(searchRequest.url, searchRequest.headers, Fetch.DOCUMENT).asJsoup()
         // LN Reader: search uses "div.text > article.box" selector
         val novels = parseNovels(doc, isSearch = true)
         return MangasPage(novels, false) // Search doesn't support pagination
@@ -106,7 +107,7 @@ abstract class ReadFromNet :
     ): SMangaUpdate {
         // Details and the chapter list both live on the same novel page - fetch it once.
         val mangaDetailsRequest = buildMangaDetailsRequest(manga)
-        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, Fetch.DOCUMENT)
         val novelPath = response.request.url.encodedPath
         val doc = response.asJsoup()
 
@@ -118,7 +119,7 @@ abstract class ReadFromNet :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val mangaUrl = mangaPathTemplate.slug(url.encodedPath)
-        val response = client.get(url, headers, ensureSuccess = false)
+        val response = client.get(url, headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.asJsoup()).apply { this.url = mangaUrl }
     }
@@ -201,7 +202,7 @@ abstract class ReadFromNet :
 
     override suspend fun fetchPageText(page: Page): String {
         val pageUrl = if (page.url.startsWith("http")) page.url else baseUrl + page.url
-        val response = client.get(pageUrl, headers)
+        val response = client.get(pageUrl, headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
 
         val textElement = doc.selectFirst("#textToRead") ?: return ""

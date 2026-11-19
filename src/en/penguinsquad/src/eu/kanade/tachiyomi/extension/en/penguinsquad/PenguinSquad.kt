@@ -15,6 +15,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -60,14 +61,14 @@ abstract class PenguinSquad :
 
     override suspend fun getPopularManga(page: Int): MangasPage {
         val popularRequest = buildPopularMangaRequest(page)
-        return MangasPage(client.get(popularRequest.url, popularRequest.headers).asJsoup().parseNovelCards(), false)
+        return MangasPage(client.get(popularRequest.url, popularRequest.headers, Fetch.DOCUMENT).asJsoup().parseNovelCards(), false)
     }
 
     protected open fun buildLatestUpdatesRequest(page: Int): Request = GET(baseUrl, headers)
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val latestRequest = buildLatestUpdatesRequest(page)
-        val doc = client.get(latestRequest.url, latestRequest.headers).asJsoup()
+        val doc = client.get(latestRequest.url, latestRequest.headers, Fetch.DOCUMENT).asJsoup()
         val section = doc.select("section")
             .firstOrNull { it.selectFirst("h2")?.ownText() == "Newly Added" }
             ?: doc
@@ -91,7 +92,7 @@ abstract class PenguinSquad :
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val searchRequest = buildSearchMangaRequest(page, query, filters)
-        val response = client.get(searchRequest.url, searchRequest.headers)
+        val response = client.get(searchRequest.url, searchRequest.headers, Fetch.DOCUMENT)
         val cards = response.asJsoup().parseNovelCards()
             .filter { query.isBlank() || it.title.contains(query, ignoreCase = true) }
         return MangasPage(cards, false)
@@ -119,7 +120,7 @@ abstract class PenguinSquad :
     ): SMangaUpdate {
         // Details and the chapter list both live on the same novel page - fetch it once.
         val mangaDetailsRequest = buildMangaDetailsRequest(manga)
-        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, Fetch.DOCUMENT)
         val doc = response.asJsoup()
 
         val updatedManga = if (fetchDetails) parseMangaDetails(doc, response) else manga
@@ -160,7 +161,7 @@ abstract class PenguinSquad :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val manga = SManga.create().apply { this.url = mangaPathTemplate.slug(url.encodedPath) }
         val mangaDetailsRequest = buildMangaDetailsRequest(manga)
-        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, ensureSuccess = false)
+        val response = client.get(mangaDetailsRequest.url, mangaDetailsRequest.headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.asJsoup(), response)
     }
@@ -221,7 +222,7 @@ abstract class PenguinSquad :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val response = client.get(baseUrl + page.url, headers)
+        val response = client.get(baseUrl + page.url, headers, Fetch.DOCUMENT)
         val content = response.asJsoup().selectFirst("div.reader-content")
             ?: throw Exception("Chapter content not found – this may be a premium chapter")
         return content.html()

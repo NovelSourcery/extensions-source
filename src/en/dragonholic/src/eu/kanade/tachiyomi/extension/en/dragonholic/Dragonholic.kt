@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.lib.chapterutils.shouldReturnExisting
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -58,9 +59,9 @@ abstract class Dragonholic :
 
     // ======================== Popular / Latest ========================
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseBrowseResponse(client.get(buildBrowseUrl(page, sort = "trending", order = "desc"), headers))
+    override suspend fun getPopularManga(page: Int): MangasPage = parseBrowseResponse(client.get(buildBrowseUrl(page, sort = "trending", order = "desc"), headers, Fetch.DOCUMENT))
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseBrowseResponse(client.get(buildBrowseUrl(page, sort = "updated", order = "desc"), headers))
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseBrowseResponse(client.get(buildBrowseUrl(page, sort = "updated", order = "desc"), headers, Fetch.DOCUMENT))
 
     private fun buildBrowseUrl(page: Int, sort: String, order: String): HttpUrl {
         // WP-style path pagination ("/browse/page/N/"); page 1 has no "/page/1/" segment.
@@ -115,7 +116,7 @@ abstract class Dragonholic :
             genres.forEach { addQueryParameter("genres[]", it) }
         }.build()
 
-        return parseBrowseResponse(client.get(url, headers))
+        return parseBrowseResponse(client.get(url, headers, Fetch.DOCUMENT))
     }
 
     // Genre/translator option lists are dynamic (33 genres, 200+ translators) and only available
@@ -124,7 +125,7 @@ abstract class Dragonholic :
     // enums, so those stay as plain hardcoded Filter.Select options. Tags are NOT fetched this
     // way (see FilterData) - the tag cloud has 12,000+ entries.
     override suspend fun fetchFilterData(): JsonElement {
-        val html = client.get("$baseUrl/browse/", headers).body.string()
+        val html = client.get("$baseUrl/browse/", headers, Fetch.XHR).body.string()
         return FilterData(
             genres = extractAlpineOptions(html, "genres"),
             translators = extractTranslatorOptions(html),
@@ -237,7 +238,7 @@ abstract class Dragonholic :
         if (!fetchDetails && !fetchChapters) return SMangaUpdate(manga, chapters)
 
         // Details and the chapters API's series_id both come off the same novel page.
-        val doc = client.get(buildMangaDetailsUrl(manga), headers).asJsoup()
+        val doc = client.get(buildMangaDetailsUrl(manga), headers, Fetch.DOCUMENT).asJsoup()
         val updatedManga = if (fetchDetails) parseMangaDetails(doc) else manga
         val updatedChapters = if (fetchChapters) fetchChapterList(manga, doc, chapters) else chapters
 
@@ -286,6 +287,7 @@ abstract class Dragonholic :
             client.get(
                 "$baseUrl/api/chapters?series_id=$seriesId&sort_order=desc&per_page=5000",
                 headers,
+                Fetch.XHR,
             ).parseAs<ChaptersResponse>()
         }.getOrNull()
         if (result == null || !result.success) return existingChapters
@@ -321,7 +323,7 @@ abstract class Dragonholic :
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = mangaPath.slug(url.encodedPath)
         val manga = SManga.create().apply { this.url = slug }
-        val response = client.get(buildMangaDetailsUrl(manga), headers, ensureSuccess = false)
+        val response = client.get(buildMangaDetailsUrl(manga), headers, Fetch.DOCUMENT, ensureSuccess = false)
         if (!response.isSuccessful) return null
         return parseMangaDetails(response.asJsoup()).apply { this.url = slug }
     }
@@ -333,7 +335,7 @@ abstract class Dragonholic :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, chapter.url))
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.get(baseUrl + page.url, headers).asJsoup()
+        val doc = client.get(baseUrl + page.url, headers, Fetch.DOCUMENT).asJsoup()
         return doc.selectFirst(".chapter-content")?.html().orEmpty()
     }
 
