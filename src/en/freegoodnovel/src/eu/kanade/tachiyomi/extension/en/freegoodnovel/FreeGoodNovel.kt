@@ -65,7 +65,10 @@ abstract class FreeGoodNovel :
         return MangasPage(data.items.map { it.toSManga(baseUrl) }, data.page < data.totalPages)
     }
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.title.toWebSlug()}/${manga.url}"
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl/novel/${manga.title.toWebSlug()}/${manga.slug()}"
+
+    // Entries imported from a page url carry the full page path instead of the trailing id.
+    private fun SManga.slug(): String = url.trimEnd('/').substringAfterLast('/')
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         if (url.pathSegments.firstOrNull() != "novel") return null
@@ -83,12 +86,12 @@ abstract class FreeGoodNovel :
     ): SMangaUpdate = coroutineScope {
         val details = async {
             if (fetchDetails) {
-                client.get("$apiUrl/novels/records/${manga.url}", Fetch.XHR).parseAs<NovelDto>().toSManga(baseUrl)
+                client.get("$apiUrl/novels/records/${manga.slug()}", Fetch.XHR).parseAs<NovelDto>().toSManga(baseUrl)
             } else {
                 manga
             }
         }
-        val chapterList = async { if (fetchChapters) fetchChapterList(manga.url) else chapters }
+        val chapterList = async { if (fetchChapters) fetchChapterList(manga.slug()) else chapters }
         SMangaUpdate(details.await(), chapterList.await())
     }
 
