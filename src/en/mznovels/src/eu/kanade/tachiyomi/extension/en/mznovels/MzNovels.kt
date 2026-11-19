@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.novelextension.en.mznovels
 
-import android.app.Application
 import android.content.SharedPreferences
 import eu.kanade.tachiyomi.source.NovelSource
 import eu.kanade.tachiyomi.source.model.Filter
@@ -18,11 +17,11 @@ import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.formattedText
+import keiyoushi.utils.getPreferences
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
 import okhttp3.Response
 import org.jsoup.nodes.Document
-import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
 /**
@@ -36,7 +35,7 @@ abstract class MzNovels :
     NovelSource {
 
     private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+        getPreferences()
     }
 
     /**

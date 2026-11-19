@@ -35,7 +35,8 @@ class NextJsTest {
     data class FixtureMarkers(
         val name: String,
         val big: ReactFlightBigInt,
-        val date: Instant,
+        // String, not Instant: the fork pins kotlinx.serialization 1.7.3 (see libs.versions.toml), which has no Instant serializer
+        val date: String,
         val inf: ReactFlightNumber,
         val negInf: ReactFlightNumber,
         val nan: ReactFlightNumber,
@@ -51,7 +52,7 @@ class NextJsTest {
         m!!
         assertEquals("hello", m.name)
         assertEquals("123456789012345678901234567890", m.big.toString())
-        assertEquals(1704164645000L, m.date.toEpochMilliseconds())
+        assertEquals(1704164645000L, Instant.parse(m.date).toEpochMilliseconds())
         assertTrue(m.inf.toDouble() == Double.POSITIVE_INFINITY)
         assertTrue(m.negInf.toDouble() == Double.NEGATIVE_INFINITY)
         assertTrue(m.nan.toDouble().isNaN())
