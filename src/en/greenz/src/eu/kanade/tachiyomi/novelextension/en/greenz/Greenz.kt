@@ -64,11 +64,13 @@ abstract class Greenz :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val id = manga.url.substringAfter("#")
-        val slug = manga.url.substringBefore("#").substringAfterLast("/")
+        val slug = manga.url.substringBefore("#").trimEnd('/').substringAfterLast("/")
+        // Imported entries can arrive without the "#id" suffix; recover the id from the slug.
+        val bySlug = if ('#' !in manga.url) fetchNovelBySlug(slug) else null
+        val id = bySlug?.id?.toString() ?: manga.url.substringAfter("#")
 
         val updatedManga = if (fetchDetails) {
-            client.get("$API_URL/novels/$id", headers, Fetch.XHR).parseAs<SingleResponse<NovelDto>>().data.toSManga()
+            (bySlug ?: client.get("$API_URL/novels/$id", headers, Fetch.XHR).parseAs<SingleResponse<NovelDto>>().data).toSManga()
         } else {
             manga
         }
@@ -94,10 +96,12 @@ abstract class Greenz :
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         val slug = url.pathSegments.lastOrNull { it.isNotEmpty() } ?: return null
-        val response = client.get("$API_URL/novels?slug=$slug", headers, Fetch.XHR, ensureSuccess = false)
+        val response = client.get("$API_URL/novels/slug/$slug", headers, Fetch.XHR, ensureSuccess = false)
         if (!response.isSuccessful) return null
-        return response.parseAs<PageResponse<NovelDto>>().data.items.firstOrNull()?.toSManga()
+        return response.parseAs<SingleResponse<NovelDto>>().data.toSManga()
     }
+
+    private suspend fun fetchNovelBySlug(slug: String): NovelDto = client.get("$API_URL/novels/slug/$slug", headers, Fetch.XHR).parseAs<SingleResponse<NovelDto>>().data
 
     override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapter.url.substringBefore("#")
 
@@ -165,7 +169,7 @@ abstract class Greenz :
 
     @Serializable
     private class NovelDto(
-        private val id: Int,
+        val id: Int,
         private val name: String,
         private val slug: String,
         private val status: String,
