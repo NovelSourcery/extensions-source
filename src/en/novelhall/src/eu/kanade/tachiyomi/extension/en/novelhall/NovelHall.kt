@@ -95,14 +95,15 @@ abstract class NovelHall :
         return MangasPage(novels, hasNextPage)
     }
 
-    protected open fun buildLatestUpdatesRequest(page: Int): Request = GET("$baseUrl/lastupdate.html", headers)
+    protected open fun buildLatestUpdatesRequest(page: Int): Request = if (page <= 1) GET("$baseUrl/lastupdate.html", headers) else buildPopularMangaRequest(page - 1)
 
-    // lastupdate.html is a single static page with no pagination.
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val latestRequest = buildLatestUpdatesRequest(page)
         val response = client.get(latestRequest.url, latestRequest.headers, Fetch.DOCUMENT)
         val document = response.asJsoup()
-        return MangasPage(parseNovelList(document).mangas, false)
+        if (page > 1) return parseNovelList(document, response.request.url.toString())
+        val novels = parseNovelList(document).mangas
+        return MangasPage(novels, novels.isNotEmpty())
     }
 
     protected open fun buildSearchMangaRequest(page: Int, query: String, filters: FilterList): Request {
