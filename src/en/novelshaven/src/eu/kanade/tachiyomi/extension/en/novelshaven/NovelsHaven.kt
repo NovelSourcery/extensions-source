@@ -75,7 +75,10 @@ abstract class NovelsHaven :
         return MangasPage(mangas, hasNextPage)
     }
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl/series/${manga.url}"
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl/series/${manga.slug()}"
+
+    // Entries imported from a page url carry the full page path instead of the bare slug.
+    private fun SManga.slug(): String = url.substringBefore('?').trimEnd('/').substringAfterLast("/series/").trim('/')
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         if (url.pathSegments.firstOrNull() != "series") return null
@@ -96,7 +99,7 @@ abstract class NovelsHaven :
             ?.get("chapters")?.jsonArray.orEmpty()
             .map { flight.resolve(it).parseAs<ChapterDto>() }
             .filter { !it.isPadding && (showLocked || !it.isPremium) }
-            .map { it.toSChapter(manga.url) }
+            .map { it.toSChapter(manga.slug()) }
             .reversed()
         return SMangaUpdate(flight.series().toSManga(), chapterList)
     }

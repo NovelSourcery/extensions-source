@@ -12,10 +12,11 @@ keiyoushi {
 
     source {
         lang = "en"
-        baseUrl = "https://novelshaven.com"
+        baseUrl = "https://novelshaventranslations.com"
     }
 
     deeplink {
+        host("novelshaventranslations.com")
         host("novelshaven.com")
         path("/series/..*")
     }

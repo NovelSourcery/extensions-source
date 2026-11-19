@@ -51,14 +51,19 @@ class Flight(private val models: Map<String, JsonElement>, private val texts: Ma
 
     companion object {
         private val ELEMENT_FIELDS = listOf("$", "type", "key", "props")
+        private val VINEXT_PUSH_REGEX = Regex("""\.rsc\.push\(("(?:[^"\\]|\\.)*")\)""")
         private val PUSH_REGEX = Regex("""^\s*self\.__next_f\.push\((\[.*])\)\s*;?\s*$""", RegexOption.DOT_MATCHES_ALL)
         private val ROW_ID_REGEX = Regex("""[0-9a-f]+""")
 
         fun parse(document: Document): Flight {
             val stream = document.select("script:not([src])").joinToString("") { script ->
-                val push = PUSH_REGEX.find(script.data())?.groupValues?.get(1) ?: return@joinToString ""
-                val chunk = jsonInstance.parseToJsonElement(push).jsonArray
-                if (chunk[0].jsonPrimitive.contentOrNull == "1") chunk[1].jsonPrimitive.content else ""
+                val data = script.data()
+                PUSH_REGEX.find(data)?.groupValues?.get(1)?.let { push ->
+                    val chunk = jsonInstance.parseToJsonElement(push).jsonArray
+                    return@joinToString if (chunk[0].jsonPrimitive.contentOrNull == "1") chunk[1].jsonPrimitive.content else ""
+                }
+                // The site now runs on vinext, which pushes the raw stream as plain strings.
+                VINEXT_PUSH_REGEX.findAll(data).joinToString("") { jsonInstance.parseToJsonElement(it.groupValues[1]).jsonPrimitive.content }
             }
             return parseStream(stream)
         }
