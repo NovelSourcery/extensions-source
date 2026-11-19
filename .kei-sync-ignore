@@ -34,7 +34,6 @@ core/src/main/kotlin/keiyoushi/utils/ChapterName.kt
 core/src/main/kotlin/keiyoushi/utils/Jsoup.kt
 core/src/main/kotlin/keiyoushi/utils/SChapterExt.kt
 core/src/main/kotlin/keiyoushi/utils/SMangaExt.kt
-gradle/build-logic/src/main/kotlin/PluginExtensionLegacy.kt
 gradle/ns.versions.toml
 
 # kei's own kei.versions.toml -- we never carry this. Our fork registers the
