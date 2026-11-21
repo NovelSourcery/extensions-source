@@ -6,8 +6,7 @@ plugins {
 
 keiyoushi {
     name = "WTR-LAB"
-    pkgName = "en.wtrlab"
-    versionCode = 16
+    versionCode = 17
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 
