@@ -19,6 +19,8 @@ import keiyoushi.utils.firstInstanceOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.doubleOrNull
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -115,8 +117,10 @@ abstract class ArabNovels :
         return dto.chapters.map { chapter ->
             SChapter.create().apply {
                 name = chapter.title
-                url = "$slug/${chapter.number}"
-                chapter_number = chapter.number.toFloat()
+                // The site may use fractional chapter numbers (e.g. 1420.5 for side chapters),
+                // so keep the raw literal for the URL and the numeric value for sorting.
+                url = "$slug/${chapter.number.content}"
+                chapter_number = chapter.number.doubleOrNull?.toFloat() ?: 0f
                 date_upload = chapter.publishedAt.let { Instant.parseOrNull(it) }?.toEpochMilliseconds() ?: 0L
             }
         }
@@ -218,7 +222,7 @@ abstract class ArabNovels :
 
     @Serializable
     class ChapterDto(
-        val number: Int,
+        val number: JsonPrimitive,
         val title: String,
         val publishedAt: String,
     )
