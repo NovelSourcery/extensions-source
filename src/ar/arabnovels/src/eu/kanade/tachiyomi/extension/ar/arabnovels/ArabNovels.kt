@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
@@ -40,9 +41,9 @@ abstract class ArabNovels :
     // The site requires an Arabic Accept-Language header, otherwise responses may be blocked.
     override fun Headers.Builder.configureHeaders(): Headers.Builder = this.set("Accept-Language", "ar,en-US;q=0.9,en;q=0.8")
 
-    override suspend fun getPopularManga(page: Int): MangasPage = parseListResponse(client.get(browseUrl(page, "popular"), headers))
+    override suspend fun getPopularManga(page: Int): MangasPage = parseListResponse(client.get(browseUrl(page, "popular"), Fetch.DOCUMENT))
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = parseListResponse(client.get(browseUrl(page, "updated"), headers))
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseListResponse(client.get(browseUrl(page, "updated"), Fetch.DOCUMENT))
 
     override suspend fun getSearchMangaList(
         page: Int,
@@ -54,10 +55,10 @@ abstract class ArabNovels :
                 .addQueryParameter("q", query)
                 .addQueryParameter("page", page.toString())
                 .build()
-            return parseListResponse(client.get(url, headers))
+            return parseListResponse(client.get(url, Fetch.DOCUMENT))
         }
         val sortBy = filters.filterIsInstance<SortFilter>().firstOrNull()?.toUriPart() ?: "updated"
-        return parseListResponse(client.get(browseUrl(page, sortBy), headers))
+        return parseListResponse(client.get(browseUrl(page, sortBy), Fetch.DOCUMENT))
     }
 
     override fun getMangaUrl(manga: SManga): String = mangaPath.absolute(baseUrl, manga.url)
@@ -82,7 +83,7 @@ abstract class ArabNovels :
     }
 
     private suspend fun fetchNovelDetails(manga: SManga): SManga {
-        val response = client.get("$baseUrl/novels/${manga.url}", headers)
+        val response = client.get("$baseUrl/novels/${manga.url}", Fetch.DOCUMENT)
         val doc = response.asJsoup()
         return SManga.create().apply {
             title = doc.selectFirst("meta[property=og:title]")?.attr("content")?.trim().orEmpty()
@@ -99,7 +100,7 @@ abstract class ArabNovels :
     }
 
     private suspend fun fetchNovelChapterList(manga: SManga): List<SChapter> {
-        val doc = client.get("$baseUrl/novels/${manga.url}", headers).asJsoup()
+        val doc = client.get("$baseUrl/novels/${manga.url}", Fetch.DOCUMENT).asJsoup()
         val dto = doc.extractNextJs<ChapterListDto> { it is JsonObject && "chapters" in it }
             ?: throw Exception("Could not find chapter list in page data")
         return dto.chapters.map { chapter ->
@@ -117,7 +118,7 @@ abstract class ArabNovels :
     override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, "$baseUrl/read/${chapter.url}"))
 
     override suspend fun fetchPageText(page: Page): String {
-        val doc = client.get(page.url, headers).asJsoup()
+        val doc = client.get(page.url, Fetch.DOCUMENT).asJsoup()
         return doc.selectFirst("#chapter-body")?.html().orEmpty()
     }
 
