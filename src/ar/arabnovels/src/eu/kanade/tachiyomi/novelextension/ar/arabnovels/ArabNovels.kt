@@ -16,8 +16,6 @@ import keiyoushi.source.KeiSource
 import keiyoushi.utils.SlugPath
 import keiyoushi.utils.extractNextJs
 import keiyoushi.utils.firstInstanceOrNull
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -25,6 +23,7 @@ import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Response
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URLDecoder
 import kotlin.time.Instant
@@ -40,14 +39,11 @@ abstract class ArabNovels :
     private val mangaPath = SlugPath("/novels/")
 
     // The site requires an Arabic Accept-Language header, otherwise responses may be blocked.
-    override fun Headers.Builder.configureHeaders(): Headers.Builder =
-        this.set("Accept-Language", "ar,en-US;q=0.9,en;q=0.8")
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = this.set("Accept-Language", "ar,en-US;q=0.9,en;q=0.8")
 
-    override suspend fun getPopularManga(page: Int): MangasPage =
-        parseListResponse(client.get(browseUrl(page, "popular", null), Fetch.DOCUMENT))
+    override suspend fun getPopularManga(page: Int): MangasPage = parseListResponse(client.get(browseUrl(page, "popular", null), Fetch.DOCUMENT))
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage =
-        parseListResponse(client.get(browseUrl(page, "updated", null), Fetch.DOCUMENT))
+    override suspend fun getLatestUpdates(page: Int): MangasPage = parseListResponse(client.get(browseUrl(page, "updated", null), Fetch.DOCUMENT))
 
     override suspend fun getSearchMangaList(
         page: Int,
@@ -95,25 +91,25 @@ abstract class ArabNovels :
         return parseNovelDetails(doc, slug)
     }
 
-    private fun parseNovelDetails(doc: Element, slug: String): SManga {
-        val title = doc.selectFirst("meta[property=og:title]")?.attr("content")?.orEmpty()
+    private fun parseNovelDetails(doc: Document, slug: String): SManga {
+        val title = doc.selectFirst("meta[property=og:title]")?.attr("content").orEmpty()
         if (title.isBlank()) throw Exception("Missing title for $slug")
         return SManga.create().apply {
             this.url = slug
             this.title = title
             thumbnail_url =
-                doc.selectFirst("meta[property=og:image]")?.attr("content")?.orEmpty()
+                doc.selectFirst("meta[property=og:image]")?.attr("content").orEmpty()
             author =
-                doc.selectFirst("a[href^='/u/']")?.text()?.orEmpty()
+                doc.selectFirst("a[href^='/u/']")?.text().orEmpty()
             description =
-                doc.selectFirst("meta[property=og:description]")?.attr("content")?.orEmpty()
+                doc.selectFirst("meta[property=og:description]")?.attr("content").orEmpty()
             status = parseStatus(
                 doc.selectFirst("span:matchesOwn(مستمرة|مكتملة)")?.text(),
             )
         }
     }
 
-    private fun parseChapterList(doc: Element, slug: String): List<SChapter> {
+    private fun parseChapterList(doc: Document, slug: String): List<SChapter> {
         val dto = doc.extractNextJs<ChapterListDto> { it is JsonObject && "chapters" in it }
             ?: throw Exception("Could not find chapter list in page data")
         return dto.chapters.map { chapter ->
@@ -128,8 +124,7 @@ abstract class ArabNovels :
 
     override fun getChapterUrl(chapter: SChapter): String = "$baseUrl/read/${chapter.url}"
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> =
-        listOf(Page(0, "$baseUrl/read/${chapter.url}"))
+    override suspend fun getPageList(chapter: SChapter): List<Page> = listOf(Page(0, "$baseUrl/read/${chapter.url}"))
 
     override suspend fun fetchPageText(page: Page): String {
         val doc = client.get(page.url, Fetch.DOCUMENT).asJsoup()
@@ -153,10 +148,10 @@ abstract class ArabNovels :
             val img = card.selectFirst("img[src*='/media/covers/'], img[data-src*='/media/covers/']") ?: return@mapNotNull null
             val coverSrc = img.attr("src").ifEmpty { img.attr("data-src") }
             val cover = decodeCover(coverSrc)
-            val cardTitle = card.selectFirst("h3")?.text()?.orEmpty()
+            val cardTitle = card.selectFirst("h3")?.text().orEmpty()
             if (cardTitle.isBlank()) return@mapNotNull null
             val cardAuthor = card.select("p.line-clamp-1.text-xs.text-muted-foreground")
-                .first()?.text()?.orEmpty()
+                .first()?.text().orEmpty()
             val cardStatus = parseStatus(
                 card.selectFirst("span:matchesOwn(مستمرة|مكتملة)")?.text(),
             )
@@ -171,12 +166,11 @@ abstract class ArabNovels :
         return MangasPage(mangas, mangas.size >= 20)
     }
 
-    private fun browseUrl(page: Int, sortBy: String, status: String?): HttpUrl =
-        "$baseUrl/novels".toHttpUrl().newBuilder()
-            .addQueryParameter("sort", sortBy)
-            .addQueryParameter("page", page.toString())
-            .let { if (status != null) it.addQueryParameter("status", status) else it }
-            .build()
+    private fun browseUrl(page: Int, sortBy: String, status: String?): HttpUrl = "$baseUrl/novels".toHttpUrl().newBuilder()
+        .addQueryParameter("sort", sortBy)
+        .addQueryParameter("page", page.toString())
+        .let { if (status != null) it.addQueryParameter("status", status) else it }
+        .build()
 
     private fun decodeCover(src: String): String {
         if (src.isBlank()) return ""
