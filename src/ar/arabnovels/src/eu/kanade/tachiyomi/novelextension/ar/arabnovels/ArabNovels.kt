@@ -145,9 +145,9 @@ abstract class ArabNovels :
             val link = card.selectFirst("a[href^='/novels/']") ?: return@mapNotNull null
             val slug = link.attr("href").removePrefix("/novels/").trimEnd('/')
             if (slug.isBlank()) return@mapNotNull null
-            val img = card.selectFirst("img[src*='/media/covers/'], img[data-src*='/media/covers/']") ?: return@mapNotNull null
-            val coverSrc = img.attr("src").ifEmpty { img.attr("data-src") }
-            val cover = decodeCover(coverSrc)
+            // The cover src is a Next.js image URL with the real path percent-encoded in the
+            // "url" query parameter, e.g. /_next/image?url=%2Fmedia%2Fcovers%2F<uuid>.webp&w=3840&q=75
+            val cover = decodeCover(card.selectFirst("img")?.attr("src").orEmpty())
             val cardTitle = card.selectFirst("h3")?.text().orEmpty()
             if (cardTitle.isBlank()) return@mapNotNull null
             val cardAuthor = card.select("p.line-clamp-1.text-xs.text-muted-foreground")
